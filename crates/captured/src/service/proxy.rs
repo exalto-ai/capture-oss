@@ -946,10 +946,30 @@ async fn proxy(State(state): State<AppState>, request: Request) -> Response {
                 } else {
                     "proxy_error"
                 },
+                cause = proxy_failure_cause(&error),
                 "proxy request failed"
             );
             proxy_error_response(&error)
         }
+    }
+}
+
+/// Names the subsystem behind a failed proxy request from the error's types
+/// alone. The error text itself is not logged: capture and provider errors can
+/// carry request or response details.
+fn proxy_failure_cause(error: &anyhow::Error) -> &'static str {
+    if error
+        .chain()
+        .any(|cause| cause.downcast_ref::<ArtifactStoreError>().is_some())
+    {
+        "artifact_store"
+    } else if error
+        .chain()
+        .any(|cause| cause.downcast_ref::<MetadataStoreError>().is_some())
+    {
+        "metadata_store"
+    } else {
+        "capture"
     }
 }
 
@@ -2618,6 +2638,20 @@ fn hop_by_hop_header_names(headers: &HeaderMap) -> HashSet<HeaderName> {
 mod tests {
     use super::*;
     use std::sync::Mutex as StdMutex;
+
+    #[test]
+    fn proxy_failures_name_their_subsystem_without_error_text() {
+        let artifact = anyhow::Error::new(ArtifactStoreError::Unavailable)
+            .context("storing a capture checkpoint");
+        assert_eq!(proxy_failure_cause(&artifact), "artifact_store");
+        let metadata = anyhow::Error::new(MetadataStoreError::Backend(anyhow::anyhow!("pool")))
+            .context("staging capture completion");
+        assert_eq!(proxy_failure_cause(&metadata), "metadata_store");
+        assert_eq!(
+            proxy_failure_cause(&anyhow::anyhow!("notary session ended")),
+            "capture"
+        );
+    }
 
     #[tokio::test]
     async fn completed_successful_captures_are_queued_only_while_auto_seal_is_on() {
