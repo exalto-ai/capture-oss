@@ -6,6 +6,8 @@ license = "MIT"
 description = "Trace metadata and storage shared by Capture hosts"
 
 [features]
+# Lets the daemon Docker E2E target pause after storing a notarized package.
+daemon-e2e = []
 # Exposes the metadata and artifact store conformance suites to other crates'
 # tests, so every store implementation runs the same contract.
 test-support = []

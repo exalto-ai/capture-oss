@@ -2,10 +2,7 @@
 
 use std::{
     collections::HashMap,
-    sync::{
-        Arc,
-        atomic::{AtomicU64, Ordering},
-    },
+    sync::Arc,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
@@ -27,7 +24,7 @@ use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use rust_embed::RustEmbed;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
-use tokio::sync::{Mutex, Notify, watch};
+use tokio::sync::{Mutex, Notify};
 use tower_http::{
     cors::CorsLayer,
     request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer},
@@ -43,28 +40,23 @@ use capture_core::{
 };
 
 use crate::{
-    CaptureCheckpoint,
     archive::{ARCHIVE_CONTENT_TYPE, MAX_ARCHIVE_WIRE_BYTES, read_trace_package_archive},
     artifact_store::{
-        ArtifactKey, ArtifactKind, ArtifactRecord, ArtifactSource, ArtifactStore,
-        ArtifactStoreError,
+        ArtifactKey, ArtifactKind, ArtifactRecord, ArtifactStore, ArtifactStoreError,
     },
     cluster_runtime::{ClusterRuntime, Lifecycle},
     config::CapturedConfig,
-    metadata::TerminalOperationResult,
     metadata::{
         CaptureMode, Event, EventFilters, EvidenceKind, Operation, OperationAttempt,
         OperationFilters, RegistrySnapshot, TraceFilters, TracePagePosition, TraceShareRecord,
         TraceSummary as StoredTraceSummary,
     },
     metadata_store::{
-        MetadataStore, MetadataStoreError, NotarizationClaim, TraceDeletionOutcome,
-        TraceDeletionPreparation,
+        MetadataStore, MetadataStoreError, TraceDeletionOutcome, TraceDeletionPreparation,
     },
     notarization::{
-        notarize_capture_checkpoint_admitted_bytes_with_progress,
-        notarize_capture_checkpoint_bytes_with_progress, trace_package_created_at_unix_ms_bytes,
-        trace_package_notary_key_bytes, verify_trace_package_bytes,
+        trace_package_created_at_unix_ms_bytes, trace_package_notary_key_bytes,
+        verify_trace_package_bytes,
     },
     persistence::Persistence,
     registry::{NotaryKeyStatus, RegistryRecord, key_id},
@@ -2366,464 +2358,6 @@ fn map_artifact_read_error(error: ArtifactStoreError) -> ApiError {
     }
 }
 
-fn artifact_failure_code(error: &anyhow::Error) -> Option<&'static str> {
-    error
-        .downcast_ref::<ArtifactStoreError>()
-        .map(ArtifactStoreError::failure_code)
-}
-
-fn notarization_failure_code(error: &anyhow::Error) -> &'static str {
-    auth::hosted_admission_failure(error)
-        .map(|failure| failure.code())
-        .or_else(|| crate::notary_admission_error(error).map(|_| "notary_capacity"))
-        .or_else(|| crate::notary_connection_error(error).map(crate::NotaryConnectionError::code))
-        .or_else(|| artifact_failure_code(error))
-        .unwrap_or("notarization_error")
-}
-
-pub(crate) fn spawn_notarization_worker(
-    persistence: Persistence,
-    config: Arc<CapturedConfig>,
-    vault: Arc<Vault>,
-    work_available: Arc<Notify>,
-    cluster_runtime: Option<Arc<ClusterRuntime>>,
-    mut shutdown: watch::Receiver<bool>,
-) -> tokio::task::JoinHandle<Result<()>> {
-    tokio::spawn(async move {
-        loop {
-            if *shutdown.borrow() {
-                return Ok(());
-            }
-            if cluster_runtime
-                .as_ref()
-                .is_some_and(|cluster_runtime| cluster_runtime.lifecycle() == Lifecycle::Draining)
-            {
-                tokio::select! {
-                    result = shutdown.changed() => {
-                        if result.is_err() || *shutdown.borrow() {
-                            return Ok(());
-                        }
-                    }
-                    () = tokio::time::sleep(std::time::Duration::from_millis(100)) => {}
-                }
-                continue;
-            }
-            if let Some(cluster_runtime) = &cluster_runtime {
-                let mut reaper_unavailable = false;
-                loop {
-                    match cluster_runtime
-                        .metadata()
-                        .interrupt_next_expired_notarization()
-                        .await
-                    {
-                        Ok(Some(_)) => {}
-                        Ok(None) => break,
-                        Err(error) => {
-                            tracing::warn!(
-                                error = %error,
-                                "notarization expiry recovery could not reach the metadata backend; retrying"
-                            );
-                            reaper_unavailable = true;
-                            break;
-                        }
-                    }
-                }
-                if reaper_unavailable {
-                    if wait_for_worker_retry(&mut shutdown).await {
-                        return Ok(());
-                    }
-                    continue;
-                }
-            }
-            let (operation, claim) = match &cluster_runtime {
-                Some(cluster_runtime) => match cluster_runtime
-                    .metadata()
-                    .claim_next_notarization_claimed(
-                        cluster_runtime.identity(),
-                        &cluster_runtime.new_claim_fence(),
-                        cluster_runtime.lease_seconds(),
-                    )
-                    .await
-                {
-                    Ok(Some(claim)) => (
-                        Some(claim.operation.clone()),
-                        Some((cluster_runtime.as_ref(), claim)),
-                    ),
-                    Ok(None) => (None, None),
-                    Err(error) => {
-                        tracing::warn!(error = %error, "notarization worker could not reach the metadata backend; retrying");
-                        if wait_for_worker_retry(&mut shutdown).await {
-                            return Ok(());
-                        }
-                        continue;
-                    }
-                },
-                None => match persistence
-                    .metadata
-                    .claim_next_notarization(now_ms()?)
-                    .await
-                {
-                    Ok(operation) => (operation, None),
-                    Err(error) => {
-                        tracing::warn!(
-                            error = %error,
-                            "notarization worker could not reach the metadata backend; retrying"
-                        );
-                        if wait_for_worker_retry(&mut shutdown).await {
-                            return Ok(());
-                        }
-                        continue;
-                    }
-                },
-            };
-            let Some(operation) = operation else {
-                tokio::select! {
-                    () = work_available.notified() => {},
-                    () = tokio::time::sleep(std::time::Duration::from_secs(2)) => {},
-                    result = shutdown.changed() => {
-                        if result.is_err() || *shutdown.borrow() {
-                            return Ok(());
-                        }
-                    },
-                }
-                continue;
-            };
-            let result = notarize_operation(
-                &persistence,
-                &config,
-                &vault,
-                &operation,
-                claim
-                    .as_ref()
-                    .map(|(cluster_runtime, claim)| (*cluster_runtime, claim)),
-            )
-            .await;
-            let now = now_ms()?;
-            let failure_code = result.as_ref().err().map(notarization_failure_code);
-            loop {
-                let transition = match (&result, failure_code, &claim) {
-                    (Ok(artifact), None, Some((cluster_runtime, claim))) => {
-                        cluster_runtime
-                            .metadata()
-                            .complete_notarization_claimed(claim, artifact.clone(), now)
-                            .await
-                    }
-                    (Err(_), Some(code), Some((cluster_runtime, claim))) => {
-                        cluster_runtime
-                            .metadata()
-                            .fail_operation_claimed(claim, now, code)
-                            .await
-                    }
-                    (Ok(artifact), None, None) => {
-                        persistence
-                            .metadata
-                            .complete_notarization(&operation.operation_id, artifact.clone(), now)
-                            .await
-                    }
-                    (Err(_), Some(code), None) => {
-                        persistence
-                            .metadata
-                            .fail_operation(&operation.operation_id, now, code)
-                            .await
-                    }
-                    _ => unreachable!("notarization result and failure code must agree"),
-                };
-                match transition {
-                    Ok(outcome) => {
-                        require_terminal_operation_result(outcome)?;
-                        break;
-                    }
-                    Err(MetadataStoreError::Fenced) if claim.is_some() => {
-                        tracing::warn!(
-                            operation_id = %operation.operation_id,
-                            "stale notarization worker was fenced before its terminal transition"
-                        );
-                        break;
-                    }
-                    Err(error) => {
-                        tracing::warn!(
-                            operation_id = %operation.operation_id,
-                            error = %error,
-                            "notarization worker could not persist a terminal transition; retrying"
-                        );
-                        if wait_for_worker_retry(&mut shutdown).await {
-                            return Ok(());
-                        }
-                    }
-                }
-            }
-            if let Some(code) = failure_code {
-                tracing::warn!(operation_id = %operation.operation_id, failure_code = code, "notarization operation failed");
-            }
-            if *shutdown.borrow() {
-                return Ok(());
-            }
-        }
-    })
-}
-
-async fn wait_for_worker_retry(shutdown: &mut watch::Receiver<bool>) -> bool {
-    tokio::select! {
-        () = tokio::time::sleep(std::time::Duration::from_secs(2)) => false,
-        result = shutdown.changed() => result.is_err() || *shutdown.borrow(),
-    }
-}
-
-fn require_terminal_operation_result(outcome: TerminalOperationResult) -> Result<()> {
-    match outcome {
-        TerminalOperationResult::Applied | TerminalOperationResult::AlreadyApplied => Ok(()),
-        TerminalOperationResult::NotFound => {
-            anyhow::bail!("claimed notarization operation no longer exists")
-        }
-        TerminalOperationResult::Conflict { current_state } => {
-            anyhow::bail!("claimed notarization operation is already {current_state}")
-        }
-    }
-}
-
-async fn notarize_operation(
-    persistence: &Persistence,
-    config: &CapturedConfig,
-    vault: &Arc<Vault>,
-    operation: &Operation,
-    claim: Option<(&ClusterRuntime, &NotarizationClaim)>,
-) -> Result<ArtifactRecord> {
-    let _claim_lease = claim.map(|(cluster_runtime, claim)| {
-        cluster_runtime.keep_notarization_claim_alive(claim.clone())
-    });
-    let last_proof_update = AtomicU64::new(0);
-    let (progress_sender, mut progress_receiver) = tokio::sync::mpsc::unbounded_channel();
-    let progress_metadata = persistence.metadata.clone();
-    let progress_operation_id = operation.operation_id.clone();
-    let progress_claim = claim.map(|(cluster_runtime, claim)| {
-        (
-            cluster_runtime.metadata().clone(),
-            claim.clone(),
-            cluster_runtime.lease_seconds(),
-        )
-    });
-    let progress_recorder = tokio::spawn(async move {
-        while let Some((progress, now)) = progress_receiver.recv().await {
-            let result = match (progress_claim.as_ref(), progress) {
-                (Some((metadata, claim, lease)), crate::NotarizationProgress::Phase(phase)) => {
-                    metadata
-                        .update_operation_progress_claimed(claim, phase, now, *lease)
-                        .await
-                }
-                (Some((metadata, claim, lease)), crate::NotarizationProgress::Proof(proof)) => {
-                    metadata
-                        .update_operation_proof_progress_claimed(claim, proof, now, *lease)
-                        .await
-                }
-                (None, crate::NotarizationProgress::Phase(phase)) => {
-                    progress_metadata
-                        .update_operation_progress(&progress_operation_id, phase, now)
-                        .await
-                }
-                (None, crate::NotarizationProgress::Proof(proof)) => {
-                    progress_metadata
-                        .update_operation_proof_progress(&progress_operation_id, proof, now)
-                        .await
-                }
-            };
-            if let Err(error) = result {
-                tracing::warn!(
-                    operation_id = %progress_operation_id,
-                    error = %error,
-                    "could not persist notarization progress"
-                );
-            }
-        }
-    });
-    let report_progress = |progress| {
-        let result = now_ms().map(|now| match progress {
-            crate::NotarizationProgress::Phase(_) => {
-                let _ = progress_sender.send((progress, now));
-            }
-            crate::NotarizationProgress::Proof(proof) => {
-                let last = last_proof_update.load(Ordering::Relaxed);
-                let complete = proof.bytes_completed == proof.bytes_total
-                    && proof.commitments_completed == proof.commitments_total;
-                if last != 0 && !complete && now.saturating_sub(last) < 1_000 {
-                    return;
-                }
-                last_proof_update.store(now, Ordering::Relaxed);
-                let _ = progress_sender.send((progress, now));
-            }
-        });
-        if let Err(error) = result {
-            tracing::warn!(
-                operation_id = %operation.operation_id,
-                error = %error,
-                "could not persist notarization progress"
-            );
-        }
-    };
-    let trace_id = &operation.trace_id;
-    let checkpoint_record = persistence
-        .metadata
-        .artifacts(trace_id)
-        .await?
-        .into_iter()
-        .find(|artifact| artifact.key.kind() == ArtifactKind::CaptureCheckpoint)
-        .context("capture has no encrypted capture checkpoint")?;
-    let checkpoint_bytes = persistence
-        .artifacts
-        .read_verified(&checkpoint_record, MAX_ARCHIVE_WIRE_BYTES)
-        .await?
-        .into_bytes()
-        .await?;
-    let checkpoint_vault = vault.clone();
-    let checkpoint = tokio::task::spawn_blocking(move || {
-        CaptureCheckpoint::from_encrypted_bytes(&checkpoint_bytes, &checkpoint_vault)
-    })
-    .await
-    .context("capture checkpoint decryption task failed")??;
-    anyhow::ensure!(
-        checkpoint.trace_id() == trace_id,
-        "capture checkpoint capture does not match notarization operation"
-    );
-    let package_key = ArtifactKey::new(trace_id, ArtifactKind::TracePackage)?;
-    if claim.is_none()
-        && let Some(existing) = persistence
-            .artifacts
-            .find(&package_key, MAX_ARCHIVE_WIRE_BYTES)
-            .await?
-    {
-        let bytes = persistence
-            .artifacts
-            .read_verified(&existing, MAX_ARCHIVE_WIRE_BYTES)
-            .await?
-            .into_bytes()
-            .await?;
-        let (bytes, embedded_key, created_at) = tokio::task::spawn_blocking(move || {
-            let embedded_key = trace_package_notary_key_bytes(&bytes)?;
-            let created_at = trace_package_created_at_unix_ms_bytes(&bytes)?;
-            Ok::<_, anyhow::Error>((bytes, embedded_key, created_at))
-        })
-        .await
-        .context("trace package inspection task failed")??;
-        let key = match config.notary_public_key()? {
-            Some(key) => key,
-            None => {
-                registry_service::cached_registry_key_at(&embedded_key, created_at)?;
-                embedded_key
-            }
-        };
-        let verified_trace_id = tokio::task::spawn_blocking(move || {
-            verify_trace_package_bytes(&bytes, &key)
-                .map(|verified| verified.manifest.trace_id().to_owned())
-        })
-        .await
-        .context("trace package verification task failed")??;
-        anyhow::ensure!(
-            verified_trace_id == *trace_id,
-            "trace package capture does not match notarization operation"
-        );
-        drop(progress_sender);
-        progress_recorder
-            .await
-            .context("progress recorder exited")?;
-        return Ok(existing);
-    }
-    let hosted_admission = proxy::hosted_admission_required(config);
-    let (key, endpoint) = match (config.notary_public_key()?, config.notary_endpoint()?) {
-        (Some(key), Some(endpoint)) => {
-            checkpoint.verify_notary_key(&key)?;
-            (key, endpoint)
-        }
-        (None, None) => {
-            let (key, record) = if let Some((cluster_runtime, _)) = claim {
-                let (registry, source) =
-                    proxy::fetch_registry_from(&auth::configured_api_origin()?).await?;
-                let trust = cluster_runtime
-                    .metadata()
-                    .pin_registry(registry, source.as_str())
-                    .await?;
-                registry_service::registry_record_for_checkpoint(&trust, &checkpoint)?
-            } else {
-                let _ = proxy::refresh_registry().await;
-                registry_service::cached_registry_record_for_checkpoint(&checkpoint)?
-            };
-            let endpoint = proxy::resolve_notary(&record).await?;
-            (key, endpoint)
-        }
-        _ => anyhow::bail!("notary endpoint and public key configuration are inconsistent"),
-    };
-    let package_result = if hosted_admission {
-        let allowance = checkpoint.notarization_allowance_bytes()?;
-        if allowance > config.proxy.max_attestable_http_bytes {
-            anyhow::bail!("capture checkpoint exceeds the current local notarization byte limit");
-        }
-        let admission =
-            auth::issue_notarization_admission(&checkpoint.record_digest_hex(), allowance).await?;
-        notarize_capture_checkpoint_admitted_bytes_with_progress(
-            &checkpoint,
-            &key,
-            &endpoint,
-            config
-                .proxy
-                .max_attestable_http_bytes
-                .min(admission.max_attestable_http_bytes),
-            config.notary.max_frame_bytes.min(admission.max_frame_bytes),
-            &admission.ticket,
-            &report_progress,
-        )
-        .await
-    } else {
-        notarize_capture_checkpoint_bytes_with_progress(
-            &checkpoint,
-            &key,
-            &endpoint,
-            config.proxy.max_attestable_http_bytes,
-            config.notary.max_frame_bytes,
-            &report_progress,
-        )
-        .await
-    };
-    drop(progress_sender);
-    progress_recorder
-        .await
-        .context("progress recorder exited")?;
-    let package = package_result?;
-    let record = if let Some((_, claim)) = claim {
-        persistence
-            .artifacts
-            .put_scoped(
-                &package_key,
-                &claim.commit_id,
-                ArtifactSource::from_bytes(package),
-                MAX_ARCHIVE_WIRE_BYTES,
-            )
-            .await?
-    } else {
-        persistence
-            .artifacts
-            .put(
-                &package_key,
-                ArtifactSource::from_bytes(package),
-                MAX_ARCHIVE_WIRE_BYTES,
-            )
-            .await?
-    };
-    #[cfg(feature = "daemon-e2e")]
-    if let Some(milliseconds) = std::env::var_os("CAPTURED_E2E_PAUSE_AFTER_NOTARIZED_ARTIFACT_MS") {
-        let milliseconds = milliseconds
-            .to_str()
-            .context("Docker E2E notarization pause must be UTF-8")?
-            .parse::<u64>()
-            .context("Docker E2E notarization pause must be milliseconds")?;
-        anyhow::ensure!(
-            milliseconds <= 60_000,
-            "Docker E2E notarization pause exceeds 60 seconds"
-        );
-        if milliseconds > 0 {
-            tokio::time::sleep(std::time::Duration::from_millis(milliseconds)).await;
-        }
-    }
-    Ok(record)
-}
-
 fn validate_id(value: &str, prefix: &str) -> Result<(), ApiError> {
     if value.starts_with(prefix)
         && value.len() <= 128
@@ -3709,8 +3243,10 @@ impl IntoResponse for ApiError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::artifact_store::ArtifactSource;
     use argon2::{PasswordHasher, password_hash::SaltString};
     use axum::{body::Body, http::Request};
+    use capture_engine::notarization::notarization_failure_code;
     use http_body_util::BodyExt as _;
     use std::{io::Write as IoWrite, sync::Mutex as StdMutex};
     use tower::ServiceExt as _;

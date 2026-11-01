@@ -12,16 +12,18 @@ use anyhow::Result;
 use async_trait::async_trait;
 use capture_engine::{
     capture_ledger::{CaptureEntry, CaptureLedger},
+    notarization::{ClaimedNotarization, NotarizationQueue},
     storage::RecoverySummary,
 };
 use tokio::sync::watch;
 
 use crate::{
+    NotarizationPhase, NotarizationProofProgress,
     archive::MAX_ARCHIVE_WIRE_BYTES,
     artifact_router::RoutedArtifactStore,
     artifact_store::{ArtifactKey, ArtifactRecord, ArtifactSource, ArtifactStoreError},
     config::{CLUSTER_INSTANCE_ID_ENV, valid_instance_id},
-    metadata::{CaptureCompletion, NewTrace},
+    metadata::{CaptureCompletion, NewTrace, Operation, TerminalOperationResult},
     metadata_store::{
         CaptureClaim, MetadataResult, MetadataStoreError, NotarizationClaim, ReplicaIdentity,
         ServerMetadataStore,
@@ -358,5 +360,151 @@ impl CaptureEntry for ClusterCaptureEntry {
             .complete_capture_claimed(completion, artifact, &self.claim)
             .await?;
         Ok(())
+    }
+}
+
+/// Claims notarization operations for this replica in the shared server
+/// metadata store. Before each claim it interrupts operations whose claim
+/// expired, and it stops claiming while the replica drains.
+pub(crate) struct ClusterNotarizationQueue {
+    runtime: Arc<ClusterRuntime>,
+    artifacts: Arc<RoutedArtifactStore>,
+}
+
+impl ClusterNotarizationQueue {
+    pub(crate) fn new(runtime: Arc<ClusterRuntime>, artifacts: Arc<RoutedArtifactStore>) -> Self {
+        Self { runtime, artifacts }
+    }
+}
+
+#[async_trait]
+impl NotarizationQueue for ClusterNotarizationQueue {
+    fn paused(&self) -> bool {
+        self.runtime.lifecycle() == Lifecycle::Draining
+    }
+
+    async fn recover_expired(&self) -> Result<()> {
+        while self
+            .runtime
+            .metadata()
+            .interrupt_next_expired_notarization()
+            .await?
+            .is_some()
+        {}
+        Ok(())
+    }
+
+    async fn claim_next(&self, _now_unix_ms: u64) -> Result<Option<Arc<dyn ClaimedNotarization>>> {
+        let claim = self
+            .runtime
+            .metadata()
+            .claim_next_notarization_claimed(
+                self.runtime.identity(),
+                &self.runtime.new_claim_fence(),
+                self.runtime.lease_seconds(),
+            )
+            .await?;
+        Ok(claim.map(|claim| {
+            Arc::new(ClusterNotarization {
+                runtime: self.runtime.clone(),
+                artifacts: self.artifacts.clone(),
+                claim,
+            }) as Arc<dyn ClaimedNotarization>
+        }))
+    }
+}
+
+/// A notarization operation claimed by this replica.
+struct ClusterNotarization {
+    runtime: Arc<ClusterRuntime>,
+    artifacts: Arc<RoutedArtifactStore>,
+    claim: NotarizationClaim,
+}
+
+#[async_trait]
+impl ClaimedNotarization for ClusterNotarization {
+    fn operation(&self) -> &Operation {
+        &self.claim.operation
+    }
+
+    fn claimed(&self) -> bool {
+        true
+    }
+
+    fn reuses_existing_package(&self) -> bool {
+        false
+    }
+
+    fn keep_alive(&self) -> Box<dyn Send> {
+        Box::new(
+            self.runtime
+                .keep_notarization_claim_alive(self.claim.clone()),
+        )
+    }
+
+    async fn record_phase(
+        &self,
+        phase: NotarizationPhase,
+        now_unix_ms: u64,
+    ) -> MetadataResult<bool> {
+        self.runtime
+            .metadata()
+            .update_operation_progress_claimed(
+                &self.claim,
+                phase,
+                now_unix_ms,
+                self.runtime.lease_seconds(),
+            )
+            .await
+    }
+
+    async fn record_proof(
+        &self,
+        proof: NotarizationProofProgress,
+        now_unix_ms: u64,
+    ) -> MetadataResult<bool> {
+        self.runtime
+            .metadata()
+            .update_operation_proof_progress_claimed(
+                &self.claim,
+                proof,
+                now_unix_ms,
+                self.runtime.lease_seconds(),
+            )
+            .await
+    }
+
+    async fn store_package(&self, key: ArtifactKey, package: Vec<u8>) -> Result<ArtifactRecord> {
+        Ok(self
+            .artifacts
+            .put_scoped(
+                &key,
+                &self.claim.commit_id,
+                ArtifactSource::from_bytes(package),
+                MAX_ARCHIVE_WIRE_BYTES,
+            )
+            .await?)
+    }
+
+    async fn complete(
+        &self,
+        artifact: ArtifactRecord,
+        now_unix_ms: u64,
+    ) -> MetadataResult<TerminalOperationResult> {
+        self.runtime
+            .metadata()
+            .complete_notarization_claimed(&self.claim, artifact, now_unix_ms)
+            .await
+    }
+
+    async fn fail(
+        &self,
+        now_unix_ms: u64,
+        failure_code: &str,
+    ) -> MetadataResult<TerminalOperationResult> {
+        self.runtime
+            .metadata()
+            .fail_operation_claimed(&self.claim, now_unix_ms, failure_code)
+            .await
     }
 }

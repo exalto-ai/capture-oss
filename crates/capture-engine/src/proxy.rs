@@ -60,11 +60,21 @@ pub trait CaptureModeSource: Send + Sync {
     async fn notary(&self) -> Result<NotaryEndpoint>;
 }
 
-/// Which notary keys the host trusts.
+/// Which notary keys the host trusts, and which notary seals its captures.
 #[async_trait::async_trait]
 pub trait NotaryTrust: Send + Sync {
     /// The trusted notary key that signed a witness receipt.
     async fn witness_key(&self, exchange: &WitnessedExchange) -> Result<Vec<u8>>;
+
+    /// The key to verify an existing trace package with, given the key it
+    /// embeds and when it was created.
+    async fn package_key(&self, embedded_key: Vec<u8>, created_at_unix_ms: u64) -> Result<Vec<u8>>;
+
+    /// The trusted notary key and endpoint that seal a capture checkpoint.
+    async fn sealing_notary(
+        &self,
+        checkpoint: &CaptureCheckpoint,
+    ) -> Result<(Vec<u8>, NotaryEndpoint)>;
 }
 
 /// Everything provider request handling needs from its host.
@@ -1602,6 +1612,21 @@ mod tests {
     impl NotaryTrust for UntrustedNotary {
         async fn witness_key(&self, _exchange: &WitnessedExchange) -> Result<Vec<u8>> {
             bail!("no notary key is trusted in this test")
+        }
+
+        async fn package_key(
+            &self,
+            _embedded_key: Vec<u8>,
+            _created_at_unix_ms: u64,
+        ) -> Result<Vec<u8>> {
+            bail!("no notary key is trusted in this test")
+        }
+
+        async fn sealing_notary(
+            &self,
+            _checkpoint: &CaptureCheckpoint,
+        ) -> Result<(Vec<u8>, NotaryEndpoint)> {
+            bail!("no notary is trusted in this test")
         }
     }
 

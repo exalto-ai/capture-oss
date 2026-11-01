@@ -17,8 +17,7 @@ use utoipa::ToSchema;
 
 use super::{api_origin::ApiOrigin, http_client_builder, storage};
 pub(crate) use capture_engine::admission::{
-    AdmissionTicket, HostedAdmissionError, hosted_admission_denial, hosted_admission_failure,
-    hosted_admission_unavailable,
+    AdmissionTicket, HostedAdmissionError, hosted_admission_denial, hosted_admission_unavailable,
 };
 
 const KEYCHAIN_SERVICE: &str = "ai.exalto.capture";

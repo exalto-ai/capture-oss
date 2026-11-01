@@ -4,7 +4,7 @@
 use std::fmt;
 
 use async_trait::async_trait;
-use capture_core::NotaryAdmissionRejection;
+use capture_core::{CaptureCheckpoint, NotaryAdmissionRejection};
 use http::StatusCode;
 
 /// Issues the one-operation tickets a notary requires before it opens a
@@ -15,6 +15,13 @@ pub trait Admission: Send + Sync {
     async fn capture(&self) -> anyhow::Result<Option<AdmissionTicket>>;
     /// A ticket for a Witnessed session, or `None` when the notary needs none.
     async fn witness(&self) -> anyhow::Result<Option<AdmissionTicket>>;
+    /// A ticket to seal a capture checkpoint whose request fits within
+    /// `max_attestable_http_bytes`, or `None` when the notary needs none.
+    async fn notarization(
+        &self,
+        checkpoint: &CaptureCheckpoint,
+        max_attestable_http_bytes: usize,
+    ) -> anyhow::Result<Option<AdmissionTicket>>;
 }
 
 /// Admission for a notary that requires no tickets.
@@ -27,6 +34,14 @@ impl Admission for NoAdmission {
     }
 
     async fn witness(&self) -> anyhow::Result<Option<AdmissionTicket>> {
+        Ok(None)
+    }
+
+    async fn notarization(
+        &self,
+        _checkpoint: &CaptureCheckpoint,
+        _max_attestable_http_bytes: usize,
+    ) -> anyhow::Result<Option<AdmissionTicket>> {
         Ok(None)
     }
 }

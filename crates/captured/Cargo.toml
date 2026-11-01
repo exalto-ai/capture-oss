@@ -17,7 +17,7 @@ required-features = ["daemon-e2e"]
 [features]
 # Used only by the dedicated daemon Docker E2E target. Production client and
 # daemon builds retain the core crate's Mozilla/WebPKI trust configuration.
-daemon-e2e = ["capture-core/daemon-e2e"]
+daemon-e2e = ["capture-core/daemon-e2e", "capture-engine/daemon-e2e"]
 
 [dependencies]
 anyhow = { workspace = true }

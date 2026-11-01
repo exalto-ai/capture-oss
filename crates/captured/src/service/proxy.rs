@@ -19,6 +19,9 @@ use axum::{
 use capture_engine::{
     admission::{Admission, AdmissionTicket, NoAdmission},
     capture_ledger::{CaptureLedger, LocalCaptureLedger},
+    notarization::{
+        LocalNotarizationQueue, NotarizationContext, NotarizationQueue, spawn_notarization_worker,
+    },
     providers::Provider,
     proxy::{
         CaptureContext, CaptureModeSource, CaptureSettings, NotaryTrust,
@@ -35,7 +38,8 @@ use super::{
     registry::{parse_registry, pin},
 };
 use crate::{
-    cluster_runtime::{ClusterCaptureLedger, ClusterRuntime, Lifecycle},
+    CaptureCheckpoint,
+    cluster_runtime::{ClusterCaptureLedger, ClusterNotarizationQueue, ClusterRuntime, Lifecycle},
     config::CapturedConfig,
     metadata::CaptureMode,
     metadata_store::MetadataStoreError,
@@ -221,6 +225,20 @@ impl Admission for HostedAdmission {
     async fn witness(&self) -> Result<Option<AdmissionTicket>> {
         auth::issue_witness_admission().await.map(Some)
     }
+
+    async fn notarization(
+        &self,
+        checkpoint: &CaptureCheckpoint,
+        max_attestable_http_bytes: usize,
+    ) -> Result<Option<AdmissionTicket>> {
+        let allowance = checkpoint.notarization_allowance_bytes()?;
+        if allowance > max_attestable_http_bytes {
+            anyhow::bail!("capture checkpoint exceeds the current local notarization byte limit");
+        }
+        auth::issue_notarization_admission(&checkpoint.record_digest_hex(), allowance)
+            .await
+            .map(Some)
+    }
 }
 
 /// The configured notary key, or else the Registry keys this daemon trusts.
@@ -251,6 +269,48 @@ impl NotaryTrust for DaemonNotaryTrust {
             None => super::registry::cached_registry_records()?,
         };
         super::registry::witness_key_from_records(&records, exchange)
+    }
+
+    async fn package_key(&self, embedded_key: Vec<u8>, created_at_unix_ms: u64) -> Result<Vec<u8>> {
+        Ok(match self.config.notary_public_key()? {
+            Some(key) => key,
+            None => {
+                super::registry::cached_registry_key_at(&embedded_key, created_at_unix_ms)?;
+                embedded_key
+            }
+        })
+    }
+
+    async fn sealing_notary(
+        &self,
+        checkpoint: &CaptureCheckpoint,
+    ) -> Result<(Vec<u8>, NotaryEndpoint)> {
+        match (
+            self.config.notary_public_key()?,
+            self.config.notary_endpoint()?,
+        ) {
+            (Some(key), Some(endpoint)) => {
+                checkpoint.verify_notary_key(&key)?;
+                Ok((key, endpoint))
+            }
+            (None, None) => {
+                let (key, record) = if let Some(cluster_runtime) = &self.cluster_runtime {
+                    let (registry, source) =
+                        fetch_registry_from(&auth::configured_api_origin()?).await?;
+                    let trust = cluster_runtime
+                        .metadata()
+                        .pin_registry(registry, source.as_str())
+                        .await?;
+                    super::registry::registry_record_for_checkpoint(&trust, checkpoint)?
+                } else {
+                    let _ = refresh_registry().await;
+                    super::registry::cached_registry_record_for_checkpoint(checkpoint)?
+                };
+                let endpoint = resolve_notary(&record).await?;
+                Ok((key, endpoint))
+            }
+            _ => anyhow::bail!("notary endpoint and public key configuration are inconsistent"),
+        }
     }
 }
 
@@ -358,6 +418,10 @@ pub async fn run(args: ProxyArgs) -> Result<()> {
     } else {
         Arc::new(NoAdmission)
     };
+    let trust: Arc<dyn NotaryTrust> = Arc::new(DaemonNotaryTrust {
+        config: config.clone(),
+        cluster_runtime: cluster_runtime.clone(),
+    });
     let capture = CaptureContext::new(
         CaptureSettings {
             providers: config.providers.clone(),
@@ -369,11 +433,8 @@ pub async fn run(args: ProxyArgs) -> Result<()> {
         },
         capture_mode.clone(),
         captures.clone(),
-        admission,
-        Arc::new(DaemonNotaryTrust {
-            config: config.clone(),
-            cluster_runtime: cluster_runtime.clone(),
-        }),
+        admission.clone(),
+        trust.clone(),
         vault.clone(),
         Arc::new(ReqwestDirectUpstreamConnector::new(
             http_client_builder()
@@ -431,12 +492,24 @@ pub async fn run(args: ProxyArgs) -> Result<()> {
     } else {
         None
     };
-    let mut worker = crate::admin::spawn_notarization_worker(
-        state.persistence.clone(),
-        state.config.clone(),
-        state.vault.clone(),
+    let notarizations: Arc<dyn NotarizationQueue> = match &cluster_runtime {
+        Some(cluster_runtime) => Arc::new(ClusterNotarizationQueue::new(
+            cluster_runtime.clone(),
+            state.persistence.artifacts.clone(),
+        )),
+        None => Arc::new(LocalNotarizationQueue::new(state.persistence.storage())),
+    };
+    let mut worker = spawn_notarization_worker(
+        NotarizationContext::new(
+            state.persistence.storage(),
+            notarizations,
+            admission,
+            trust,
+            state.vault.clone(),
+            max_attestable_http_bytes,
+            max_frame_bytes,
+        ),
         admin_state.work_available.clone(),
-        cluster_runtime.clone(),
         shutdown_rx.clone(),
     );
     let proxy_shutdown = wait_for_shutdown(shutdown_rx.clone());
