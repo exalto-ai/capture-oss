@@ -11,6 +11,7 @@ use std::{
 
 use anyhow::{Context, Result, bail, ensure};
 use argon2::{Argon2, PasswordHash, PasswordHasher as _, password_hash::SaltString};
+pub use capture_engine::providers::{ProviderConfig, ProvidersConfig};
 use k256::ecdsa::VerifyingKey;
 use serde::{Deserialize, Serialize};
 
@@ -319,29 +320,6 @@ impl fmt::Debug for SecretDatabaseUrl {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct ProvidersConfig {
-    #[serde(default = "ProviderConfig::openai")]
-    pub openai: ProviderConfig,
-    #[serde(default = "ProviderConfig::codex")]
-    pub codex: ProviderConfig,
-    #[serde(default = "ProviderConfig::anthropic")]
-    pub anthropic: ProviderConfig,
-    #[serde(default = "ProviderConfig::deepseek")]
-    pub deepseek: ProviderConfig,
-    #[serde(default = "ProviderConfig::openrouter")]
-    pub openrouter: ProviderConfig,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct ProviderConfig {
-    #[serde(default = "default_true")]
-    pub enabled: bool,
-    pub route_prefix: String,
-}
-
 impl Default for CapturedConfig {
     fn default() -> Self {
         Self {
@@ -395,55 +373,6 @@ impl Default for MetadataConfig {
             output_preview_chars: default_preview_chars(),
             full_text_search: true,
             postgres: PostgresMetadataConfig::default(),
-        }
-    }
-}
-
-impl Default for ProvidersConfig {
-    fn default() -> Self {
-        Self {
-            openai: ProviderConfig::openai(),
-            codex: ProviderConfig::codex(),
-            anthropic: ProviderConfig::anthropic(),
-            deepseek: ProviderConfig::deepseek(),
-            openrouter: ProviderConfig::openrouter(),
-        }
-    }
-}
-
-impl ProviderConfig {
-    fn openai() -> Self {
-        Self {
-            enabled: true,
-            route_prefix: "/openai".to_owned(),
-        }
-    }
-
-    fn codex() -> Self {
-        Self {
-            enabled: true,
-            route_prefix: "/codex".to_owned(),
-        }
-    }
-
-    fn anthropic() -> Self {
-        Self {
-            enabled: true,
-            route_prefix: "/anthropic".to_owned(),
-        }
-    }
-
-    fn deepseek() -> Self {
-        Self {
-            enabled: true,
-            route_prefix: "/deepseek".to_owned(),
-        }
-    }
-
-    fn openrouter() -> Self {
-        Self {
-            enabled: true,
-            route_prefix: "/openrouter".to_owned(),
         }
     }
 }
