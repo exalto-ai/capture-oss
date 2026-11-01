@@ -21,7 +21,7 @@ async fn read(store: &dyn ArtifactStore, record: &super::ArtifactRecord, limit: 
 }
 
 /// Runs the immutable-write, bounded-read, integrity, and concurrency contract.
-pub(crate) async fn run(store: Arc<dyn ArtifactStore>) {
+pub async fn run(store: Arc<dyn ArtifactStore>) {
     let empty_key = key("trc-conformance-empty", ArtifactKind::CaptureCheckpoint);
     let empty = store
         .put(&empty_key, ArtifactSource::from_bytes(Vec::new()), 0)

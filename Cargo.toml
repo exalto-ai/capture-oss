@@ -2,6 +2,7 @@
 members = [
     "crates/capture",
     "crates/capture-core",
+    "crates/capture-engine",
     "crates/captured",
     "crates/capture-notary",
     "crates/capture-updater",
@@ -28,6 +29,7 @@ k256 = "0.13"
 libc = "0.2"
 metrics = { version = "0.24.6", default-features = false }
 capture-core = { path = "crates/capture-core" }
+capture-engine = { path = "crates/capture-engine" }
 capture-updater = { path = "crates/capture-updater" }
 reqwest = { version = "0.12", default-features = false }
 rpassword = "7.4"

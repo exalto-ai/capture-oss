@@ -20,7 +20,7 @@ use crate::metadata_store::{TraceDeletionOutcome, TraceDeletionPreparation};
 const METADATA_SCHEMA_VERSION: i64 = 2;
 
 /// A single-process SQLite capture inventory.
-pub(crate) struct SqliteMetadata {
+pub struct SqliteMetadata {
     connection: Mutex<Connection>,
     full_text_search: bool,
 }
@@ -947,7 +947,7 @@ impl SqliteMetadata {
     pub fn update_operation_progress(
         &self,
         operation_id: &str,
-        phase: crate::NotarizationPhase,
+        phase: capture_core::NotarizationPhase,
         now: u64,
     ) -> Result<bool> {
         let connection = self.connection()?;
@@ -992,7 +992,7 @@ impl SqliteMetadata {
     pub fn update_operation_proof_progress(
         &self,
         operation_id: &str,
-        progress: crate::NotarizationProofProgress,
+        progress: capture_core::NotarizationProofProgress,
         now: u64,
     ) -> Result<bool> {
         let connection = self.connection()?;

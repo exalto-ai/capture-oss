@@ -11,20 +11,19 @@ use clap::{Parser, Subcommand};
 
 pub use capture_core::*;
 
+pub use capture_engine::{
+    artifact_store, metadata, metadata_store, sqlite_metadata, sqlite_metadata_store,
+};
+
 pub mod admin;
 mod artifact_reconciliation;
 pub mod artifact_router;
-pub mod artifact_store;
 mod cluster_runtime;
 pub mod config;
-pub mod metadata;
-pub mod metadata_store;
 pub mod persistence;
 mod postgres_metadata_store;
 mod s3_artifact_store;
 mod service;
-mod sqlite_metadata;
-pub mod sqlite_metadata_store;
 pub use capture_updater as update;
 
 #[derive(Parser, Debug)]

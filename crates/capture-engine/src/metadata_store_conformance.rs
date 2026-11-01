@@ -14,8 +14,9 @@ use std::{
 };
 use tokio::sync::Barrier;
 
+use capture_core::{NotarizationPhase, NotarizationProofProgress};
+
 use crate::{
-    NotarizationPhase, NotarizationProofProgress,
     artifact_store::{ArtifactKey, ArtifactKind, ArtifactLocator, ArtifactRecord},
     metadata::{
         CaptureCompletion, CaptureMode, EventFilters, NewTrace, OperationAttempt, OperationFilters,
@@ -30,7 +31,7 @@ use super::{
 };
 
 /// Runs the complete metadata contract against isolated stores from `make_store`.
-pub(crate) async fn run<F, Fut>(make_store: F, full_text_search: bool)
+pub async fn run<F, Fut>(make_store: F, full_text_search: bool)
 where
     F: Fn() -> Fut,
     Fut: Future<Output = Arc<dyn MetadataStore>>,
@@ -436,7 +437,7 @@ async fn witnessed_capture_is_sealed_on_completion(store: Arc<dyn MetadataStore>
     );
 }
 
-pub(crate) fn new_capture(id: &str, created_at_unix_ms: u64) -> NewTrace {
+pub fn new_capture(id: &str, created_at_unix_ms: u64) -> NewTrace {
     NewTrace {
         evidence_kind: crate::metadata::EvidenceKind::Notarized,
         trace_id: id.to_owned(),
@@ -452,11 +453,7 @@ pub(crate) fn new_capture(id: &str, created_at_unix_ms: u64) -> NewTrace {
     }
 }
 
-pub(crate) fn completion(
-    id: &str,
-    completed_at_unix_ms: u64,
-    http_status: u16,
-) -> CaptureCompletion {
+pub fn completion(id: &str, completed_at_unix_ms: u64, http_status: u16) -> CaptureCompletion {
     CaptureCompletion {
         evidence_kind: crate::metadata::EvidenceKind::Notarized,
         trace_id: id.to_owned(),
@@ -472,7 +469,7 @@ pub(crate) fn completion(
     }
 }
 
-pub(crate) fn artifact(id: &str, kind: ArtifactKind, marker: u8) -> ArtifactRecord {
+pub fn artifact(id: &str, kind: ArtifactKind, marker: u8) -> ArtifactRecord {
     ArtifactRecord::new(
         ArtifactKey::new(id, kind).unwrap(),
         ArtifactLocator::from_stored(format!("fixture://{id}/{}", kind.as_str())).unwrap(),

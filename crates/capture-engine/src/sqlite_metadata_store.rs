@@ -5,8 +5,9 @@ use std::{path::PathBuf, sync::Arc};
 use anyhow::anyhow;
 use async_trait::async_trait;
 
+use capture_core::{NotarizationPhase, NotarizationProofProgress};
+
 use crate::{
-    NotarizationPhase, NotarizationProofProgress,
     artifact_store::ArtifactRecord,
     metadata::{
         CaptureCompletion, CaptureMode, EventFilters, EventSnapshot, IncompleteCapture,
@@ -40,8 +41,8 @@ impl SqliteMetadataStore {
         })
     }
 
-    #[cfg(test)]
-    pub(crate) fn from_sqlite(metadata: SqliteMetadata, full_text_search: bool) -> Self {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn from_sqlite(metadata: SqliteMetadata, full_text_search: bool) -> Self {
         Self {
             metadata: Arc::new(metadata),
             full_text_search,

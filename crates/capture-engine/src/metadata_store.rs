@@ -8,20 +8,20 @@ use std::{error::Error as StdError, fmt};
 
 use async_trait::async_trait;
 
+use capture_core::{NotarizationPhase, NotarizationProofProgress, registry::Registry};
+
 use crate::{
-    NotarizationPhase, NotarizationProofProgress,
     artifact_store::ArtifactRecord,
     metadata::{
         CaptureCompletion, CaptureMode, EventFilters, EventSnapshot, IncompleteCapture,
         MetadataCounts, NewTrace, Operation, OperationAttempt, OperationFilters, RegistrySnapshot,
         TerminalOperationResult, TraceFilters, TraceShareRecord, TraceSummary,
     },
-    registry::Registry,
 };
 
 pub type MetadataResult<T> = std::result::Result<T, MetadataStoreError>;
 
-pub(crate) fn validate_trace_id(trace_id: &str) -> MetadataResult<()> {
+pub fn validate_trace_id(trace_id: &str) -> MetadataResult<()> {
     if capture_core::is_valid_trace_id(trace_id) {
         Ok(())
     } else {
@@ -29,7 +29,7 @@ pub(crate) fn validate_trace_id(trace_id: &str) -> MetadataResult<()> {
     }
 }
 
-pub(crate) fn validate_operation_id(operation_id: &str) -> MetadataResult<()> {
+pub fn validate_operation_id(operation_id: &str) -> MetadataResult<()> {
     if operation_id.starts_with("op-")
         && operation_id.len() > 3
         && operation_id.len() <= 128
@@ -80,12 +80,12 @@ impl StdError for MetadataStoreError {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ReplicaIdentity {
-    pub(crate) instance_id: String,
-    pub(crate) incarnation_id: String,
+    pub instance_id: String,
+    pub incarnation_id: String,
 }
 
 impl ReplicaIdentity {
-    pub(crate) fn new(instance_id: impl Into<String>) -> MetadataResult<Self> {
+    pub fn new(instance_id: impl Into<String>) -> MetadataResult<Self> {
         let instance_id = instance_id.into();
         if instance_id.is_empty()
             || instance_id.len() > 64
@@ -101,25 +101,25 @@ impl ReplicaIdentity {
         })
     }
 
-    pub(crate) fn instance_id(&self) -> &str {
+    pub fn instance_id(&self) -> &str {
         &self.instance_id
     }
 
-    pub(crate) fn incarnation_id(&self) -> &str {
+    pub fn incarnation_id(&self) -> &str {
         &self.incarnation_id
     }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CaptureClaim {
-    pub(crate) trace_id: String,
-    pub(crate) owner: ReplicaIdentity,
-    pub(crate) claim_fence: String,
-    pub(crate) commit_id: String,
+    pub trace_id: String,
+    pub owner: ReplicaIdentity,
+    pub claim_fence: String,
+    pub commit_id: String,
 }
 
 impl CaptureClaim {
-    pub(crate) fn new(trace_id: impl Into<String>, owner: ReplicaIdentity) -> Self {
+    pub fn new(trace_id: impl Into<String>, owner: ReplicaIdentity) -> Self {
         Self {
             trace_id: trace_id.into(),
             owner,
@@ -137,10 +137,10 @@ pub struct CaptureRecoveryClaim {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NotarizationClaim {
-    pub(crate) operation: Operation,
-    pub(crate) owner: ReplicaIdentity,
-    pub(crate) claim_fence: String,
-    pub(crate) commit_id: String,
+    pub operation: Operation,
+    pub owner: ReplicaIdentity,
+    pub claim_fence: String,
+    pub commit_id: String,
 }
 
 /// Result of atomically removing one terminal local Trace from metadata.
@@ -404,6 +404,6 @@ pub trait ServerMetadataStore: MetadataStore {
     async fn registry_snapshot(&self) -> MetadataResult<Option<RegistrySnapshot>>;
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[path = "metadata_store_conformance.rs"]
-pub(crate) mod conformance;
+pub mod conformance;

@@ -156,7 +156,7 @@ impl ArtifactRecord {
     ///
     /// The stored value is always the canonical hyphenated lowercase UUID.
     /// Reattaching the same value is idempotent; replacing it is rejected.
-    pub(crate) fn with_commit_id(mut self, commit_id: impl AsRef<str>) -> Result<Self> {
+    pub fn with_commit_id(mut self, commit_id: impl AsRef<str>) -> Result<Self> {
         let commit_id = uuid::Uuid::parse_str(commit_id.as_ref())?.to_string();
         if self
             .commit_id
@@ -170,7 +170,7 @@ impl ArtifactRecord {
     }
 
     /// Returns the canonical commit UUID for a claim-scoped record.
-    pub(crate) fn commit_id(&self) -> Option<&str> {
+    pub fn commit_id(&self) -> Option<&str> {
         self.commit_id.as_deref()
     }
 
@@ -221,7 +221,7 @@ impl ArtifactSource {
         self.size_bytes
     }
 
-    pub(crate) fn into_parts(self) -> (Pin<Box<dyn AsyncRead + Send>>, u64) {
+    pub fn into_parts(self) -> (Pin<Box<dyn AsyncRead + Send>>, u64) {
         (self.reader, self.size_bytes)
     }
 }
@@ -304,7 +304,7 @@ impl fmt::Debug for VerifiedArtifact {
 }
 
 impl VerifiedArtifact {
-    pub(crate) fn from_spool(file: File, spool: tempfile::TempPath, size_bytes: u64) -> Self {
+    pub fn from_spool(file: File, spool: tempfile::TempPath, size_bytes: u64) -> Self {
         Self {
             reader: Box::pin(tokio::fs::File::from_std(file)),
             size_bytes,
@@ -597,7 +597,7 @@ fn validate_root(path: &Path) -> Result<()> {
 }
 
 /// Returns whether `value` is a SHA-256 digest in 64 lowercase hex characters.
-pub(crate) fn is_lowercase_sha256_hex(value: &str) -> bool {
+pub fn is_lowercase_sha256_hex(value: &str) -> bool {
     value.len() == 64
         && value
             .bytes()
@@ -622,26 +622,26 @@ fn locator_for_path(path: &Path) -> Result<ArtifactLocator> {
     ))
 }
 
-pub(crate) fn invalid(code: &'static str, source: anyhow::Error) -> ArtifactStoreError {
+pub fn invalid(code: &'static str, source: anyhow::Error) -> ArtifactStoreError {
     ArtifactStoreError::InvalidInput {
         code,
         source: Some(source),
     }
 }
 
-pub(crate) fn not_found(source: anyhow::Error) -> ArtifactStoreError {
+pub fn not_found(source: anyhow::Error) -> ArtifactStoreError {
     ArtifactStoreError::NotFound { source }
 }
 
-pub(crate) fn conflict(source: anyhow::Error) -> ArtifactStoreError {
+pub fn conflict(source: anyhow::Error) -> ArtifactStoreError {
     ArtifactStoreError::Conflict { source }
 }
 
-pub(crate) fn integrity(source: anyhow::Error) -> ArtifactStoreError {
+pub fn integrity(source: anyhow::Error) -> ArtifactStoreError {
     ArtifactStoreError::Integrity { source }
 }
 
-pub(crate) fn backend(source: anyhow::Error) -> ArtifactStoreError {
+pub fn backend(source: anyhow::Error) -> ArtifactStoreError {
     ArtifactStoreError::Backend { source }
 }
 
@@ -1161,7 +1161,7 @@ fn create_private_directory(path: &Path) -> Result<()> {
 }
 
 #[cfg(unix)]
-pub(crate) fn restrict_file(path: &Path) -> Result<()> {
+pub fn restrict_file(path: &Path) -> Result<()> {
     use std::os::unix::fs::PermissionsExt as _;
 
     open_regular_file(path)?
@@ -1170,12 +1170,12 @@ pub(crate) fn restrict_file(path: &Path) -> Result<()> {
 }
 
 #[cfg(windows)]
-pub(crate) fn restrict_file(path: &Path) -> Result<()> {
+pub fn restrict_file(path: &Path) -> Result<()> {
     restrict_windows_acl(path, "F")
 }
 
 #[cfg(all(not(unix), not(windows)))]
-pub(crate) fn restrict_file(_path: &Path) -> Result<()> {
+pub fn restrict_file(_path: &Path) -> Result<()> {
     Ok(())
 }
 
@@ -1266,9 +1266,9 @@ impl Drop for PendingArtifact {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[path = "artifact_store_conformance.rs"]
-pub(crate) mod conformance;
+pub mod conformance;
 
 #[cfg(test)]
 mod tests {

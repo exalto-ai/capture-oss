@@ -1309,6 +1309,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "capture-engine"
+version = "0.0.1"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "base64 0.22.1",
+ "capture-core",
+ "hex",
+ "libc",
+ "rusqlite",
+ "serde",
+ "sha2 0.10.9",
+ "tempfile",
+ "thiserror 2.0.19",
+ "tokio",
+ "utoipa",
+ "uuid",
+]
+
+[[package]]
 name = "capture-notary"
 version = "0.0.1"
 dependencies = [
@@ -1357,6 +1377,7 @@ dependencies = [
  "base64 0.22.1",
  "bytes",
  "capture-core",
+ "capture-engine",
  "capture-updater",
  "clap",
  "fs2",

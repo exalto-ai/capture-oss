@@ -2,8 +2,8 @@
 
 use serde::{Deserialize, Serialize};
 
-pub use crate::archive::EvidenceKind;
-use crate::registry::RegistryRecord;
+pub use capture_core::archive::EvidenceKind;
+use capture_core::registry::RegistryRecord;
 
 /// How the daemon admits new provider requests. This is the one durable
 /// capture setting; each request snapshots it once.
@@ -324,13 +324,13 @@ pub struct RegistrySnapshot {
 /// Converts user search text into the deliberately small phrase/token subset
 /// supported identically by SQLite FTS5 and PostgreSQL web search queries.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum TraceSearchPart {
+pub enum TraceSearchPart {
     Token(String),
     Phrase(Vec<String>),
 }
 
 impl TraceSearchPart {
-    pub(crate) fn expression(&self) -> String {
+    pub fn expression(&self) -> String {
         match self {
             Self::Token(token) => format!("\"{token}\""),
             Self::Phrase(tokens) => format!("\"{}\"", tokens.join(" ")),
@@ -338,7 +338,7 @@ impl TraceSearchPart {
     }
 }
 
-pub(crate) fn trace_search_parts(input: &str) -> Option<Vec<TraceSearchPart>> {
+pub fn trace_search_parts(input: &str) -> Option<Vec<TraceSearchPart>> {
     fn push_token(
         token: &mut String,
         phrase: &mut Vec<String>,
@@ -383,7 +383,7 @@ pub(crate) fn trace_search_parts(input: &str) -> Option<Vec<TraceSearchPart>> {
     (!output.is_empty()).then_some(output)
 }
 
-pub(crate) fn trace_search_expression(input: &str) -> Option<String> {
+pub fn trace_search_expression(input: &str) -> Option<String> {
     trace_search_parts(input).map(|parts| {
         parts
             .iter()

@@ -37,6 +37,7 @@ hex = { workspace = true }
 fs2 = { workspace = true }
 k256 = { workspace = true, features = ["ecdsa"] }
 capture-core = { workspace = true, features = ["cli", "openapi"] }
+capture-engine = { workspace = true }
 capture-updater = { workspace = true }
 libc = { workspace = true }
 mime_guess = "2.0"
@@ -64,6 +65,7 @@ windows-sys = { workspace = true, features = ["Win32_Foundation", "Win32_Storage
 
 [dev-dependencies]
 capture-core = { workspace = true, features = ["test-utils"] }
+capture-engine = { workspace = true, features = ["test-support"] }
 testcontainers-modules = { version = "0.15", default-features = false, features = ["postgres"] }
 tower = { version = "0.5", features = ["util"] }
 tracing-subscriber = { workspace = true, features = ["fmt"] }
