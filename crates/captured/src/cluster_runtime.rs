@@ -8,10 +8,20 @@ use std::{
     time::Duration,
 };
 
+use anyhow::Result;
+use async_trait::async_trait;
+use capture_engine::{
+    capture_ledger::{CaptureEntry, CaptureLedger},
+    storage::RecoverySummary,
+};
 use tokio::sync::watch;
 
 use crate::{
+    archive::MAX_ARCHIVE_WIRE_BYTES,
+    artifact_router::RoutedArtifactStore,
+    artifact_store::{ArtifactKey, ArtifactRecord, ArtifactSource, ArtifactStoreError},
     config::{CLUSTER_INSTANCE_ID_ENV, valid_instance_id},
+    metadata::{CaptureCompletion, NewTrace},
     metadata_store::{
         CaptureClaim, MetadataResult, MetadataStoreError, NotarizationClaim, ReplicaIdentity,
         ServerMetadataStore,
@@ -154,13 +164,6 @@ impl ClusterRuntime {
         ClaimLeaseGuard { shutdown }
     }
 
-    pub(crate) fn capture_claim(self: &Arc<Self>, trace_id: impl Into<String>) -> ClaimedCapture {
-        ClaimedCapture {
-            runtime: self.clone(),
-            claim: CaptureClaim::new(trace_id, self.identity.clone()),
-        }
-    }
-
     pub(crate) fn new_claim_fence(&self) -> String {
         uuid::Uuid::new_v4().to_string()
     }
@@ -184,24 +187,6 @@ impl ClusterRuntime {
     }
 }
 
-/// A capture claimed by this replica, bundled with the cluster runtime whose
-/// shared metadata store records its transitions.
-#[derive(Clone)]
-pub(crate) struct ClaimedCapture {
-    runtime: Arc<ClusterRuntime>,
-    claim: CaptureClaim,
-}
-
-impl ClaimedCapture {
-    pub(crate) fn runtime(&self) -> &ClusterRuntime {
-        &self.runtime
-    }
-
-    pub(crate) fn claim(&self) -> &CaptureClaim {
-        &self.claim
-    }
-}
-
 enum ClaimToRenew {
     Capture(CaptureClaim),
     Notarization(Box<NotarizationClaim>),
@@ -214,5 +199,164 @@ pub(crate) struct ClaimLeaseGuard {
 impl Drop for ClaimLeaseGuard {
     fn drop(&mut self) {
         let _ = self.shutdown.send(true);
+    }
+}
+
+/// Records each capture under a work claim this replica keeps alive in the
+/// shared server metadata store. Artifacts are stored under the claim's
+/// commit ID, so a capture another replica adopts cannot attach them twice.
+pub(crate) struct ClusterCaptureLedger {
+    runtime: Arc<ClusterRuntime>,
+    artifacts: Arc<RoutedArtifactStore>,
+}
+
+impl ClusterCaptureLedger {
+    pub(crate) fn new(runtime: Arc<ClusterRuntime>, artifacts: Arc<RoutedArtifactStore>) -> Self {
+        Self { runtime, artifacts }
+    }
+}
+
+#[async_trait]
+impl CaptureLedger for ClusterCaptureLedger {
+    async fn begin(&self, capture: NewTrace) -> Result<Box<dyn CaptureEntry>> {
+        let claim = CaptureClaim::new(capture.trace_id.clone(), self.runtime.identity.clone());
+        self.runtime
+            .metadata()
+            .begin_capture_claimed(capture, &claim, self.runtime.lease_seconds())
+            .await?;
+        let lease = self.runtime.keep_capture_claim_alive(claim.clone());
+        Ok(Box::new(ClusterCaptureEntry {
+            runtime: self.runtime.clone(),
+            artifacts: self.artifacts.clone(),
+            claim,
+            _lease: lease,
+        }))
+    }
+
+    /// Atomically adopts at most one capture whose PostgreSQL lease and owner
+    /// heartbeat are both expired. The original commit ID is retained so
+    /// an ambiguous S3 PUT can only be attached after exact size/hash checks.
+    async fn recover_pending(&self) -> Result<RecoverySummary> {
+        let cluster_runtime = &self.runtime;
+        let Some(recovery) = cluster_runtime
+            .metadata()
+            .claim_next_stale_capture(
+                cluster_runtime.identity(),
+                &cluster_runtime.new_claim_fence(),
+                cluster_runtime.lease_seconds(),
+            )
+            .await?
+        else {
+            return Ok(RecoverySummary::default());
+        };
+        let mut summary = RecoverySummary::default();
+        let Some(completion) = recovery.completion else {
+            cluster_runtime
+                .metadata()
+                .fail_capture_claimed(&recovery.claim, "claim_expired")
+                .await?;
+            summary.interrupted_captures = 1;
+            return Ok(summary);
+        };
+        let key = ArtifactKey::new(&recovery.claim.trace_id, completion.artifact_kind())?;
+        match self
+            .artifacts
+            .find_scoped(&key, &recovery.claim.commit_id, MAX_ARCHIVE_WIRE_BYTES)
+            .await
+        {
+            Ok(Some(artifact))
+                if artifact.size_bytes == completion.expected_artifact_size_bytes
+                    && artifact.sha256 == completion.expected_artifact_sha256 =>
+            {
+                cluster_runtime
+                    .metadata()
+                    .complete_capture_claimed(completion, artifact, &recovery.claim)
+                    .await?;
+                summary.recovered_checkpoints = 1;
+            }
+            Ok(Some(_)) => {
+                cluster_runtime
+                    .metadata()
+                    .fail_capture_claimed(&recovery.claim, "artifact_integrity")
+                    .await?;
+                summary.interrupted_captures = 1;
+            }
+            Ok(None) => {
+                cluster_runtime
+                    .metadata()
+                    .fail_capture_claimed(&recovery.claim, "artifact_missing")
+                    .await?;
+                summary.interrupted_captures = 1;
+            }
+            Err(
+                ArtifactStoreError::Integrity { .. }
+                | ArtifactStoreError::TooLarge { .. }
+                | ArtifactStoreError::Conflict { .. },
+            ) => {
+                cluster_runtime
+                    .metadata()
+                    .fail_capture_claimed(&recovery.claim, "artifact_integrity")
+                    .await?;
+                summary.interrupted_captures = 1;
+            }
+            Err(error) => return Err(error.into()),
+        }
+        Ok(summary)
+    }
+}
+
+/// A capture claimed by this replica. Dropping it stops renewing the claim's
+/// lease.
+struct ClusterCaptureEntry {
+    runtime: Arc<ClusterRuntime>,
+    artifacts: Arc<RoutedArtifactStore>,
+    claim: CaptureClaim,
+    _lease: ClaimLeaseGuard,
+}
+
+#[async_trait]
+impl CaptureEntry for ClusterCaptureEntry {
+    async fn fail(&self, failure_code: &str) -> Result<()> {
+        self.runtime
+            .metadata()
+            .fail_capture_claimed(&self.claim, failure_code)
+            .await?;
+        Ok(())
+    }
+
+    async fn prepare(&self, completion: CaptureCompletion) -> Result<()> {
+        self.runtime
+            .metadata()
+            .prepare_capture_completion_claimed(
+                completion,
+                &self.claim,
+                self.runtime.lease_seconds(),
+            )
+            .await?;
+        Ok(())
+    }
+
+    async fn store_artifact(&self, key: ArtifactKey, bytes: Vec<u8>) -> Result<ArtifactRecord> {
+        self.artifacts
+            .put_scoped(
+                &key,
+                &self.claim.commit_id,
+                ArtifactSource::from_bytes(bytes),
+                MAX_ARCHIVE_WIRE_BYTES,
+            )
+            .await
+            .map_err(Into::into)
+    }
+
+    async fn complete(
+        &self,
+        completion: CaptureCompletion,
+        artifact: ArtifactRecord,
+    ) -> Result<()> {
+        self.runtime
+            .metadata()
+            .complete_capture_claimed(completion, artifact, &self.claim)
+            .await?;
+        Ok(())
     }
 }

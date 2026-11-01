@@ -19,6 +19,7 @@ use axum::{
     routing::any,
 };
 use bytes::{Bytes, BytesMut};
+use capture_engine::capture_ledger::{CaptureEntry, CaptureLedger, LocalCaptureLedger};
 use http_body_util::BodyExt as _;
 use sha2::{Digest as _, Sha256};
 use tokio::sync::{Mutex, Notify, RwLock, watch};
@@ -33,13 +34,10 @@ use super::{
 };
 use crate::{
     CaptureCheckpoint, CaptureConfig,
-    archive::MAX_ARCHIVE_WIRE_BYTES,
-    artifact_store::{
-        ArtifactKey, ArtifactKind, ArtifactSource, ArtifactStore, ArtifactStoreError,
-    },
+    artifact_store::{ArtifactKey, ArtifactKind, ArtifactStoreError},
     attestable_request_header_bytes, capture_streaming_request_to,
     capture_streaming_request_to_admitted, chunked_request_body,
-    cluster_runtime::{ClaimedCapture, ClusterRuntime, Lifecycle},
+    cluster_runtime::{ClusterCaptureLedger, ClusterRuntime, Lifecycle},
     config::{CapturedConfig, ProviderConfig},
     metadata::{CaptureCompletion, CaptureMode, EvidenceKind, NewTrace},
     metadata_store::MetadataStoreError,
@@ -142,6 +140,8 @@ pub(crate) struct AppState {
     max_attestable_http_bytes: usize,
     pub(crate) vault: Arc<Vault>,
     pub(crate) persistence: Persistence,
+    /// Records each capture directly or under this replica's cluster claims.
+    captures: Arc<dyn CaptureLedger>,
     pub(crate) config: Arc<CapturedConfig>,
     config_fingerprint: Arc<str>,
     serial: Arc<Mutex<u64>>,
@@ -415,7 +415,10 @@ pub async fn run(args: ProxyArgs) -> Result<()> {
             )
             .await?;
     } else {
-        let recovery = persistence.reconcile_incomplete_captures().await?;
+        let recovery = persistence
+            .storage()
+            .reconcile_incomplete_captures()
+            .await?;
         if recovery.recovered_checkpoints > 0
             || recovery.interrupted_captures > 0
             || recovery.pending_commits > 0
@@ -428,6 +431,13 @@ pub async fn run(args: ProxyArgs) -> Result<()> {
             );
         }
     }
+    let captures: Arc<dyn CaptureLedger> = match &cluster_runtime {
+        Some(cluster_runtime) => Arc::new(ClusterCaptureLedger::new(
+            cluster_runtime.clone(),
+            persistence.artifacts.clone(),
+        )),
+        None => Arc::new(LocalCaptureLedger::new(persistence.storage())),
+    };
     let hosted_admission = hosted_admission_required(&config);
     let stored_mode = persistence.metadata.capture_mode().await?;
     let config = Arc::new(config);
@@ -450,6 +460,7 @@ pub async fn run(args: ProxyArgs) -> Result<()> {
         max_attestable_http_bytes,
         vault: Arc::new(vault),
         persistence,
+        captures,
         config_fingerprint: Arc::from(config.fingerprint()?),
         config,
         serial: Arc::new(Mutex::new(0)),
@@ -488,7 +499,7 @@ pub async fn run(args: ProxyArgs) -> Result<()> {
     }
     let mut heartbeat = spawn_server_heartbeat(cluster_runtime.clone(), heartbeat_shutdown_rx);
     let capture_recovery = spawn_capture_recovery_worker(
-        state.persistence.clone(),
+        state.captures.clone(),
         cluster_runtime.clone(),
         shutdown_rx.clone(),
     );
@@ -644,7 +655,7 @@ pub(crate) fn hosted_admission_required(config: &CapturedConfig) -> bool {
 }
 
 fn spawn_capture_recovery_worker(
-    persistence: Persistence,
+    captures: Arc<dyn CaptureLedger>,
     cluster_runtime: Option<Arc<ClusterRuntime>>,
     mut shutdown: watch::Receiver<bool>,
 ) -> tokio::task::JoinHandle<()> {
@@ -664,12 +675,7 @@ fn spawn_capture_recovery_worker(
             {
                 continue;
             }
-            let recovery = if let Some(cluster_runtime) = &cluster_runtime {
-                persistence.reconcile_server_capture(cluster_runtime).await
-            } else {
-                persistence.reconcile_pending_commits().await
-            };
-            match recovery {
+            match captures.recover_pending().await {
                 Ok(summary) if summary.recovered_checkpoints > 0 => {
                     tracing::info!(
                         recovered_checkpoints = summary.recovered_checkpoints,
@@ -1239,10 +1245,6 @@ async fn proxy_inner(state: AppState, request: Request) -> Result<Response> {
     let outbound = outbound.body(chunked_request_body(input))?;
 
     let (trace_id, created_at_unix_ms) = next_capture_metadata(&state).await?;
-    let capture_claim = state
-        .cluster_runtime
-        .as_ref()
-        .map(|cluster_runtime| cluster_runtime.capture_claim(trace_id.clone()));
     let new_capture = NewTrace {
         trace_id: trace_id.clone(),
         created_at_unix_ms,
@@ -1256,24 +1258,7 @@ async fn proxy_inner(state: AppState, request: Request) -> Result<Response> {
         config_fingerprint: state.config_fingerprint.to_string(),
         evidence_kind: EvidenceKind::Notarized,
     };
-    if let Some(claim) = &capture_claim {
-        let cluster_runtime = claim.runtime();
-        cluster_runtime
-            .metadata()
-            .begin_capture_claimed(new_capture, claim.claim(), cluster_runtime.lease_seconds())
-            .await?;
-    } else {
-        state
-            .persistence
-            .metadata
-            .begin_capture(new_capture)
-            .await?;
-    }
-    let mut capture_claim_lease = capture_claim.as_ref().map(|claim| {
-        claim
-            .runtime()
-            .keep_capture_claim_alive(claim.claim().clone())
-    });
+    let capture_entry = state.captures.begin(new_capture).await?;
     let started = Instant::now();
     let capture = CaptureConfig {
         trace_id: trace_id.clone(),
@@ -1299,13 +1284,7 @@ async fn proxy_inner(state: AppState, request: Request) -> Result<Response> {
     let upstream = match upstream {
         Ok(upstream) => upstream,
         Err(error) => {
-            let _ = fail_capture(
-                &state.persistence,
-                capture_claim.as_ref(),
-                &trace_id,
-                "notary_error",
-            )
-            .await;
+            let _ = capture_entry.fail("notary_error").await;
             return Err(error);
         }
     };
@@ -1319,8 +1298,6 @@ async fn proxy_inner(state: AppState, request: Request) -> Result<Response> {
         let headers = upstream.headers.clone();
         let trace_state = state.clone();
         let trace_id_for_task = trace_id.clone();
-        let capture_claim_for_task = capture_claim.clone();
-        let capture_claim_lease_for_task = capture_claim_lease.take();
         let response_preview_limit = state.config.metadata.output_preview_chars;
         let (body_sender, body_receiver) = tokio::sync::mpsc::channel(32);
         // Register before detaching. Once both graceful servers have stopped,
@@ -1329,7 +1306,6 @@ async fn proxy_inner(state: AppState, request: Request) -> Result<Response> {
         let capture_task = state.capture_tasks.track();
         tokio::spawn(async move {
             let _capture_task = capture_task;
-            let _capture_claim_lease = capture_claim_lease_for_task;
             let mut upstream = upstream;
             let mut received_first_chunk = false;
             let mut client_connected = true;
@@ -1362,13 +1338,7 @@ async fn proxy_inner(state: AppState, request: Request) -> Result<Response> {
                     let response_bytes = match u64::try_from(output_preview.response_bytes) {
                         Ok(response_bytes) => response_bytes,
                         Err(_) => {
-                            let _ = fail_capture(
-                                &trace_state.persistence,
-                                capture_claim_for_task.as_ref(),
-                                &trace_id_for_task,
-                                "response_size_overflow",
-                            )
-                            .await;
+                            let _ = capture_entry.fail("response_size_overflow").await;
                             tracing::warn!(trace_id = %trace_id_for_task, "provider response size does not fit durable metadata");
                             return;
                         }
@@ -1383,13 +1353,7 @@ async fn proxy_inner(state: AppState, request: Request) -> Result<Response> {
                     {
                         Ok(encrypted) => encrypted,
                         Err(error) => {
-                            let _ = fail_capture(
-                                &trace_state.persistence,
-                                capture_claim_for_task.as_ref(),
-                                &trace_id_for_task,
-                                "checkpoint_store_error",
-                            )
-                            .await;
+                            let _ = capture_entry.fail("checkpoint_store_error").await;
                             tracing::warn!(%error, "could not encrypt streaming capture checkpoint");
                             return;
                         }
@@ -1409,41 +1373,16 @@ async fn proxy_inner(state: AppState, request: Request) -> Result<Response> {
                         expected_artifact_sha256,
                         evidence_kind: EvidenceKind::Notarized,
                     };
-                    if let Err(error) = prepare_capture(
-                        &trace_state.persistence,
-                        capture_claim_for_task.as_ref(),
-                        completion.clone(),
-                    )
-                    .await
-                    {
-                        let _ = fail_capture(
-                            &trace_state.persistence,
-                            capture_claim_for_task.as_ref(),
-                            &trace_id_for_task,
-                            "metadata_prepare_error",
-                        )
-                        .await;
+                    if let Err(error) = capture_entry.prepare(completion.clone()).await {
+                        let _ = capture_entry.fail("metadata_prepare_error").await;
                         tracing::warn!(trace_id = %trace_id_for_task, %error, "could not stage streaming capture completion");
                         return;
                     }
-                    match store_checkpoint(
-                        &trace_state.persistence,
-                        &trace_id_for_task,
-                        capture_claim_for_task.as_ref(),
-                        encrypted,
-                    )
-                    .await
+                    match store_checkpoint(capture_entry.as_ref(), &trace_id_for_task, encrypted)
+                        .await
                     {
                         Ok(artifact) => {
-                            if complete_capture(
-                                &trace_state.persistence,
-                                capture_claim_for_task.as_ref(),
-                                completion,
-                                artifact,
-                            )
-                            .await
-                            .is_err()
-                            {
+                            if capture_entry.complete(completion, artifact).await.is_err() {
                                 tracing::warn!(trace_id = %trace_id_for_task, "could not index streaming capture checkpoint");
                             }
                             tracing::info!(trace_id = %trace_id_for_task, provider = provider.host(), elapsed_ms = started.elapsed().as_millis(), "wrote streaming capture checkpoint")
@@ -1452,36 +1391,18 @@ async fn proxy_inner(state: AppState, request: Request) -> Result<Response> {
                             let failure_code =
                                 artifact_failure_code(&error).unwrap_or("checkpoint_store_error");
                             if !recoverable_artifact_commit_failure(failure_code) {
-                                let _ = fail_capture(
-                                    &trace_state.persistence,
-                                    capture_claim_for_task.as_ref(),
-                                    &trace_id_for_task,
-                                    failure_code,
-                                )
-                                .await;
+                                let _ = capture_entry.fail(failure_code).await;
                             }
                             tracing::warn!(%error, "could not save streaming capture checkpoint")
                         }
                     }
                 }
                 Ok(Err(error)) => {
-                    let _ = fail_capture(
-                        &trace_state.persistence,
-                        capture_claim_for_task.as_ref(),
-                        &trace_id_for_task,
-                        "capture_error",
-                    )
-                    .await;
+                    let _ = capture_entry.fail("capture_error").await;
                     tracing::warn!(%error, "stream ended without a Notary capture checkpoint")
                 }
                 Err(error) => {
-                    let _ = fail_capture(
-                        &trace_state.persistence,
-                        capture_claim_for_task.as_ref(),
-                        &trace_id_for_task,
-                        "capture_task_error",
-                    )
-                    .await;
+                    let _ = capture_entry.fail("capture_task_error").await;
                     tracing::warn!(%error, "stream capture task exited")
                 }
             }
@@ -1504,13 +1425,7 @@ async fn proxy_inner(state: AppState, request: Request) -> Result<Response> {
         match chunk {
             Ok(chunk) => body.extend_from_slice(&chunk),
             Err(error) => {
-                let _ = fail_capture(
-                    &state.persistence,
-                    capture_claim.as_ref(),
-                    &trace_id,
-                    "response_error",
-                )
-                .await;
+                let _ = capture_entry.fail("response_error").await;
                 return Err(error.into());
             }
         }
@@ -1518,23 +1433,11 @@ async fn proxy_inner(state: AppState, request: Request) -> Result<Response> {
     let checkpoint = match upstream.checkpoint.await {
         Ok(Ok(checkpoint)) => checkpoint,
         Ok(Err(error)) => {
-            let _ = fail_capture(
-                &state.persistence,
-                capture_claim.as_ref(),
-                &trace_id,
-                "capture_error",
-            )
-            .await;
+            let _ = capture_entry.fail("capture_error").await;
             return Err(error);
         }
         Err(error) => {
-            let _ = fail_capture(
-                &state.persistence,
-                capture_claim.as_ref(),
-                &trace_id,
-                "capture_task_error",
-            )
-            .await;
+            let _ = capture_entry.fail("capture_task_error").await;
             return Err(error).context("capture checkpoint task exited");
         }
     };
@@ -1543,13 +1446,7 @@ async fn proxy_inner(state: AppState, request: Request) -> Result<Response> {
     let encrypted = match encrypt_checkpoint(checkpoint, state.vault.clone(), &trace_id).await {
         Ok(encrypted) => encrypted,
         Err(error) => {
-            let _ = fail_capture(
-                &state.persistence,
-                capture_claim.as_ref(),
-                &trace_id,
-                "checkpoint_store_error",
-            )
-            .await;
+            let _ = capture_entry.fail("checkpoint_store_error").await;
             return Err(error);
         }
     };
@@ -1567,55 +1464,22 @@ async fn proxy_inner(state: AppState, request: Request) -> Result<Response> {
         expected_artifact_sha256,
         evidence_kind: EvidenceKind::Notarized,
     };
-    if let Err(error) = prepare_capture(
-        &state.persistence,
-        capture_claim.as_ref(),
-        completion.clone(),
-    )
-    .await
-    {
-        let _ = fail_capture(
-            &state.persistence,
-            capture_claim.as_ref(),
-            &trace_id,
-            "metadata_prepare_error",
-        )
-        .await;
+    if let Err(error) = capture_entry.prepare(completion.clone()).await {
+        let _ = capture_entry.fail("metadata_prepare_error").await;
         tracing::warn!(trace_id = %trace_id, %error, "could not stage capture completion");
     } else {
-        let artifact = match store_checkpoint(
-            &state.persistence,
-            &trace_id,
-            capture_claim.as_ref(),
-            encrypted,
-        )
-        .await
-        {
+        let artifact = match store_checkpoint(capture_entry.as_ref(), &trace_id, encrypted).await {
             Ok(artifact) => artifact,
             Err(error) => {
                 let failure_code =
                     artifact_failure_code(&error).unwrap_or("checkpoint_store_error");
                 if !recoverable_artifact_commit_failure(failure_code) {
-                    let _ = fail_capture(
-                        &state.persistence,
-                        capture_claim.as_ref(),
-                        &trace_id,
-                        failure_code,
-                    )
-                    .await;
+                    let _ = capture_entry.fail(failure_code).await;
                 }
                 return Err(error);
             }
         };
-        if complete_capture(
-            &state.persistence,
-            capture_claim.as_ref(),
-            completion,
-            artifact,
-        )
-        .await
-        .is_err()
-        {
+        if capture_entry.complete(completion, artifact).await.is_err() {
             tracing::warn!(trace_id = %trace_id, "could not index capture checkpoint");
         }
     }
@@ -1682,10 +1546,6 @@ async fn witnessed_provider_request(
     let outbound = outbound.body(chunked_request_body(input))?;
 
     let (trace_id, created_at_unix_ms) = next_capture_metadata(state).await?;
-    let capture_claim = state
-        .cluster_runtime
-        .as_ref()
-        .map(|cluster_runtime| cluster_runtime.capture_claim(trace_id.clone()));
     let new_capture = NewTrace {
         trace_id: trace_id.clone(),
         created_at_unix_ms,
@@ -1699,24 +1559,7 @@ async fn witnessed_provider_request(
         config_fingerprint: state.config_fingerprint.to_string(),
         evidence_kind: EvidenceKind::Witnessed,
     };
-    if let Some(claim) = &capture_claim {
-        let cluster_runtime = claim.runtime();
-        cluster_runtime
-            .metadata()
-            .begin_capture_claimed(new_capture, claim.claim(), cluster_runtime.lease_seconds())
-            .await?;
-    } else {
-        state
-            .persistence
-            .metadata
-            .begin_capture(new_capture)
-            .await?;
-    }
-    let capture_claim_lease = capture_claim.as_ref().map(|claim| {
-        claim
-            .runtime()
-            .keep_capture_claim_alive(claim.claim().clone())
-    });
+    let capture_entry = state.captures.begin(new_capture).await?;
     let started = Instant::now();
     let witness_config = crate::witness::WitnessConfig {
         provider_name: provider.name().to_owned(),
@@ -1740,13 +1583,7 @@ async fn witnessed_provider_request(
     let upstream = match upstream {
         Ok(upstream) => upstream,
         Err(error) => {
-            let _ = fail_capture(
-                &state.persistence,
-                capture_claim.as_ref(),
-                &trace_id,
-                "notary_error",
-            )
-            .await;
+            let _ = capture_entry.fail("notary_error").await;
             return Err(error);
         }
     };
@@ -1762,7 +1599,6 @@ async fn witnessed_provider_request(
     let capture_task = state.capture_tasks.track();
     tokio::spawn(async move {
         let _capture_task = capture_task;
-        let _capture_claim_lease = capture_claim_lease;
         let mut upstream = upstream;
         let mut streaming_preview = StreamingOutputPreview::new(provider, preview_chars);
         let mut buffered = Vec::new();
@@ -1803,7 +1639,7 @@ async fn witnessed_provider_request(
         };
         seal_witnessed_capture(
             &task_state,
-            capture_claim.as_ref(),
+            capture_entry.as_ref(),
             &task_trace_id,
             exchange,
             WitnessedCompletion {
@@ -1840,13 +1676,13 @@ struct WitnessedCompletion {
 /// bounded code and never retries through another mode.
 async fn seal_witnessed_capture(
     state: &AppState,
-    claim: Option<&ClaimedCapture>,
+    capture_entry: &dyn CaptureEntry,
     trace_id: &str,
     exchange: Result<crate::witness::WitnessedExchange>,
     facts: WitnessedCompletion,
 ) {
     let fail = |code: &'static str| async move {
-        let _ = fail_capture(&state.persistence, claim, trace_id, code).await;
+        let _ = capture_entry.fail(code).await;
     };
     let exchange = match exchange {
         Ok(exchange) => exchange,
@@ -1903,7 +1739,7 @@ async fn seal_witnessed_capture(
         expected_artifact_sha256,
         evidence_kind: EvidenceKind::Witnessed,
     };
-    if let Err(error) = prepare_capture(&state.persistence, claim, completion.clone()).await {
+    if let Err(error) = capture_entry.prepare(completion.clone()).await {
         tracing::warn!(trace_id, %error, "could not stage Witnessed trace completion");
         fail("metadata_prepare_error").await;
         return;
@@ -1915,11 +1751,9 @@ async fn seal_witnessed_capture(
             return;
         }
     };
-    match store_capture_artifact(&state.persistence, key, claim, package).await {
+    match capture_entry.store_artifact(key, package).await {
         Ok(artifact) => {
-            if let Err(error) =
-                complete_capture(&state.persistence, claim, completion, artifact).await
-            {
+            if let Err(error) = capture_entry.complete(completion, artifact).await {
                 tracing::warn!(trace_id, %error, "could not index the Witnessed trace");
             } else {
                 tracing::info!(trace_id, "sealed Witnessed trace");
@@ -2067,145 +1901,16 @@ fn artifact_expectation(encrypted: &[u8]) -> (u64, String) {
 }
 
 async fn store_checkpoint(
-    persistence: &Persistence,
+    capture_entry: &dyn CaptureEntry,
     trace_id: &str,
-    claim: Option<&ClaimedCapture>,
     encrypted: Vec<u8>,
 ) -> Result<crate::artifact_store::ArtifactRecord> {
-    store_capture_artifact(
-        persistence,
-        ArtifactKey::new(trace_id, ArtifactKind::CaptureCheckpoint)?,
-        claim,
-        encrypted,
-    )
-    .await
-}
-
-/// Stores the artifact a capture completion commits, scoped to the capture
-/// claim in cluster mode.
-async fn store_capture_artifact(
-    persistence: &Persistence,
-    key: ArtifactKey,
-    claim: Option<&ClaimedCapture>,
-    encrypted: Vec<u8>,
-) -> Result<crate::artifact_store::ArtifactRecord> {
-    if let Some(claim) = claim {
-        persistence
-            .artifacts
-            .put_scoped(
-                &key,
-                &claim.claim().commit_id,
-                ArtifactSource::from_bytes(encrypted),
-                MAX_ARCHIVE_WIRE_BYTES,
-            )
-            .await
-            .map_err(Into::into)
-    } else {
-        persistence
-            .artifacts
-            .put(
-                &key,
-                ArtifactSource::from_bytes(encrypted),
-                MAX_ARCHIVE_WIRE_BYTES,
-            )
-            .await
-            .map_err(Into::into)
-    }
-}
-
-async fn fail_capture(
-    persistence: &Persistence,
-    claim: Option<&ClaimedCapture>,
-    trace_id: &str,
-    failure_code: &str,
-) -> Result<()> {
-    if let Some(claim) = claim {
-        claim
-            .runtime()
-            .metadata()
-            .fail_capture_claimed(claim.claim(), failure_code)
-            .await?;
-    } else {
-        persistence
-            .metadata
-            .mark_capture_failed(trace_id, failure_code)
-            .await?;
-    }
-    Ok(())
-}
-
-async fn prepare_capture(
-    persistence: &Persistence,
-    claim: Option<&ClaimedCapture>,
-    completion: CaptureCompletion,
-) -> Result<()> {
-    if let Some(claim) = claim {
-        let cluster_runtime = claim.runtime();
-        cluster_runtime
-            .metadata()
-            .prepare_capture_completion_claimed(
-                completion,
-                claim.claim(),
-                cluster_runtime.lease_seconds(),
-            )
-            .await?;
-    } else {
-        persistence
-            .metadata
-            .prepare_capture_completion(completion)
-            .await?;
-    }
-    Ok(())
-}
-
-async fn complete_capture(
-    persistence: &Persistence,
-    claim: Option<&ClaimedCapture>,
-    completion: CaptureCompletion,
-    artifact: crate::artifact_store::ArtifactRecord,
-) -> Result<()> {
-    if let Some(claim) = claim {
-        claim
-            .runtime()
-            .metadata()
-            .complete_capture_claimed(completion, artifact, claim.claim())
-            .await?;
-    } else {
-        let trace_id = completion.trace_id.clone();
-        // A Witnessed trace is sealed by its receipt when it completes.
-        let sealable = (200..=299).contains(&completion.http_status)
-            && completion.evidence_kind == EvidenceKind::Notarized;
-        persistence
-            .metadata
-            .complete_capture(completion, artifact)
-            .await?;
-        if sealable {
-            queue_auto_seal(persistence, &trace_id).await;
-        }
-    }
-    Ok(())
-}
-
-/// Queues a completed local capture for sealing when auto-seal is on. The
-/// notarization worker polls its queue, so no wake-up is needed. A failure
-/// leaves the Trace captured for a manual seal.
-async fn queue_auto_seal(persistence: &Persistence, trace_id: &str) {
-    let queued = async {
-        if !persistence.metadata.auto_seal_enabled().await? {
-            return Ok(false);
-        }
-        persistence
-            .metadata
-            .enqueue_notarization(trace_id, current_unix_ms()?)
-            .await?;
-        anyhow::Ok(true)
-    }
-    .await;
-    match queued {
-        Ok(true) => tracing::info!(trace_id, "queued capture for auto-seal"),
-        Ok(false) => {}
-        Err(error) => tracing::warn!(trace_id, %error, "could not queue capture for auto-seal"),
-    }
+    capture_entry
+        .store_artifact(
+            ArtifactKey::new(trace_id, ArtifactKind::CaptureCheckpoint)?,
+            encrypted,
+        )
+        .await
 }
 
 fn artifact_failure_code(error: &anyhow::Error) -> Option<&'static str> {
@@ -2653,70 +2358,6 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn completed_successful_captures_are_queued_only_while_auto_seal_is_on() {
-        use crate::metadata_store::conformance::{artifact, completion, new_capture};
-
-        let directory = tempfile::tempdir().unwrap();
-        let mut config = CapturedConfig::default();
-        config.metadata.path = directory.path().join("metadata.db");
-        config.storage.checkpoint_dir = directory.path().join("checkpoints");
-        config.storage.package_dir = directory.path().join("traces");
-        let persistence = Persistence::open(&config).await.unwrap();
-        let capture = |id: &'static str, http_status: u16| {
-            let persistence = persistence.clone();
-            async move {
-                persistence
-                    .metadata
-                    .begin_capture(new_capture(id, 1))
-                    .await
-                    .unwrap();
-                let completion = completion(id, 2, http_status);
-                persistence
-                    .metadata
-                    .prepare_capture_completion(completion.clone())
-                    .await
-                    .unwrap();
-                complete_capture(
-                    &persistence,
-                    None,
-                    completion,
-                    artifact(id, ArtifactKind::CaptureCheckpoint, 1),
-                )
-                .await
-                .unwrap();
-            }
-        };
-        let queued = |id: &'static str| {
-            let persistence = persistence.clone();
-            async move {
-                !persistence
-                    .metadata
-                    .operations(crate::metadata::OperationFilters {
-                        trace_id: Some(id.to_owned()),
-                        limit: 10,
-                        ..Default::default()
-                    })
-                    .await
-                    .unwrap()
-                    .is_empty()
-            }
-        };
-
-        capture("trc-auto-off", 200).await;
-        persistence
-            .metadata
-            .set_auto_seal_enabled(true, 3)
-            .await
-            .unwrap();
-        capture("trc-auto-on", 200).await;
-        capture("trc-auto-failed", 500).await;
-
-        assert!(!queued("trc-auto-off").await);
-        assert!(queued("trc-auto-on").await);
-        assert!(!queued("trc-auto-failed").await);
-    }
-
     #[derive(Clone)]
     struct DirectObservation {
         provider: Provider,
@@ -2779,6 +2420,7 @@ mod tests {
             max_frame_bytes: DEFAULT_NOTARY_MAX_FRAME_BYTES,
             max_attestable_http_bytes: DEFAULT_MAX_ATTESTABLE_HTTP_BYTES,
             vault: Arc::new(Vault::test_only()),
+            captures: Arc::new(LocalCaptureLedger::new(persistence.storage())),
             persistence,
             config_fingerprint: Arc::from(config.fingerprint().unwrap()),
             config,
