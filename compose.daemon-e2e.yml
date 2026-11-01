@@ -112,8 +112,12 @@ services:
     cap_drop:
       - ALL
     restart: "no"
+    # Healthy means SeaweedFS can store an object, not only that the S3 API
+    # answers. After a restart the S3 API can serve reads well before the master
+    # assigns a writable volume, so the first write was refused. /dir/assign
+    # reserves a file ID in the bucket's collection and stores no data.
     healthcheck:
-      test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:8333/healthz"]
+      test: ["CMD-SHELL", "curl --fail --silent --output /dev/null http://127.0.0.1:8333/healthz && curl --fail --silent --output /dev/null 'http://127.0.0.1:9333/dir/assign?collection=captured-e2e'"]
       interval: 1s
       timeout: 2s
       retries: 60
