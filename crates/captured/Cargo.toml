@@ -1,0 +1,69 @@
+[package]
+name = "captured"
+version.workspace = true
+edition = "2024"
+license = "MIT"
+description = "Local Notary proxy and administration daemon"
+
+[[bin]]
+name = "captured"
+path = "src/bin/captured.rs"
+
+[[bin]]
+name = "notary-e2e-notary"
+path = "src/bin/notary-e2e-notary.rs"
+required-features = ["daemon-e2e"]
+
+[features]
+# Used only by the dedicated daemon Docker E2E target. Production client and
+# daemon builds retain the core crate's Mozilla/WebPKI trust configuration.
+daemon-e2e = ["capture-core/daemon-e2e"]
+
+[dependencies]
+anyhow = { workspace = true }
+argon2 = { workspace = true }
+async-trait = { workspace = true }
+aws-sdk-s3 = { version = "1.140", default-features = false, features = [
+    "default-https-client",
+    "rt-tokio",
+] }
+axum = { workspace = true, features = ["macros"] }
+base64 = { workspace = true }
+bytes = { workspace = true }
+clap = { workspace = true, features = ["derive", "string"] }
+http = { workspace = true }
+http-body-util = { workspace = true }
+hex = { workspace = true }
+fs2 = { workspace = true }
+k256 = { workspace = true, features = ["ecdsa"] }
+capture-core = { workspace = true, features = ["cli", "openapi"] }
+capture-updater = { workspace = true }
+libc = { workspace = true }
+mime_guess = "2.0"
+reqwest = { workspace = true, features = ["json", "rustls-tls", "stream"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
+rust-embed = "8.12"
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+sqlx = { version = "0.8", default-features = false, features = ["postgres", "runtime-tokio-rustls"] }
+tempfile = { workspace = true }
+thiserror = "2.0"
+tokio = { workspace = true, features = ["full"] }
+tokio-stream = "0.1"
+toml = { workspace = true }
+tracing = { workspace = true }
+tower-http = { version = "0.7", features = ["cors", "limit", "request-id", "sensitive-headers", "trace"] }
+url = { workspace = true }
+utoipa = { workspace = true, features = ["axum_extras", "uuid"] }
+uuid = { workspace = true, features = ["v4"] }
+zeroize = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true, features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_Console", "Win32_System_Threading"] }
+
+[dev-dependencies]
+capture-core = { workspace = true, features = ["test-utils"] }
+testcontainers-modules = { version = "0.15", default-features = false, features = ["postgres"] }
+tower = { version = "0.5", features = ["util"] }
+tracing-subscriber = { workspace = true, features = ["fmt"] }

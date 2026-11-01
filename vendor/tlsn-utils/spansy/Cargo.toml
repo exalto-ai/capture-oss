@@ -1,0 +1,20 @@
+[package]
+name = "spansy"
+version = "0.1.0"
+edition = "2024"
+description = "Parsing with span information"
+repository = "https://github.com/tlsnotary/tlsn-utils"
+license = "MIT OR Apache-2.0"
+
+# Vendored standalone: the upstream manifest inherits `bytes` and `thiserror`
+# from the tlsn-utils workspace; pin the same majors the workspace lockfile
+# resolved (bytes 1, thiserror 1) instead.
+[dependencies]
+rangeset = { version = "0.4" }
+
+bytes = "1"
+thiserror = "1"
+
+httparse = "1.8"
+pest = { version = "2.7" }
+pest_derive = { version = "2.7" }

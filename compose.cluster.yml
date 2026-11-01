@@ -1,0 +1,170 @@
+name: capture-cluster
+
+x-daemon: &daemon
+  build:
+    context: .
+    dockerfile: Dockerfile
+    target: cluster
+  image: ${CAPTURED_CLUSTER_IMAGE:-captured-cluster:local}
+  user: "${CLUSTER_UID:-10001}:${CLUSTER_GID:-10001}"
+  command: ["--config", "/etc/capture/config.toml"]
+  environment: &daemon-environment
+    CAPTURED_ADMIN_PASSWORD_FILE: /run/secrets/admin_password
+    CAPTURED_ARTIFACT_S3_ACCESS_KEY_ID_FILE: /run/secrets/s3_access_key
+    CAPTURED_ARTIFACT_S3_SECRET_ACCESS_KEY_FILE: /run/secrets/s3_secret_key
+    CAPTURED_METADATA_DATABASE_URL_FILE: /run/secrets/postgres_url
+    CAPTURED_CLUSTER_VAULT_KEY_FILE: /run/secrets/cluster_vault_key
+  secrets: &daemon-secrets
+    - admin_password
+    - postgres_url
+    - s3_access_key
+    - s3_secret_key
+    - cluster_vault_key
+  volumes:
+    - ${CLUSTER_STATE_DIR:?run ./capture-cluster.sh init first}/config.toml:/etc/capture/config.toml:ro
+  read_only: true
+  tmpfs:
+    - /tmp
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+  restart: unless-stopped
+  depends_on:
+    migrate:
+      condition: service_completed_successfully
+    object-store-init:
+      condition: service_completed_successfully
+
+services:
+  postgres:
+    image: postgres:17.7-alpine
+    environment:
+      POSTGRES_DB: notary
+      POSTGRES_USER: notary
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+    secrets:
+      - postgres_password
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U notary -d notary"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  object-store:
+    image: chrislusf/seaweedfs:4.47
+    # The wrapper reads the credentials as root, then the image entrypoint
+    # fixes /data ownership and drops to its unprivileged seaweed account.
+    # Only the authenticated S3 API listens on the network; SeaweedFS's master,
+    # volume, and filer APIs have no authentication, so they stay on loopback.
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        AWS_ACCESS_KEY_ID=$$(cat /run/secrets/s3_access_key)
+        AWS_SECRET_ACCESS_KEY=$$(cat /run/secrets/s3_secret_key)
+        export AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY
+        exec /entrypoint.sh server -s3 -ip=127.0.0.1 -ip.bind=127.0.0.1 -s3.ip.bind=0.0.0.0 -master.telemetry=false
+    secrets:
+      - s3_access_key
+      - s3_secret_key
+    volumes:
+      - object-store-data:/data
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - SETGID
+      - SETUID
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:8333/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  object-store-init:
+    image: amazon/aws-cli:2.37.4
+    user: "${CLUSTER_UID:-10001}:${CLUSTER_GID:-10001}"
+    depends_on:
+      object-store:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-ec"]
+    environment:
+      AWS_ENDPOINT_URL: http://object-store:8333
+      AWS_DEFAULT_REGION: us-east-1
+      AWS_EC2_METADATA_DISABLED: "true"
+      HOME: /tmp
+    command:
+      - |
+        AWS_ACCESS_KEY_ID=$$(cat /run/secrets/s3_access_key)
+        AWS_SECRET_ACCESS_KEY=$$(cat /run/secrets/s3_secret_key)
+        export AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY
+        aws s3api head-bucket --bucket trace-artifacts >/dev/null 2>&1 ||
+          aws s3api create-bucket --bucket trace-artifacts >/dev/null
+    secrets:
+      - s3_access_key
+      - s3_secret_key
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    restart: "no"
+
+  migrate:
+    <<: *daemon
+    command: ["migrate", "--config", "/etc/capture/config.toml"]
+    environment:
+      CAPTURED_METADATA_DATABASE_URL_FILE: /run/secrets/postgres_url
+      CAPTURED_CLUSTER_VAULT_KEY_FILE: /run/secrets/cluster_vault_key
+    secrets:
+      - postgres_url
+      - cluster_vault_key
+    depends_on:
+      postgres:
+        condition: service_healthy
+      object-store-init:
+        condition: service_completed_successfully
+    restart: "no"
+
+  daemon:
+    <<: *daemon
+    expose:
+      - "8787"
+      - "8788"
+    deploy:
+      mode: replicated
+      replicas: ${CLUSTER_REPLICAS:-2}
+
+secrets:
+  admin_password:
+    file: ${CLUSTER_STATE_DIR}/secrets/admin-password
+  postgres_password:
+    file: ${CLUSTER_STATE_DIR}/secrets/postgres-password
+  postgres_url:
+    file: ${CLUSTER_STATE_DIR}/secrets/postgres-url
+  s3_access_key:
+    file: ${CLUSTER_STATE_DIR}/secrets/s3-access-key
+  s3_secret_key:
+    file: ${CLUSTER_STATE_DIR}/secrets/s3-secret-key
+  cluster_vault_key:
+    file: ${CLUSTER_STATE_DIR}/secrets/cluster-vault.key
+
+volumes:
+  postgres-data:
+  object-store-data:
+
+networks:
+  default:
+    name: ${CLUSTER_NETWORK_NAME:-capture-cluster}

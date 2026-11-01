@@ -1,0 +1,41 @@
+.provider-identity {
+  display: inline-flex;
+  min-width: 0;
+  max-width: 100%;
+  align-items: center;
+  gap: 0.42em;
+  color: inherit;
+  vertical-align: -0.08em;
+}
+
+.provider-identity__icon {
+  width: 1.08em;
+  height: 1.08em;
+  flex: 0 0 auto;
+  background: currentColor;
+  opacity: 0.88;
+  -webkit-mask: var(--provider-icon-url) center / contain no-repeat;
+  mask: var(--provider-icon-url) center / contain no-repeat;
+}
+
+.provider-identity__icon--unknown {
+  overflow: visible;
+  background: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linejoin: round;
+}
+
+.provider-identity__name,
+.provider-identity__detail {
+  min-width: 0;
+}
+
+.provider-identity__detail {
+  color: var(--muted, currentColor);
+}
+
+.provider-identity__detail::before {
+  content: "·";
+  margin-right: 0.42em;
+}

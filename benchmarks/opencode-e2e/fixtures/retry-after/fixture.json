@@ -1,0 +1,6 @@
+{
+  "version": "retry-after/v1",
+  "summary": "Round a fractional Retry-After delay up instead of down.",
+  "allowed_files": ["retry_after.py"],
+  "test_command": ["python3", "-m", "unittest", "-v"]
+}

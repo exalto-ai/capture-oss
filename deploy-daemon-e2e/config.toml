@@ -1,0 +1,25 @@
+format = "ecp/captured-config/v1"
+
+[proxy]
+listen = "127.0.0.1:8787"
+
+[admin]
+listen = "127.0.0.1:8788"
+
+[notary]
+# The dedicated Compose file provides a raw Proxy-TLS fixture with private key
+# scalar 1. The corresponding SEC1 generator key is intentionally test-only.
+endpoint = "tcp://notary:7047"
+public_key = "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"
+
+[storage]
+backend = "filesystem"
+checkpoint_dir = "/state/capture-checkpoints"
+package_dir = "/state/trace-packages"
+
+[metadata]
+backend = "sqlite"
+path = "/state/metadata.db"
+prompt_preview_chars = 1000
+output_preview_chars = 1000
+full_text_search = true

@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" role="img" aria-labelledby="title">
+  <title id="title">Exalto Capture</title>
+  <rect width="120" height="120" rx="26.8" fill="#0C1622"/>
+  <g transform="translate(60,60) scale(1.12)">
+    <g stroke="#FFFFFF" stroke-width="4" stroke-linecap="round" fill="none">
+      <path d="M-34,-16 L-34,-30 A4,4 0 0 1 -30,-34 L-16,-34"/>
+      <path d="M16,-34 L30,-34 A4,4 0 0 1 34,-30 L34,-16"/>
+      <path d="M34,16 L34,30 A4,4 0 0 1 30,34 L16,34"/>
+      <path d="M-16,34 L-30,34 A4,4 0 0 1 -34,30 L-34,16"/>
+    </g>
+    <circle r="15" fill="none" stroke="#FFFFFF" stroke-width="4"/>
+    <circle r="6.5" fill="#FFFFFF"/>
+  </g>
+</svg>

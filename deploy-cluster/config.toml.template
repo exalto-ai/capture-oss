@@ -1,0 +1,47 @@
+format = "ecp/captured-config/v1"
+
+[cluster]
+proxy_origin = "https://__PROXY_DOMAIN__"
+admin_origin = "https://__ADMIN_DOMAIN__"
+
+[proxy]
+listen = "0.0.0.0:8787"
+
+[admin]
+listen = "0.0.0.0:8788"
+
+[admin.auth]
+username = "admin"
+
+[storage]
+backend = "s3"
+checkpoint_dir = "/var/lib/capture/data/capture-checkpoints"
+package_dir = "/var/lib/capture/data/trace-packages"
+
+[storage.s3]
+bucket = "trace-artifacts"
+region = "us-east-1"
+endpoint = "http://object-store:8333"
+prefix = "captured"
+force_path_style = true
+allow_insecure_http = true
+connect_timeout_seconds = 5
+operation_timeout_seconds = 30
+
+[metadata]
+backend = "postgres"
+path = "/var/lib/capture/data/metadata.db"
+prompt_preview_chars = 1000
+output_preview_chars = 1000
+full_text_search = true
+
+[metadata.postgres]
+ssl_mode = "disable"
+max_connections = 8
+connect_timeout_seconds = 5
+acquire_timeout_seconds = 5
+migration_lock_timeout_seconds = 30
+
+[notary]
+endpoint = "__NOTARY_ENDPOINT__"
+public_key = "__NOTARY_PUBLIC_KEY__"

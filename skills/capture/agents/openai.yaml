@@ -1,0 +1,4 @@
+interface:
+  display_name: "Notary"
+  short_description: "Inspect and verify local model Traces"
+  default_prompt: "Use $notary to list my notarized traces and verify the trace I select."

@@ -1,0 +1,73 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "autoupdate": false,
+  "snapshot": false,
+  "share": "disabled",
+  "subagent_depth": 0,
+  "enabled_providers": ["openrouter"],
+  "default_agent": "canary",
+  "instructions": ["AGENTS.md"],
+  "provider": {
+    "openrouter": {
+      "options": {
+        "apiKey": "{env:OPENROUTER_FREE_TIER_API_KEY}",
+        "baseURL": "{env:CAPTURED_E2E_OPENROUTER_BASE_URL}",
+        "timeout": 120000,
+        "chunkTimeout": 30000
+      },
+      "models": {
+        "cohere/north-mini-code:free": {
+          "name": "North Mini Code Free Canary",
+          "tool_call": true,
+          "cost": {
+            "input": 0,
+            "output": 0
+          },
+          "limit": {
+            "context": 131072,
+            "output": 8192
+          },
+          "options": {
+            "provider": {
+              "allow_fallbacks": false
+            }
+          }
+        }
+      }
+    }
+  },
+  "agent": {
+    "canary": {
+      "description": "Solve the bounded Retry-After fixture and nothing else.",
+      "mode": "primary",
+      "model": "openrouter/cohere/north-mini-code:free",
+      "temperature": 0,
+      "steps": 6,
+      "prompt": "You are a coding agent with filesystem tools. Your first response must call read for retry_after.py and test_retry_after.py. Then call edit for retry_after.py and bash for the exact test command. If tests fail, use the remaining steps to fix and rerun them before stopping. Do not emit a text-only response before using tools. Follow TASK.md and AGENTS.md exactly.",
+      "permission": {
+        "read": "allow",
+        "glob": "allow",
+        "grep": "allow",
+        "list": "allow",
+        "edit": {
+          "*": "deny",
+          "retry_after.py": "allow",
+          "**/retry_after.py": "allow"
+        },
+        "bash": {
+          "*": "deny",
+          "python3 -m unittest -v": "allow"
+        },
+        "external_directory": "deny",
+        "task": "deny",
+        "skill": "deny",
+        "webfetch": "deny",
+        "websearch": "deny",
+        "todowrite": "deny",
+        "question": "deny",
+        "lsp": "deny",
+        "doom_loop": "deny"
+      }
+    }
+  }
+}

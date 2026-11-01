@@ -1,0 +1,38 @@
+{
+	admin off
+	auto_https off
+}
+
+# Test-only load balancer: provider requests are never retried or replayed.
+:8787 {
+	reverse_proxy daemon-a:8787 daemon-b:8787 {
+		lb_policy round_robin
+		lb_try_duration 0s
+		health_uri /readyz
+		health_port 8788
+		health_interval 1s
+		health_timeout 2s
+		flush_interval -1
+		transport http {
+			versions 1.1
+			dial_timeout 3s
+			response_header_timeout 300s
+		}
+	}
+}
+
+:8788 {
+	reverse_proxy daemon-a:8788 daemon-b:8788 {
+		lb_policy round_robin
+		lb_try_duration 0s
+		health_uri /readyz
+		health_interval 1s
+		health_timeout 2s
+		flush_interval -1
+		transport http {
+			versions 1.1
+			dial_timeout 3s
+			response_header_timeout 300s
+		}
+	}
+}

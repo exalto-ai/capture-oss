@@ -1,0 +1,5 @@
+{
+  "request": {"model":"gpt-4.1-mini","messages":[{"role":"user","content":"Weather?"}]},
+  "response": {"model":"gpt-4.1-mini","choices":[{"message":{"role":"assistant","content":"Sunny"},"finish_reason":"stop"}],"usage":{"prompt_tokens":3,"completion_tokens":2}},
+  "sse": "data: {\"model\":\"gpt-4.1-mini\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"Sun\"}}]}\n\ndata: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"ny\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":2}}\n\ndata: [DONE]\n"
+}

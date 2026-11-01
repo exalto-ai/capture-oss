@@ -1,0 +1,539 @@
+services:
+  setup:
+    image: ${DAEMON_E2E_IMAGE:-captured-e2e:local}
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        umask 077
+        mkdir -p /state/secrets /state/capture-checkpoints /state/trace-packages
+        mkdir -p /fixtures
+        if ! test -f /state/secrets/vault-passphrase; then
+          printf '%s' 'deterministic-daemon-e2e-passphrase' > /state/secrets/vault-passphrase
+        fi
+        if ! test -f /state/secrets/cluster-vault.key; then
+          openssl rand 32 > /state/secrets/cluster-vault.key
+        fi
+        if ! test -f /fixtures/ca.der; then
+          openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out /fixtures/ca.key
+          openssl req -x509 -new -key /fixtures/ca.key -sha256 -days 2 \
+            -subj /CN=Notary-Daemon-E2E-Root \
+            -addext basicConstraints=critical,CA:TRUE \
+            -addext keyUsage=critical,keyCertSign,cRLSign \
+            -out /fixtures/ca.pem
+          openssl x509 -in /fixtures/ca.pem -outform DER -out /fixtures/ca.der
+          openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out /fixtures/server.key
+          openssl req -new -key /fixtures/server.key \
+            -subj /CN=api.openai.com -out /fixtures/server.csr
+          printf '%s\n' \
+            'basicConstraints=critical,CA:FALSE' \
+            'keyUsage=critical,digitalSignature,keyEncipherment' \
+            'extendedKeyUsage=serverAuth' \
+            'subjectAltName=DNS:api.openai.com' > /fixtures/server.ext
+          openssl x509 -req -in /fixtures/server.csr \
+            -CA /fixtures/ca.pem -CAkey /fixtures/ca.key -CAcreateserial \
+            -sha256 -days 2 -extfile /fixtures/server.ext -out /fixtures/server.pem
+        fi
+        printf '%064d' 1 > /fixtures/notary-signing-key
+        chmod 600 /state/secrets/vault-passphrase
+        chmod 600 /fixtures/ca.key /fixtures/server.key /fixtures/notary-signing-key
+        cp /etc/capture/config-cluster-template.toml /state/config-cluster-a.toml
+        cp /etc/capture/config-cluster-template.toml /state/config-cluster-b.toml
+        chmod 600 /state/secrets/cluster-vault.key
+        chmod 600 /state/config-cluster-a.toml /state/config-cluster-b.toml
+    volumes:
+      - daemon-state:/state
+      - fixture-state:/fixtures
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    restart: "no"
+
+  postgres:
+    image: postgres:17.7-alpine
+    environment:
+      POSTGRES_DB: daemon_e2e
+      POSTGRES_PASSWORD: synthetic-daemon-e2e-password
+      POSTGRES_USER: daemon_e2e
+    volumes:
+      - postgres-state:/var/lib/postgresql/data
+    tmpfs:
+      - /tmp
+      - /run/postgresql
+    security_opt:
+      - no-new-privileges:true
+    restart: "no"
+    healthcheck:
+      test: ["CMD", "pg_isready", "--username", "daemon_e2e", "--dbname", "daemon_e2e"]
+      interval: 1s
+      timeout: 2s
+      retries: 30
+      start_period: 2s
+
+  migrator:
+    image: ${DAEMON_E2E_IMAGE:-captured-e2e:local}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    entrypoint: ["captured"]
+    command: ["migrate", "--config", "/etc/capture/config-postgres.toml"]
+    environment:
+      CAPTURED_METADATA_MIGRATION_URL: postgresql://daemon_e2e:synthetic-daemon-e2e-password@postgres:5432/daemon_e2e
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    restart: "no"
+
+  object-store:
+    image: chrislusf/seaweedfs:4.47
+    # Run as the image's unprivileged seaweed account so the entrypoint does
+    # not need root to fix /data ownership.
+    user: "1000:1000"
+    # Only the authenticated S3 API listens on the network; SeaweedFS's master,
+    # volume, and filer APIs have no authentication, so they stay on loopback.
+    command: ["server", "-s3", "-ip=127.0.0.1", "-ip.bind=127.0.0.1", "-s3.ip.bind=0.0.0.0", "-master.telemetry=false"]
+    environment:
+      AWS_ACCESS_KEY_ID: daemon-e2e-access-key
+      AWS_SECRET_ACCESS_KEY: synthetic-daemon-e2e-secret-key
+    volumes:
+      - object-store-state:/data
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    restart: "no"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:8333/healthz"]
+      interval: 1s
+      timeout: 2s
+      retries: 60
+      start_period: 2s
+
+  object-store-init:
+    image: amazon/aws-cli:2.37.4
+    depends_on:
+      object-store:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        aws s3api head-bucket --bucket captured-e2e >/dev/null 2>&1 ||
+          aws s3api create-bucket --bucket captured-e2e >/dev/null
+    environment: &object-store-client-environment
+      AWS_ENDPOINT_URL: http://object-store:8333
+      AWS_ACCESS_KEY_ID: daemon-e2e-access-key
+      AWS_SECRET_ACCESS_KEY: synthetic-daemon-e2e-secret-key
+      AWS_DEFAULT_REGION: us-east-1
+      AWS_EC2_METADATA_DISABLED: "true"
+      HOME: /tmp
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    restart: "no"
+
+  object-store-client:
+    image: amazon/aws-cli:2.37.4
+    environment: *object-store-client-environment
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    restart: "no"
+
+  provider:
+    image: ${DAEMON_E2E_IMAGE:-captured-e2e:local}
+    depends_on:
+      setup:
+        condition: service_completed_successfully
+    entrypoint: ["python3", "/usr/local/libexec/notary-e2e-provider.py"]
+    volumes:
+      - fixture-state:/fixtures:ro
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+    restart: "no"
+    networks:
+      default:
+        aliases:
+          - api.openai.com
+    healthcheck:
+      test: ["CMD", "curl", "--noproxy", "*", "--fail", "--silent", "--show-error", "--resolve", "api.openai.com:443:127.0.0.1", "--cacert", "/fixtures/ca.pem", "https://api.openai.com/healthz"]
+      interval: 1s
+      timeout: 2s
+      retries: 30
+      start_period: 1s
+
+  notary:
+    image: ${DAEMON_E2E_IMAGE:-captured-e2e:local}
+    depends_on:
+      setup:
+        condition: service_completed_successfully
+      provider:
+        condition: service_healthy
+    entrypoint: ["notary-e2e-notary"]
+    environment:
+      CAPTURED_E2E_ROOT_CA_DER: /fixtures/ca.der
+      CAPTURED_E2E_SIGNING_KEY_FILE: /fixtures/notary-signing-key
+    volumes:
+      - fixture-state:/fixtures:ro
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    restart: "no"
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import socket; socket.create_connection(('127.0.0.1', 7047), 1).close()"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+      start_period: 1s
+
+  daemon:
+    image: ${DAEMON_E2E_IMAGE:-captured-e2e:local}
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: daemon-e2e
+    depends_on:
+      setup:
+        condition: service_completed_successfully
+      provider:
+        condition: service_healthy
+      notary:
+        condition: service_healthy
+    command: ["--config", "/etc/capture/config.toml"]
+    environment:
+      CAPTURED_VAULT_PASSPHRASE_FILE: /state/secrets/vault-passphrase
+      CAPTURED_PLATFORM_API_ORIGIN: http://127.0.0.1:9797
+      CAPTURED_PLATFORM_API_KEY: notary_key_11111111111111111111111111111111_2222222222222222222222222222222222222222222222222222222222222222
+      CAPTURED_E2E_ROOT_CA_DER: /fixtures/ca.der
+      CAPTURED_E2E_PAUSE_AFTER_NOTARIZED_ARTIFACT_MS: ${DAEMON_E2E_NOTARIZATION_PAUSE_MS:-0}
+      XDG_CONFIG_HOME: /state/xdg-config
+      XDG_DATA_HOME: /state/xdg-data
+    volumes:
+      - daemon-state:/state
+      - fixture-state:/fixtures:ro
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    restart: "no"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "--show-error", "http://127.0.0.1:8788/healthz"]
+      interval: 1s
+      timeout: 2s
+      retries: 30
+      start_period: 2s
+
+  daemon-postgres:
+    image: ${DAEMON_E2E_IMAGE:-captured-e2e:local}
+    depends_on:
+      setup:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      migrator:
+        condition: service_completed_successfully
+      provider:
+        condition: service_healthy
+      notary:
+        condition: service_healthy
+    command: ["--config", "/etc/capture/config-postgres.toml"]
+    environment:
+      CAPTURED_VAULT_PASSPHRASE_FILE: /state/secrets/vault-passphrase
+      CAPTURED_PLATFORM_API_ORIGIN: http://127.0.0.1:9797
+      CAPTURED_PLATFORM_API_KEY: notary_key_11111111111111111111111111111111_2222222222222222222222222222222222222222222222222222222222222222
+      CAPTURED_E2E_ROOT_CA_DER: /fixtures/ca.der
+      CAPTURED_E2E_PAUSE_AFTER_NOTARIZED_ARTIFACT_MS: ${DAEMON_E2E_NOTARIZATION_PAUSE_MS:-0}
+      CAPTURED_METADATA_DATABASE_URL: postgresql://daemon_e2e:synthetic-daemon-e2e-password@postgres:5432/daemon_e2e
+      XDG_CONFIG_HOME: /state/xdg-config
+      XDG_DATA_HOME: /state/xdg-data
+    volumes:
+      - daemon-state:/state
+      - fixture-state:/fixtures:ro
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    restart: "no"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "--show-error", "http://127.0.0.1:8788/readyz"]
+      interval: 1s
+      timeout: 2s
+      retries: 30
+      start_period: 2s
+
+  daemon-s3:
+    image: ${DAEMON_E2E_IMAGE:-captured-e2e:local}
+    depends_on:
+      setup:
+        condition: service_completed_successfully
+      object-store-init:
+        condition: service_completed_successfully
+      provider:
+        condition: service_healthy
+      notary:
+        condition: service_healthy
+    command: ["--config", "/etc/capture/config-s3.toml"]
+    environment:
+      CAPTURED_VAULT_PASSPHRASE_FILE: /state/secrets/vault-passphrase
+      CAPTURED_PLATFORM_API_ORIGIN: http://127.0.0.1:9797
+      CAPTURED_PLATFORM_API_KEY: notary_key_11111111111111111111111111111111_2222222222222222222222222222222222222222222222222222222222222222
+      CAPTURED_E2E_ROOT_CA_DER: /fixtures/ca.der
+      CAPTURED_E2E_PAUSE_AFTER_NOTARIZED_ARTIFACT_MS: ${DAEMON_E2E_NOTARIZATION_PAUSE_MS:-0}
+      CAPTURED_ARTIFACT_S3_ACCESS_KEY_ID: daemon-e2e-access-key
+      CAPTURED_ARTIFACT_S3_SECRET_ACCESS_KEY: synthetic-daemon-e2e-secret-key
+      XDG_CONFIG_HOME: /state/xdg-config
+      XDG_DATA_HOME: /state/xdg-data
+    volumes:
+      - daemon-state:/state
+      - fixture-state:/fixtures:ro
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    restart: "no"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "--show-error", "http://127.0.0.1:8788/readyz"]
+      interval: 1s
+      timeout: 2s
+      retries: 30
+      start_period: 2s
+
+  daemon-postgres-s3:
+    image: ${DAEMON_E2E_IMAGE:-captured-e2e:local}
+    depends_on:
+      setup:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      migrator:
+        condition: service_completed_successfully
+      object-store-init:
+        condition: service_completed_successfully
+      provider:
+        condition: service_healthy
+      notary:
+        condition: service_healthy
+    command: ["--config", "/etc/capture/config-postgres-s3.toml"]
+    environment:
+      CAPTURED_VAULT_PASSPHRASE_FILE: /state/secrets/vault-passphrase
+      CAPTURED_PLATFORM_API_ORIGIN: http://127.0.0.1:9797
+      CAPTURED_PLATFORM_API_KEY: notary_key_11111111111111111111111111111111_2222222222222222222222222222222222222222222222222222222222222222
+      CAPTURED_E2E_ROOT_CA_DER: /fixtures/ca.der
+      CAPTURED_E2E_PAUSE_AFTER_NOTARIZED_ARTIFACT_MS: ${DAEMON_E2E_NOTARIZATION_PAUSE_MS:-0}
+      CAPTURED_METADATA_DATABASE_URL: postgresql://daemon_e2e:synthetic-daemon-e2e-password@postgres:5432/daemon_e2e
+      CAPTURED_ARTIFACT_S3_ACCESS_KEY_ID: daemon-e2e-access-key
+      CAPTURED_ARTIFACT_S3_SECRET_ACCESS_KEY: synthetic-daemon-e2e-secret-key
+      XDG_CONFIG_HOME: /state/xdg-config
+      XDG_DATA_HOME: /state/xdg-data
+    volumes:
+      - daemon-state:/state
+      - fixture-state:/fixtures:ro
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    restart: "no"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "--show-error", "http://127.0.0.1:8788/readyz"]
+      interval: 1s
+      timeout: 2s
+      retries: 30
+      start_period: 2s
+
+  daemon-a:
+    image: ${DAEMON_E2E_IMAGE:-captured-e2e:local}
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: daemon-e2e
+    depends_on:
+      setup:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      server-migrator:
+        condition: service_completed_successfully
+      object-store-init:
+        condition: service_completed_successfully
+      provider:
+        condition: service_healthy
+      notary:
+        condition: service_healthy
+    command: ["--config", "/state/config-cluster-a.toml"]
+    environment:
+      CAPTURED_CLUSTER_INSTANCE_ID: daemon-a
+      CAPTURED_CLUSTER_VAULT_KEY_FILE: /state/secrets/cluster-vault.key
+      CAPTURED_PLATFORM_API_ORIGIN: http://127.0.0.1:9797
+      CAPTURED_PLATFORM_API_KEY: notary_key_11111111111111111111111111111111_2222222222222222222222222222222222222222222222222222222222222222
+      CAPTURED_E2E_ROOT_CA_DER: /fixtures/ca.der
+      CAPTURED_E2E_PAUSE_AFTER_NOTARIZED_ARTIFACT_MS: ${DAEMON_E2E_SERVER_NOTARIZATION_PAUSE_MS:-0}
+      CAPTURED_METADATA_DATABASE_URL: postgresql://daemon_e2e:synthetic-daemon-e2e-password@postgres:5432/daemon_e2e
+      CAPTURED_ARTIFACT_S3_ACCESS_KEY_ID: daemon-e2e-access-key
+      CAPTURED_ARTIFACT_S3_SECRET_ACCESS_KEY: synthetic-daemon-e2e-secret-key
+      XDG_CONFIG_HOME: /state/xdg-config
+      XDG_DATA_HOME: /state/xdg-data
+    volumes:
+      - daemon-state:/state:ro
+      - fixture-state:/fixtures:ro
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    restart: "no"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "--show-error", "http://127.0.0.1:8788/readyz"]
+      interval: 1s
+      timeout: 2s
+      retries: 30
+      start_period: 2s
+
+  daemon-b:
+    image: ${DAEMON_E2E_IMAGE:-captured-e2e:local}
+    depends_on:
+      setup:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      server-migrator:
+        condition: service_completed_successfully
+      object-store-init:
+        condition: service_completed_successfully
+      provider:
+        condition: service_healthy
+      notary:
+        condition: service_healthy
+    command: ["--config", "/state/config-cluster-b.toml"]
+    environment:
+      CAPTURED_CLUSTER_INSTANCE_ID: daemon-b
+      CAPTURED_CLUSTER_VAULT_KEY_FILE: /state/secrets/cluster-vault.key
+      CAPTURED_PLATFORM_API_ORIGIN: http://127.0.0.1:9797
+      CAPTURED_PLATFORM_API_KEY: notary_key_11111111111111111111111111111111_2222222222222222222222222222222222222222222222222222222222222222
+      CAPTURED_E2E_ROOT_CA_DER: /fixtures/ca.der
+      CAPTURED_E2E_PAUSE_AFTER_NOTARIZED_ARTIFACT_MS: ${DAEMON_E2E_SERVER_NOTARIZATION_PAUSE_MS:-0}
+      CAPTURED_METADATA_DATABASE_URL: postgresql://daemon_e2e:synthetic-daemon-e2e-password@postgres:5432/daemon_e2e
+      CAPTURED_ARTIFACT_S3_ACCESS_KEY_ID: daemon-e2e-access-key
+      CAPTURED_ARTIFACT_S3_SECRET_ACCESS_KEY: synthetic-daemon-e2e-secret-key
+      XDG_CONFIG_HOME: /state/xdg-config
+      XDG_DATA_HOME: /state/xdg-data
+    volumes:
+      - daemon-state:/state:ro
+      - fixture-state:/fixtures:ro
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    restart: "no"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "--show-error", "http://127.0.0.1:8788/readyz"]
+      interval: 1s
+      timeout: 2s
+      retries: 30
+      start_period: 2s
+
+  server-migrator:
+    image: ${DAEMON_E2E_IMAGE:-captured-e2e:local}
+    depends_on:
+      setup:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+    entrypoint: ["captured"]
+    command: ["migrate", "--config", "/state/config-cluster-a.toml"]
+    environment:
+      CAPTURED_PLATFORM_API_ORIGIN: http://127.0.0.1:9797
+      CAPTURED_METADATA_MIGRATION_URL: postgresql://daemon_e2e:synthetic-daemon-e2e-password@postgres:5432/daemon_e2e
+      CAPTURED_CLUSTER_VAULT_KEY_FILE: /state/secrets/cluster-vault.key
+    volumes:
+      - daemon-state:/state:ro
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    restart: "no"
+
+  test-load-balancer:
+    image: caddy:2.10-alpine
+    depends_on:
+      daemon-a:
+        condition: service_healthy
+      daemon-b:
+        condition: service_healthy
+    volumes:
+      - ./deploy-daemon-e2e/load-balancer.Caddyfile:/etc/caddy/Caddyfile:ro
+    read_only: true
+    tmpfs:
+      - /config
+      - /data
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+    restart: "no"
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--spider", "http://127.0.0.1:8788/readyz"]
+      interval: 1s
+      timeout: 2s
+      retries: 30
+      start_period: 2s
+
+volumes:
+  daemon-state:
+  fixture-state:
+  object-store-state:
+  postgres-state:
+
+networks:
+  default:
+    internal: true

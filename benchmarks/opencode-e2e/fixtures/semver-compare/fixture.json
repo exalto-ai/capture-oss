@@ -1,0 +1,13 @@
+{
+  "version": "semver-compare/v1",
+  "summary": "Sort a prerelease before its own release.",
+  "allowed_files": [
+    "semver.py"
+  ],
+  "test_command": [
+    "python3",
+    "-m",
+    "unittest",
+    "-v"
+  ]
+}

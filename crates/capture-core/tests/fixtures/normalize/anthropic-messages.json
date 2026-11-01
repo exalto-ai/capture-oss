@@ -1,0 +1,5 @@
+{
+  "request": {"model":"claude-sonnet","messages":[{"role":"user","content":"weather"}]},
+  "response": {"model":"claude-sonnet","content":[{"type":"tool_use","id":"tool_1","name":"weather","input":{"city":"SF"}}],"stop_reason":"tool_use","usage":{"input_tokens":2,"output_tokens":1}},
+  "sse": "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"model\":\"claude-sonnet\",\"usage\":{\"input_tokens\":2}}}\n\nevent: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"tool_1\",\"name\":\"weather\",\"input\":{\"city\":\"SF\"}}}\n\nevent: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"},\"usage\":{\"output_tokens\":1}}\n"
+}

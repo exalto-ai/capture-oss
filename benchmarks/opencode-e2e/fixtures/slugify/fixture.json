@@ -1,0 +1,13 @@
+{
+  "version": "slugify/v1",
+  "summary": "Collapse each run of disallowed characters into one separator.",
+  "allowed_files": [
+    "slugify.py"
+  ],
+  "test_command": [
+    "python3",
+    "-m",
+    "unittest",
+    "-v"
+  ]
+}

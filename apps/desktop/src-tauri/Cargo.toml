@@ -1,0 +1,58 @@
+[package]
+name = "capture-app"
+version = "0.0.1"
+description = "Guided desktop shell for Exalto Capture"
+edition = "2024"
+license = "MIT"
+
+[lib]
+name = "capture_app"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+capture-core = { path = "../../../crates/capture-core", features = ["cli"] }
+capture-updater = { path = "../../../crates/capture-updater" }
+capture = { path = "../../../crates/capture" }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }
+axum = "0.8"
+uuid = { version = "1", features = ["v4"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tauri = { version = "2", features = ["macos-private-api", "image-png", "tray-icon"] }
+tauri-plugin-autostart = "2"
+tauri-plugin-single-instance = "2.4"
+tauri-plugin-shell = "2"
+tauri-plugin-updater = "2.9"
+tokio = { version = "1", features = ["sync", "time", "process", "io-util", "net"] }
+url = "2.5"
+zeroize = "1.8"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+window-vibrancy = "0.6"
+objc2-app-kit = { version = "0.3", features = ["NSImage", "NSBitmapImageRep", "NSImageRep", "NSFontDescriptor", "objc2-core-foundation"] }
+objc2-foundation = { version = "0.3", features = ["NSString", "NSData", "NSDictionary", "NSGeometry"] }
+base64 = "0.22"
+
+[dev-dependencies]
+capture-core = { path = "../../../crates/capture-core", features = ["test-utils"] }
+tempfile = "3"
+
+# The desktop app is its own workspace: Tauri needs macOS (or WebKitGTK) to
+# build, so it stays out of the runtime workspace that CI builds on Linux.
+# Patches and profiles apply only at a workspace root, so these mirror
+# the runtime workspace's Cargo.toml.
+[workspace]
+
+# The vendored spansy carries a local patch for input-proportional parser
+# stack usage; see vendor/tlsn-utils/README.md.
+[patch."https://github.com/tlsnotary/tlsn-utils"]
+spansy = { path = "../../../vendor/tlsn-utils/spansy" }
+
+# Dependencies build with optimizations in debug and test builds: the vendored
+# TLSNotary proof code is too slow unoptimized. Workspace crates stay
+# unoptimized for fast rebuilds.
+[profile.dev.package."*"]
+opt-level = 1

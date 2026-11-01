@@ -1,0 +1,31 @@
+[package]
+name = "capture"
+version.workspace = true
+edition = "2024"
+license = "MIT"
+description = "Thin REST client for the Notary daemon"
+
+[[bin]]
+name = "capture"
+path = "src/bin/capture.rs"
+
+[dependencies]
+anyhow = { workspace = true }
+clap = { workspace = true, features = ["derive", "string"] }
+capture-updater = { workspace = true }
+reqwest = { workspace = true, features = ["json", "rustls-tls"] }
+rpassword = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = ["macros", "net", "rt-multi-thread", "time"] }
+toml = { workspace = true }
+url = { workspace = true }
+uuid = { workspace = true, features = ["v4"] }
+
+[dev-dependencies]
+axum = { workspace = true }
+base64 = { workspace = true }
+tempfile = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true, features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_Threading"] }

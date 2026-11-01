@@ -1,0 +1,29 @@
+[package]
+name = "capture-notary"
+version.workspace = true
+edition = "2024"
+license = "MIT"
+description = "Remote Proxy-TLS Notary server"
+
+[features]
+test-support = []
+
+[[bin]]
+name = "capture-notary"
+path = "src/bin/capture-notary.rs"
+
+[dependencies]
+anyhow = { workspace = true }
+async-trait = { workspace = true }
+axum = { workspace = true }
+clap = { workspace = true, features = ["derive", "env"] }
+hex = { workspace = true }
+k256 = { workspace = true, features = ["ecdsa"] }
+libc = { workspace = true }
+capture-core = { workspace = true }
+metrics = { workspace = true }
+tokio = { workspace = true, features = ["full"] }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

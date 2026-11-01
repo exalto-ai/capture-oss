@@ -1,0 +1,19 @@
+{
+  "request": {
+    "model": "anthropic/claude-sonnet-4.5",
+    "messages": [
+      {"role": "user", "content": "What is the weather in San Francisco?"},
+      {"role": "assistant", "content": "", "tool_calls": [{"id": "call_weather", "type": "function", "function": {"name": "weather", "arguments": "{\"city\":\"San Francisco\"}"}}]},
+      {"role": "tool", "tool_call_id": "call_weather", "content": "Sunny, 68F"}
+    ]
+  },
+  "response": {
+    "model": "anthropic/claude-sonnet-4.5",
+    "choices": [{
+      "message": {"role": "assistant", "content": "Checking weather.", "tool_calls": [{"id": "call_followup", "type": "function", "function": {"name": "weather", "arguments": "{\"city\":\"San Francisco\"}"}}]},
+      "finish_reason": "tool_calls"
+    }],
+    "usage": {"prompt_tokens": 11, "completion_tokens": 7}
+  },
+  "sse": "data: {\"model\":\"anthropic/claude-sonnet-4.5\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"Checking \"}}]}\n\ndata: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"weather.\",\"tool_calls\":[{\"index\":0,\"id\":\"call_followup\",\"type\":\"function\",\"function\":{\"name\":\"weather\",\"arguments\":\"{\\\"city\\\":\\\"San Francisco\\\"}\"}}]}}]}\n\ndata: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"tool_calls\"}],\"usage\":{\"prompt_tokens\":11,\"completion_tokens\":7}}\n\ndata: [DONE]\n"
+}
