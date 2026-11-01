@@ -41,7 +41,7 @@ use crate::{
     CaptureCheckpoint,
     cluster_runtime::{ClusterCaptureLedger, ClusterNotarizationQueue, ClusterRuntime, Lifecycle},
     config::CapturedConfig,
-    metadata::CaptureMode,
+    metadata::{CaptureMode, RegistrySnapshot},
     metadata_store::MetadataStoreError,
     persistence::Persistence,
     registry::{NotaryEndpoint, Registry, RegistryRecord},
@@ -210,6 +210,10 @@ impl CaptureModeSource for CaptureSetting {
     async fn notary(&self) -> Result<NotaryEndpoint> {
         self.current_notary().await
     }
+
+    async fn set_mode(&self, mode: CaptureMode) -> Result<CaptureMode> {
+        CaptureSetting::set_mode(self, mode).await
+    }
 }
 
 /// Admission through the connected Exalto account, which the hosted notary
@@ -242,9 +246,21 @@ impl Admission for HostedAdmission {
 }
 
 /// The configured notary key, or else the Registry keys this daemon trusts.
-struct DaemonNotaryTrust {
+pub(crate) struct DaemonNotaryTrust {
     config: Arc<CapturedConfig>,
     cluster_runtime: Option<Arc<ClusterRuntime>>,
+}
+
+impl DaemonNotaryTrust {
+    pub(crate) fn new(
+        config: Arc<CapturedConfig>,
+        cluster_runtime: Option<Arc<ClusterRuntime>>,
+    ) -> Self {
+        Self {
+            config,
+            cluster_runtime,
+        }
+    }
 }
 
 #[async_trait::async_trait]
@@ -310,6 +326,38 @@ impl NotaryTrust for DaemonNotaryTrust {
                 Ok((key, endpoint))
             }
             _ => anyhow::bail!("notary endpoint and public key configuration are inconsistent"),
+        }
+    }
+
+    fn configured_key(&self) -> Result<Option<Vec<u8>>> {
+        self.config.notary_public_key()
+    }
+
+    /// Cluster replicas verify against the Registry pinned in shared
+    /// metadata; a single daemon uses its own Registry cache.
+    async fn shared_registry(&self) -> Result<Option<RegistrySnapshot>> {
+        let Some(cluster_runtime) = &self.cluster_runtime else {
+            return Ok(None);
+        };
+        cluster_runtime
+            .metadata()
+            .registry_snapshot()
+            .await?
+            .context("shared Registry is not pinned")
+            .map(Some)
+    }
+
+    fn registry_key_at(
+        &self,
+        shared: Option<&RegistrySnapshot>,
+        embedded_key: &[u8],
+        created_at_unix_ms: u64,
+    ) -> Result<(String, String)> {
+        match shared {
+            Some(shared) => {
+                super::registry::registry_key_at(shared, embedded_key, created_at_unix_ms)
+            }
+            None => super::registry::cached_registry_key_at(embedded_key, created_at_unix_ms),
         }
     }
 }
@@ -418,10 +466,10 @@ pub async fn run(args: ProxyArgs) -> Result<()> {
     } else {
         Arc::new(NoAdmission)
     };
-    let trust: Arc<dyn NotaryTrust> = Arc::new(DaemonNotaryTrust {
-        config: config.clone(),
-        cluster_runtime: cluster_runtime.clone(),
-    });
+    let trust: Arc<dyn NotaryTrust> = Arc::new(DaemonNotaryTrust::new(
+        config.clone(),
+        cluster_runtime.clone(),
+    ));
     let capture = CaptureContext::new(
         CaptureSettings {
             providers: config.providers.clone(),

@@ -34,7 +34,7 @@ use crate::{
     admission::{Admission, AdmissionTicket, hosted_admission_failure},
     artifact_store::{ArtifactKey, ArtifactKind, ArtifactStoreError},
     capture_ledger::{CaptureEntry, CaptureLedger},
-    metadata::{CaptureCompletion, CaptureMode, EvidenceKind, NewTrace},
+    metadata::{CaptureCompletion, CaptureMode, EvidenceKind, NewTrace, RegistrySnapshot},
     metadata_store::MetadataStoreError,
     providers::{Provider, ProvidersConfig, provider_route},
 };
@@ -58,6 +58,10 @@ pub trait CaptureModeSource: Send + Sync {
     async fn snapshot(&self) -> Result<CaptureMode>;
     /// The trusted notary for either capture mode.
     async fn notary(&self) -> Result<NotaryEndpoint>;
+    /// Durably changes the capture mode for later requests. Turning capture
+    /// on first prepares trusted notary state, so a failure leaves the
+    /// previous mode in place.
+    async fn set_mode(&self, mode: CaptureMode) -> Result<CaptureMode>;
 }
 
 /// Which notary keys the host trusts, and which notary seals its captures.
@@ -75,6 +79,24 @@ pub trait NotaryTrust: Send + Sync {
         &self,
         checkpoint: &CaptureCheckpoint,
     ) -> Result<(Vec<u8>, NotaryEndpoint)>;
+
+    /// The notary key the host configures explicitly, if any.
+    fn configured_key(&self) -> Result<Option<Vec<u8>>>;
+
+    /// Registry trust shared across a host's replicas, or `None` when the
+    /// host uses its own Registry cache. An error means shared trust is
+    /// required but not available.
+    async fn shared_registry(&self) -> Result<Option<RegistrySnapshot>>;
+
+    /// The key ID and trust source of a Registry key trusted when a package
+    /// was created: from `shared` trust if given, else the host's Registry
+    /// cache. Runs on a blocking thread.
+    fn registry_key_at(
+        &self,
+        shared: Option<&RegistrySnapshot>,
+        embedded_key: &[u8],
+        created_at_unix_ms: u64,
+    ) -> Result<(String, String)>;
 }
 
 /// Everything provider request handling needs from its host.
@@ -1604,6 +1626,11 @@ mod tests {
         async fn notary(&self) -> Result<NotaryEndpoint> {
             Ok("tcp://127.0.0.1:7047".parse().unwrap())
         }
+
+        async fn set_mode(&self, mode: CaptureMode) -> Result<CaptureMode> {
+            *self.0.lock().unwrap() = mode;
+            Ok(mode)
+        }
     }
 
     struct UntrustedNotary;
@@ -1627,6 +1654,23 @@ mod tests {
             _checkpoint: &CaptureCheckpoint,
         ) -> Result<(Vec<u8>, NotaryEndpoint)> {
             bail!("no notary is trusted in this test")
+        }
+
+        fn configured_key(&self) -> Result<Option<Vec<u8>>> {
+            Ok(None)
+        }
+
+        async fn shared_registry(&self) -> Result<Option<RegistrySnapshot>> {
+            Ok(None)
+        }
+
+        fn registry_key_at(
+            &self,
+            _shared: Option<&RegistrySnapshot>,
+            _embedded_key: &[u8],
+            _created_at_unix_ms: u64,
+        ) -> Result<(String, String)> {
+            bail!("no notary key is trusted in this test")
         }
     }
 

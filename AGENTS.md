@@ -1,7 +1,7 @@
 # Capture runtime agent guide
 
 - `crates/capture-core` owns protocol and evidence contracts.
-- `crates/capture-engine` owns what Capture hosts share: trace metadata, the metadata and artifact store contracts with their conformance suites, the local SQLite and filesystem stores, the capture ledger that records each capture directly or, in `captured`'s cluster mode, under a work claim, the fixed provider adapters, provider request handling in each capture mode, and the notarization worker. A host supplies its capture mode, admission, and notary trust through `proxy::CaptureContext` and `notarization::NotarizationContext`.
+- `crates/capture-engine` owns what Capture hosts share: trace metadata, the metadata and artifact store contracts with their conformance suites, the local SQLite and filesystem stores, the capture ledger that records each capture directly or, in `captured`'s cluster mode, under a work claim, the fixed provider adapters, provider request handling in each capture mode, the notarization worker, and the customer-facing administration routes. A host supplies its capture mode, admission, and notary trust through `proxy::CaptureContext`, `notarization::NotarizationContext`, and `api::ApiContext`, and mounts `api::routes` behind its own authentication.
 - `crates/captured` is the local proxy/API daemon and supports optional PostgreSQL/S3 clustering.
 - `crates/capture` is a thin REST client for the daemon.
 - `crates/capture-notary` is the generic remote notary.

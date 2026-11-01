@@ -3,6 +3,7 @@
 //! durable record of each capture.
 
 pub mod admission;
+pub mod api;
 pub mod artifact_store;
 pub mod capture_ledger;
 pub mod metadata;
