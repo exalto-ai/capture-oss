@@ -83,58 +83,13 @@ RUN find vendor -exec touch -h -d @0 {} + \
 FROM debian:bookworm-slim AS daemon-e2e
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates curl jq openssl python3 sqlite3 \
+    && apt-get install -y --no-install-recommends ca-certificates curl jq openssl python3 \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=daemon-e2e-builder /out/captured /out/capture /out/notary-e2e-notary /usr/local/bin/
 RUN captured --help >/dev/null && capture --help >/dev/null
 ENTRYPOINT ["captured"]
-COPY deploy-daemon-e2e/config.toml /etc/capture/config.toml
-RUN cp /etc/capture/config.toml /etc/capture/config-s3.toml \
-    && sed -i 's/backend = "filesystem"/backend = "s3"/' /etc/capture/config-s3.toml \
-    && printf '%s\n' \
-        '' \
-        '[storage.s3]' \
-        'bucket = "captured-e2e"' \
-        'region = "us-east-1"' \
-        'endpoint = "http://object-store:8333"' \
-        'prefix = "captured"' \
-        'force_path_style = true' \
-        'allow_insecure_http = true' \
-        'connect_timeout_seconds = 3' \
-        'operation_timeout_seconds = 10' \
-        >> /etc/capture/config-s3.toml \
-    && cp /etc/capture/config.toml /etc/capture/config-postgres.toml \
-    && sed -i 's/backend = "sqlite"/backend = "postgres"/' /etc/capture/config-postgres.toml \
-    && printf '%s\n' \
-        '' \
-        '[metadata.postgres]' \
-        'ssl_mode = "disable"' \
-        'max_connections = 8' \
-        'connect_timeout_seconds = 3' \
-        'acquire_timeout_seconds = 3' \
-        'migration_lock_timeout_seconds = 5' \
-        >> /etc/capture/config-postgres.toml \
-    && cp /etc/capture/config-postgres.toml /etc/capture/config-postgres-lock-timeout.toml \
-    && sed -i 's/migration_lock_timeout_seconds = 5/migration_lock_timeout_seconds = 1/' /etc/capture/config-postgres-lock-timeout.toml \
-    && cp /etc/capture/config-postgres.toml /etc/capture/config-postgres-s3.toml \
-    && sed -i 's/backend = "filesystem"/backend = "s3"/' /etc/capture/config-postgres-s3.toml \
-    && sed -n '/^\[storage.s3\]/,$p' /etc/capture/config-s3.toml \
-        >> /etc/capture/config-postgres-s3.toml \
-    && cp /etc/capture/config-postgres-s3.toml /etc/capture/config-cluster-template.toml \
-    && sed -i 's/127.0.0.1:8787/0.0.0.0:8787/' /etc/capture/config-cluster-template.toml \
-    && sed -i 's/127.0.0.1:8788/0.0.0.0:8788/' /etc/capture/config-cluster-template.toml \
-    && printf '%s\n' \
-        '' \
-        '[cluster]' \
-        'proxy_origin = "https://proxy.e2e.invalid"' \
-        'admin_origin = "https://admin.e2e.invalid"' \
-        '' \
-        '[admin.auth]' \
-        'username = "cluster-admin"' \
-        'password_hash = "$argon2id$v=19$m=19456,t=2,p=1$Y2x1c3Rlci1lMmUtc2FsdA$e5miUzfGBUsUELcxECEyngoD2trkyo28hZ794hQ9bO8"' \
-        >> /etc/capture/config-cluster-template.toml
+COPY deploy-daemon-e2e/config-cluster-template.toml /etc/capture/config-cluster-template.toml
 COPY deploy-daemon-e2e/provider.py /usr/local/libexec/notary-e2e-provider.py
-COPY deploy-daemon-e2e/share.py /usr/local/libexec/notary-e2e-share.py
 
 # Keep a plain `docker build .` on the production daemon, not the test image.
 FROM daemon AS runtime

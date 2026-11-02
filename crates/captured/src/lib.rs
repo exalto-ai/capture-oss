@@ -1,4 +1,6 @@
-//! Local Notary proxy and administration daemon.
+//! The capture server: the provider proxy and administration API for a
+//! replicated deployment on shared PostgreSQL metadata and S3 artifacts.
+//! Local capture is the desktop app's.
 //!
 //! The hosted public origin remains a distribution default in this package.
 //! Evidence formats and Proxy-TLS protocol behavior are provided by
@@ -17,9 +19,8 @@ pub use capture_engine::{
 
 pub mod admin;
 mod artifact_reconciliation;
-pub mod artifact_router;
 mod cluster_runtime;
-pub mod persistence;
+mod persistence;
 mod postgres_metadata_store;
 mod s3_artifact_store;
 mod service;
@@ -28,7 +29,7 @@ pub use capture_updater as update;
 #[derive(Parser, Debug)]
 #[command(
     name = "captured",
-    about = "Run the Exalto Capture local proxy and administration service",
+    about = "Run an Exalto Capture server replica",
     version,
     long_version = format!(
         "{} ({})",
@@ -37,8 +38,8 @@ pub use capture_updater as update;
     )
 )]
 struct DaemonCli {
-    /// Versioned local service configuration file. Defaults to the standard
-    /// user configuration path and is created on first start.
+    /// Versioned server configuration file. It must configure [cluster],
+    /// PostgreSQL metadata and S3 storage.
     #[arg(long, global = true)]
     config: Option<PathBuf>,
     #[command(subcommand)]
@@ -90,28 +91,7 @@ pub async fn run_daemon() -> Result<()> {
         None => {}
     }
     let _telemetry = telemetry::init("captured")?;
-    service::proxy::run(service::proxy::ProxyArgs {
-        config: cli.config,
-        embedded: None,
-    })
-    .await
-}
-
-pub use service::proxy::EmbeddedHost;
-
-/// Runs the local proxy and administration service inside an application's
-/// process until `host.shutdown` resolves, reading the same configuration
-/// file as the standalone service.
-///
-/// The caller owns process telemetry and the runtime. The service's tasks run
-/// on the caller's Tokio runtime, so give it worker stacks as large as the
-/// standalone binary's.
-pub async fn run_embedded(config: Option<PathBuf>, host: EmbeddedHost) -> Result<()> {
-    service::proxy::run(service::proxy::ProxyArgs {
-        config,
-        embedded: Some(host),
-    })
-    .await
+    service::proxy::run(service::proxy::ProxyArgs { config: cli.config }).await
 }
 
 /// Runs a bounded, report-only artifact reconciliation without initializing

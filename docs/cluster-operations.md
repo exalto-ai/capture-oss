@@ -1,6 +1,6 @@
-# Run a clustered daemon
+# Run a capture server
 
-Cluster mode runs interchangeable `captured` replicas with PostgreSQL metadata, S3-compatible private artifacts, one shared vault key, and an explicit remote notary endpoint/key. It does not require a hosted account or API credential.
+A capture server is interchangeable `captured` replicas with PostgreSQL metadata, S3-compatible private artifacts, one shared vault key, and an explicit remote notary endpoint/key. It does not require a hosted account or API credential.
 
 The reference Compose deployment runs two daemon replicas plus PostgreSQL and a single-node SeaweedFS S3 object store. Your ingress owns TLS and exposes separate provider and administration origins.
 

@@ -56,7 +56,10 @@ pub(crate) struct PostgresMetadataStore {
 }
 
 impl PostgresMetadataStore {
-    /// Opens a runtime pool and verifies, without mutating, the exact daemon schema version.
+    /// Opens a runtime pool and verifies, without mutating, the exact daemon
+    /// schema version. Replicas use `connect_server`; the metadata contract
+    /// suite uses this to exercise the store without replica state.
+    #[cfg(test)]
     pub(crate) async fn connect(
         database_url: &str,
         max_connections: u32,
@@ -3629,53 +3632,28 @@ fn completion_from_row(row: &PgRow) -> anyhow::Result<Option<CaptureCompletion>>
     }))
 }
 
+/// Disposable PostgreSQL for tests that need a server-mode store.
 #[cfg(test)]
-mod tests {
-    const TEST_SERVER_COMPATIBILITY: &str =
-        "0000000000000000000000000000000000000000000000000000000000000000";
+pub(crate) mod test_postgres {
+    use std::{sync::Arc, time::Duration};
 
-    use std::{
-        sync::{
-            Arc,
-            atomic::{AtomicUsize, Ordering},
-        },
-        time::Duration,
-    };
-
-    use sqlx::{Connection as _, PgConnection, PgPool, postgres::PgPoolOptions};
+    use sqlx::{PgPool, postgres::PgPoolOptions};
     use testcontainers_modules::{
         postgres::Postgres,
         testcontainers::{ContainerAsync, ImageExt, runners::AsyncRunner},
     };
-    use tokio::sync::Barrier;
 
-    use crate::{
-        NotarizationPhase,
-        artifact_store::{ArtifactKind, ArtifactLocator},
-        config::PostgresSslMode,
-        metadata::{NewTrace, TerminalOperationResult, TraceFilters},
-        metadata_store::{
-            CaptureClaim, MetadataStore, MetadataStoreError, ReplicaIdentity, ServerMetadataStore,
-            conformance,
-        },
-        registry::{
-            NotaryKeyStatus, NotaryTransport, REGISTRY_FORMAT, Registry, RegistryRecord, key_id,
-        },
-    };
+    use super::{PostgresMetadataStore, configure_cluster_compatibility, migrate_database};
+    use crate::config::PostgresSslMode;
 
-    use super::{
-        MIGRATION_LOCK_NAMESPACE, PostgresMetadataStore, configure_cluster_compatibility,
-        migrate_database,
-    };
-
-    struct TestPostgres {
-        admin: PgPool,
-        base_url: String,
+    pub(crate) struct TestPostgres {
+        pub(crate) admin: PgPool,
+        pub(crate) base_url: String,
         _server: Arc<ContainerAsync<Postgres>>,
     }
 
     impl TestPostgres {
-        async fn start() -> Self {
+        pub(crate) async fn start() -> Self {
             let server = Arc::new(
                 Postgres::default()
                     .with_tag("17.7-alpine")
@@ -3701,7 +3679,7 @@ mod tests {
             }
         }
 
-        async fn create_database(&self, name: &str) -> String {
+        pub(crate) async fn create_database(&self, name: &str) -> String {
             assert!(
                 name.chars()
                     .all(|character| character.is_ascii_alphanumeric() || character == '_')
@@ -3713,6 +3691,78 @@ mod tests {
             format!("{}/{name}", self.base_url)
         }
     }
+
+    /// A migrated database for replicas with `compatibility`, opened in
+    /// server mode.
+    pub(crate) async fn server_store(
+        server: &TestPostgres,
+        name: &str,
+        compatibility: &str,
+    ) -> PostgresMetadataStore {
+        let url = server.create_database(name).await;
+        migrate_database(
+            &url,
+            PostgresSslMode::Disable,
+            Duration::from_secs(5),
+            Duration::from_secs(5),
+        )
+        .await
+        .expect("migrate server test database");
+        configure_cluster_compatibility(
+            &url,
+            PostgresSslMode::Disable,
+            Duration::from_secs(5),
+            compatibility,
+        )
+        .await
+        .expect("configure server test compatibility");
+        PostgresMetadataStore::connect_server(
+            &url,
+            8,
+            Duration::from_secs(5),
+            Duration::from_secs(5),
+            PostgresSslMode::Disable,
+            true,
+        )
+        .await
+        .expect("open server test store")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    const TEST_SERVER_COMPATIBILITY: &str =
+        "0000000000000000000000000000000000000000000000000000000000000000";
+
+    use std::{
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        },
+        time::Duration,
+    };
+
+    use sqlx::{Connection as _, PgConnection, postgres::PgPoolOptions};
+    use tokio::sync::Barrier;
+
+    use crate::{
+        NotarizationPhase,
+        artifact_store::{ArtifactKind, ArtifactLocator},
+        config::PostgresSslMode,
+        metadata::{NewTrace, TerminalOperationResult, TraceFilters},
+        metadata_store::{
+            CaptureClaim, MetadataStore, MetadataStoreError, ReplicaIdentity, ServerMetadataStore,
+            conformance,
+        },
+        registry::{
+            NotaryKeyStatus, NotaryTransport, REGISTRY_FORMAT, Registry, RegistryRecord, key_id,
+        },
+    };
+
+    use super::{
+        MIGRATION_LOCK_NAMESPACE, PostgresMetadataStore, configure_cluster_compatibility,
+        migrate_database, test_postgres::TestPostgres,
+    };
 
     async fn run_conformance(server: &TestPostgres, full_text_search: bool) {
         let sequence = Arc::new(AtomicUsize::new(0));

@@ -34,30 +34,25 @@ clap = { workspace = true, features = ["derive", "string"] }
 http = { workspace = true }
 http-body-util = { workspace = true }
 hex = { workspace = true }
-fs2 = { workspace = true }
 k256 = { workspace = true, features = ["ecdsa"] }
 capture-core = { workspace = true, features = ["cli", "openapi"] }
 capture-engine = { workspace = true }
 capture-updater = { workspace = true }
 mime_guess = "2.0"
 reqwest = { workspace = true, features = ["json", "rustls-tls", "stream"] }
-rusqlite = { version = "0.32", features = ["bundled"] }
 rust-embed = "8.12"
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
 sqlx = { version = "0.8", default-features = false, features = ["postgres", "runtime-tokio-rustls"] }
 tempfile = { workspace = true }
-thiserror = "2.0"
 tokio = { workspace = true, features = ["full"] }
-tokio-stream = "0.1"
 toml = { workspace = true }
 tracing = { workspace = true }
 tower-http = { version = "0.7", features = ["cors", "limit", "request-id", "sensitive-headers", "trace"] }
 url = { workspace = true }
 utoipa = { workspace = true, features = ["axum_extras", "uuid"] }
 uuid = { workspace = true, features = ["v4"] }
-zeroize = { workspace = true }
 
 [dev-dependencies]
 capture-core = { workspace = true, features = ["test-utils"] }

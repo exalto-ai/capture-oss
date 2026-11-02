@@ -7,8 +7,9 @@ The open-source foundation of **Exalto Capture** and the **Exalto Capture Protoc
 Capture model-provider HTTP exchanges locally, seal them with Exalto Seal or a
 compatible self-hosted notary, and verify portable Traces.
 
-The public source includes the macOS desktop app, local daemon, CLI, generic
-remote notary, dashboard, updater, and protocol and verification code. Exalto’s
+The public source includes the desktop app and its local capture service, the
+capture server, CLI, generic remote notary, dashboard, updater, and protocol
+and verification code. Exalto’s
 hosted accounts, billing, uploads, and sharing implementation are proprietary
 and maintained separately. The daemon and dashboard keep optional clients for
 those hosted services, and hosted notary admission integrates through the notary
@@ -26,7 +27,8 @@ This is pre-release software. Compatibility and artifact formats may change.
 
 ## Trust boundary
 
-The local daemon sees plaintext model traffic and provider credentials. The
+The capture service (the desktop app's local service, or a capture server)
+sees plaintext model traffic and provider credentials. The
 remote notary resolves and connects to allowlisted provider hosts. In Notarized
 mode it must not receive plaintext or credentials. In the optional Witnessed
 mode it receives both over TLS, relays the exchange, and signs a receipt over
@@ -38,19 +40,20 @@ disclosed evidence. Never treat the two as interchangeable. See the
 
 ## Build from source
 
-The CLI and daemon require Rust 1.95.0 and a C toolchain:
+Local capture runs inside the desktop app (below). The CLI and the capture
+server require Rust 1.95.0 and a C toolchain:
 
 ```bash
 git clone https://github.com/exalto-ai/capture-runtime.git
 cd capture-runtime
-cargo install --locked --path crates/captured --bin captured
 cargo install --locked --path crates/capture --bin capture
+cargo install --locked --path crates/captured --bin captured
 ```
 
-Run `captured`, route a supported provider client through `127.0.0.1:8787`, and
-inspect private captures through the dashboard at `127.0.0.1:8788` or the
-`capture` command. The command client is `capture` and the local service is
-`captured`; the crates that build them keep the same names.
+With the desktop app running, route a supported provider client through
+`127.0.0.1:8787` and inspect private captures in the app or with the `capture`
+command. `captured` runs only as a replicated server on PostgreSQL and S3; see
+[cluster operations](docs/cluster-operations.md).
 
 Dashboard development additionally requires Node.js 24 and npm:
 

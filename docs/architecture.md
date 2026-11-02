@@ -6,8 +6,9 @@ key, and the included OpenTelemetry trace is the deterministic normalization
 of those bytes.
 
 The public runtime is independently buildable. It contains the protocol and
-evidence contracts, local daemon, REST command client, generic remote notary,
-local dashboard, updater, and verifier. Hosted account, billing, admission,
+evidence contracts, the desktop app and its local capture service, the
+`captured` capture server, REST command client, generic remote notary,
+dashboard, updater, and verifier. Hosted account, billing, admission,
 upload, and website policy may integrate through explicit client and server
 seams, but those implementations are not part of this workspace.
 
@@ -16,15 +17,17 @@ seams, but those implementations are not part of this workspace.
 | Component | Sees application plaintext? | Durable state | Responsibility |
 | --- | --- | --- | --- |
 | Provider client | yes | provider credential | Sends an ordinary provider request to a fixed local route |
-| `captured` | yes | vault, metadata, operations, artifacts, trust cache | Proxies requests, captures private state, notarizes, and verifies |
-| `capture` | only API responses requested by the user | none | Calls the daemon's versioned administration API |
+| Desktop local service | yes | vault, SQLite metadata, operations, filesystem artifacts, trust cache | Proxies requests, captures private state, notarizes, and verifies, inside the desktop app |
+| `captured` server | yes | shared vault key, PostgreSQL metadata, S3 artifacts, pinned Registry | The same for replicated deployments, behind authenticated administration |
+| `capture` | only API responses requested by the user | none | Calls a capture service's versioned administration API |
 | Local dashboard | only safe metadata store fields and deliberately opened notarized disclosures | browser session preference | Uses the same administration API as the CLI |
 | `capture-notary` | no in Notarized sessions; yes, in memory only, in Witnessed sessions | signing key | Resolves the provider, relays encrypted TLS records or Witnessed plaintext, witnesses sessions, and completes proof work |
 | Model provider | yes | provider-owned | Serves an ordinary HTTPS request without a Notary integration |
 | Artifact backend | encrypted capture or disclosed package bytes | filesystem or private S3-compatible objects | Retains immutable artifacts after size and SHA-256 validation |
 | Independent verifier | disclosed package contents | chosen trust policy | Verifies a portable `.llmtrace` without contacting the provider or notary |
 
-The local daemon is the only Capture runtime component that sees provider
+The capture service, either the desktop app's local service or a `captured`
+replica, is the only Capture runtime component that sees provider
 credentials, prompts, and response plaintext. The remote notary learns the
 selected provider hostname, ciphertext sizes, timing, and protocol metadata,
 but in a Notarized session it must not receive credential values or
@@ -157,9 +160,9 @@ existing capture.
 - A bare `trace.otlp.json` is useful for inspection but does not carry the
   package's cryptographic evidence.
 
-Filesystem artifacts and SQLite metadata are the single-machine defaults.
-Cluster mode uses PostgreSQL metadata, a private S3-compatible namespace, and
-one shared 32-byte vault key. Replicas share a compatibility fingerprint
+The desktop app's local service keeps SQLite metadata and filesystem
+artifacts. A `captured` server always runs as a cluster: PostgreSQL metadata,
+a private S3-compatible namespace, and one shared 32-byte vault key. Replicas share a compatibility fingerprint
 derived from runtime configuration and that key. S3 adds no evidence or
 encryption layer: captures are encrypted before upload and trace packages stay
 the exact independently verifiable bytes.

@@ -1395,14 +1395,12 @@ dependencies = [
  "capture-engine",
  "capture-updater",
  "clap",
- "fs2",
  "hex",
  "http 1.4.2",
  "http-body-util",
  "k256",
  "mime_guess",
  "reqwest 0.12.28",
- "rusqlite",
  "rust-embed",
  "serde",
  "serde_json",
@@ -1410,9 +1408,7 @@ dependencies = [
  "sqlx",
  "tempfile",
  "testcontainers-modules",
- "thiserror 2.0.19",
  "tokio",
- "tokio-stream",
  "toml",
  "tower",
  "tower-http 0.7.0",
@@ -1421,7 +1417,6 @@ dependencies = [
  "url",
  "utoipa",
  "uuid",
- "zeroize",
 ]
 
 [[package]]

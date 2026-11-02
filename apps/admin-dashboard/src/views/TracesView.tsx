@@ -474,6 +474,7 @@ export function TracesView({
   navigate,
   hideActivity = false,
   emptyAction,
+  sharing = true,
 }: {
   api: LocalApi;
   selectedId?: string;
@@ -482,6 +483,8 @@ export function TracesView({
   navigate: (route: Route) => void;
   hideActivity?: boolean;
   emptyAction?: ReactNode;
+  /** Public sharing needs the local service's account connection; servers have neither. */
+  sharing?: boolean;
 }) {
   const [query, setQuery] = useState('');
   const [model, setModel] = useState('');
@@ -698,6 +701,7 @@ export function TracesView({
                 onBack={() => navigate({ view: 'traces' })}
                 navigate={navigate}
                 hideActivity={hideActivity}
+                sharing={sharing}
               />
             ) : null}
           </div>
@@ -790,7 +794,10 @@ function CaptureRow({
   );
 }
 
-function TraceInspector(props: {
+function TraceInspector({
+  sharing,
+  ...props
+}: {
   api: LocalApi;
   capture: TraceSummary;
   initialAction?: Route['action'];
@@ -798,6 +805,7 @@ function TraceInspector(props: {
   onBack: () => void;
   navigate: (route: Route) => void;
   hideActivity?: boolean;
+  sharing: boolean;
 }) {
   return props.capture.state === 'notarized' ? (
     <NotarizedTraceInspector
@@ -808,6 +816,7 @@ function TraceInspector(props: {
       onBack={props.onBack}
       navigate={props.navigate}
       hideActivity={props.hideActivity}
+      sharing={sharing}
     />
   ) : (
     <CapturedTraceInspector {...props} />
@@ -1229,6 +1238,7 @@ function NotarizedTraceInspector({
   onBack,
   navigate,
   hideActivity = false,
+  sharing,
 }: {
   api: LocalApi;
   capture: TraceSummary;
@@ -1237,6 +1247,7 @@ function NotarizedTraceInspector({
   onBack: () => void;
   navigate: (route: Route) => void;
   hideActivity?: boolean;
+  sharing: boolean;
 }) {
   const queryClient = useQueryClient();
   const captureId = capture.trace_id;
@@ -1248,7 +1259,7 @@ function NotarizedTraceInspector({
     queryKey: ['capture', captureId],
     queryFn: () => api.trace(captureId),
   });
-  const account = useQuery(accountQuery(api)).data;
+  const account = useQuery({ ...accountQuery(api), enabled: sharing }).data;
   const [verification, setVerification] = useState<Verification | null>(null);
   const [verificationFailure, setVerificationFailure] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<string | null>('summary');
@@ -1357,7 +1368,7 @@ function NotarizedTraceInspector({
         throw error;
       }
     },
-    enabled: Boolean(detail.data?.share) || shareRequested,
+    enabled: sharing && (Boolean(detail.data?.share) || shareRequested),
     retry: false,
     refetchInterval: (query) => {
       const progress = query.state.data?.progress;
@@ -1416,8 +1427,8 @@ function NotarizedTraceInspector({
     if (handledInitialAction.current === actionKey) return;
     handledInitialAction.current = actionKey;
     if (initialAction === 'export') startExport();
-    else if (initialAction === 'share') setShareDialogMode('create');
-  }, [captureId, detail.data, initialAction, trace.data]);
+    else if (initialAction === 'share' && sharing) setShareDialogMode('create');
+  }, [captureId, detail.data, initialAction, sharing, trace.data]);
   if (trace.isLoading || detail.isLoading) return <LoadingState />;
   if (trace.error) return <QueryError error={trace.error} title="Trace package is unavailable" />;
   if (!trace.data || !detail.data)
@@ -1431,9 +1442,11 @@ function NotarizedTraceInspector({
   const traceDigest =
     typeof manifest.trace_sha256 === 'string' ? manifest.trace_sha256 : 'Not reported';
   const transcripts = traceTranscripts(trace.data.trace);
-  const activeShare = shareStatus.isSuccess
-    ? shareStatus.data
-    : (shareStatus.data ?? detail.data.share);
+  const activeShare = !sharing
+    ? null
+    : shareStatus.isSuccess
+      ? shareStatus.data
+      : (shareStatus.data ?? detail.data.share);
   const sharingBlocksDeletion = Boolean(
     activeShare && (activeShare.progress === 'verifying' || activeShare.access_enabled),
   );
@@ -1520,7 +1533,7 @@ function NotarizedTraceInspector({
           >
             Verify locally
           </Button>
-          {!activeShare && (
+          {sharing && !activeShare && (
             <Button
               variant="outline"
               leftSection={<Send size={15} />}

@@ -1,0 +1,52 @@
+# Template for the end-to-end cluster replicas. Setup copies it to each
+# replica's state directory; the scripts then edit the copies in place.
+format = "ecp/captured-config/v1"
+
+[proxy]
+listen = "0.0.0.0:8787"
+
+[admin]
+listen = "0.0.0.0:8788"
+
+[notary]
+# The dedicated Compose file provides a raw Proxy-TLS fixture with private key
+# scalar 1. The corresponding SEC1 generator key is intentionally test-only.
+endpoint = "tcp://notary:7047"
+public_key = "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"
+
+[storage]
+backend = "s3"
+checkpoint_dir = "/state/capture-checkpoints"
+package_dir = "/state/trace-packages"
+
+[metadata]
+backend = "postgres"
+path = "/state/metadata.db"
+prompt_preview_chars = 1000
+output_preview_chars = 1000
+full_text_search = true
+
+[metadata.postgres]
+ssl_mode = "disable"
+max_connections = 8
+connect_timeout_seconds = 3
+acquire_timeout_seconds = 3
+migration_lock_timeout_seconds = 5
+
+[storage.s3]
+bucket = "captured-e2e"
+region = "us-east-1"
+endpoint = "http://object-store:8333"
+prefix = "captured"
+force_path_style = true
+allow_insecure_http = true
+connect_timeout_seconds = 3
+operation_timeout_seconds = 10
+
+[cluster]
+proxy_origin = "https://proxy.e2e.invalid"
+admin_origin = "https://admin.e2e.invalid"
+
+[admin.auth]
+username = "cluster-admin"
+password_hash = "$argon2id$v=19$m=19456,t=2,p=1$Y2x1c3Rlci1lMmUtc2FsdA$e5miUzfGBUsUELcxECEyngoD2trkyo28hZ794hQ9bO8"

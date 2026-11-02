@@ -20,7 +20,6 @@ use tokio::sync::watch;
 use crate::{
     NotarizationPhase, NotarizationProofProgress,
     archive::MAX_ARCHIVE_WIRE_BYTES,
-    artifact_router::RoutedArtifactStore,
     artifact_store::{ArtifactKey, ArtifactRecord, ArtifactSource, ArtifactStoreError},
     config::{CLUSTER_INSTANCE_ID_ENV, valid_instance_id},
     metadata::{CaptureCompletion, NewTrace, Operation, TerminalOperationResult},
@@ -28,6 +27,7 @@ use crate::{
         CaptureClaim, MetadataResult, MetadataStoreError, NotarizationClaim, ReplicaIdentity,
         ServerMetadataStore,
     },
+    s3_artifact_store::S3ArtifactStore,
 };
 
 #[cfg(not(feature = "daemon-e2e"))]
@@ -209,11 +209,11 @@ impl Drop for ClaimLeaseGuard {
 /// commit ID, so a capture another replica adopts cannot attach them twice.
 pub(crate) struct ClusterCaptureLedger {
     runtime: Arc<ClusterRuntime>,
-    artifacts: Arc<RoutedArtifactStore>,
+    artifacts: Arc<S3ArtifactStore>,
 }
 
 impl ClusterCaptureLedger {
-    pub(crate) fn new(runtime: Arc<ClusterRuntime>, artifacts: Arc<RoutedArtifactStore>) -> Self {
+    pub(crate) fn new(runtime: Arc<ClusterRuntime>, artifacts: Arc<S3ArtifactStore>) -> Self {
         Self { runtime, artifacts }
     }
 }
@@ -311,7 +311,7 @@ impl CaptureLedger for ClusterCaptureLedger {
 /// lease.
 struct ClusterCaptureEntry {
     runtime: Arc<ClusterRuntime>,
-    artifacts: Arc<RoutedArtifactStore>,
+    artifacts: Arc<S3ArtifactStore>,
     claim: CaptureClaim,
     _lease: ClaimLeaseGuard,
 }
@@ -368,11 +368,11 @@ impl CaptureEntry for ClusterCaptureEntry {
 /// expired, and it stops claiming while the replica drains.
 pub(crate) struct ClusterNotarizationQueue {
     runtime: Arc<ClusterRuntime>,
-    artifacts: Arc<RoutedArtifactStore>,
+    artifacts: Arc<S3ArtifactStore>,
 }
 
 impl ClusterNotarizationQueue {
-    pub(crate) fn new(runtime: Arc<ClusterRuntime>, artifacts: Arc<RoutedArtifactStore>) -> Self {
+    pub(crate) fn new(runtime: Arc<ClusterRuntime>, artifacts: Arc<S3ArtifactStore>) -> Self {
         Self { runtime, artifacts }
     }
 }
@@ -417,7 +417,7 @@ impl NotarizationQueue for ClusterNotarizationQueue {
 /// A notarization operation claimed by this replica.
 struct ClusterNotarization {
     runtime: Arc<ClusterRuntime>,
-    artifacts: Arc<RoutedArtifactStore>,
+    artifacts: Arc<S3ArtifactStore>,
     claim: NotarizationClaim,
 }
 

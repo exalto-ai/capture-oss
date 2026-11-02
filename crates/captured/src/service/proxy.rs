@@ -1,4 +1,4 @@
-use std::{future::Future, path::PathBuf, pin::Pin, sync::Arc};
+use std::{path::PathBuf, sync::Arc};
 
 use anyhow::{Context, Result, bail};
 use axum::{
@@ -11,11 +11,9 @@ use axum::{
 };
 use capture_engine::{
     admission::{Admission, AdmissionTicket, NoAdmission},
-    capture_ledger::{CaptureLedger, LocalCaptureLedger},
+    capture_ledger::CaptureLedger,
     capture_mode::NotaryDiscovery,
-    notarization::{
-        LocalNotarizationQueue, NotarizationContext, NotarizationQueue, spawn_notarization_worker,
-    },
+    notarization::{NotarizationContext, NotarizationQueue, spawn_notarization_worker},
     providers::Provider,
     proxy::{CaptureContext, CaptureSettings, NotaryTrust, ReqwestDirectUpstreamConnector},
 };
@@ -23,7 +21,7 @@ use tokio::sync::watch;
 
 use super::{
     auth, http_client_builder,
-    registry::{discover_notary, fetch_registry_from, refresh_registry, resolve_notary},
+    registry::{fetch_registry_from, resolve_notary},
 };
 use crate::{
     CaptureCheckpoint,
@@ -38,22 +36,8 @@ use crate::{
 };
 
 pub struct ProxyArgs {
-    /// Versioned local captured configuration file. Defaults to the standard
-    /// path, creating an editable default there on first use.
+    /// Versioned server configuration file. Defaults to the standard path.
     pub(crate) config: Option<PathBuf>,
-    /// Set when an application runs the service in its own process.
-    pub(crate) embedded: Option<EmbeddedHost>,
-}
-
-/// What an application supplies to run the local service in its own process,
-/// as the desktop app does.
-pub struct EmbeddedHost {
-    /// The application's unlocked local vault. The service never opens or
-    /// initializes a vault itself, and never prompts.
-    pub vault: Arc<Vault>,
-    /// Resolves when the application wants the service to drain and stop.
-    /// The service installs no process signal handlers of its own.
-    pub shutdown: Pin<Box<dyn Future<Output = ()> + Send>>,
 }
 
 #[derive(Clone)]
@@ -63,23 +47,20 @@ pub(crate) struct AppState {
     pub(crate) vault: Arc<Vault>,
     pub(crate) persistence: Persistence,
     pub(crate) config: Arc<CapturedConfig>,
-    cluster_runtime: Option<Arc<ClusterRuntime>>,
+    cluster_runtime: Arc<ClusterRuntime>,
 }
 
 pub(crate) use capture_engine::capture_mode::CaptureSetting;
 
-/// Finds the trusted notary: the configured endpoint, the Registry pinned in
-/// shared metadata for a cluster replica, or the hosted Registry.
+/// Finds the trusted notary: the configured endpoint, or the hosted Registry
+/// pinned in shared metadata.
 pub(crate) struct DaemonNotaryDiscovery {
     config: Arc<CapturedConfig>,
-    cluster_runtime: Option<Arc<ClusterRuntime>>,
+    cluster_runtime: Arc<ClusterRuntime>,
 }
 
 impl DaemonNotaryDiscovery {
-    pub(crate) fn new(
-        config: Arc<CapturedConfig>,
-        cluster_runtime: Option<Arc<ClusterRuntime>>,
-    ) -> Self {
+    pub(crate) fn new(config: Arc<CapturedConfig>, cluster_runtime: Arc<ClusterRuntime>) -> Self {
         Self {
             config,
             cluster_runtime,
@@ -90,7 +71,7 @@ impl DaemonNotaryDiscovery {
 #[async_trait::async_trait]
 impl NotaryDiscovery for DaemonNotaryDiscovery {
     async fn discover(&self) -> Result<NotaryEndpoint> {
-        initialize_notary(&self.config, self.cluster_runtime.as_deref()).await
+        initialize_notary(&self.config, &self.cluster_runtime).await
     }
 }
 
@@ -123,17 +104,14 @@ impl Admission for HostedAdmission {
     }
 }
 
-/// The configured notary key, or else the Registry keys this daemon trusts.
+/// The configured notary key, or else the Registry pinned in shared metadata.
 pub(crate) struct DaemonNotaryTrust {
     config: Arc<CapturedConfig>,
-    cluster_runtime: Option<Arc<ClusterRuntime>>,
+    cluster_runtime: Arc<ClusterRuntime>,
 }
 
 impl DaemonNotaryTrust {
-    pub(crate) fn new(
-        config: Arc<CapturedConfig>,
-        cluster_runtime: Option<Arc<ClusterRuntime>>,
-    ) -> Self {
+    pub(crate) fn new(config: Arc<CapturedConfig>, cluster_runtime: Arc<ClusterRuntime>) -> Self {
         Self {
             config,
             cluster_runtime,
@@ -151,17 +129,13 @@ impl NotaryTrust for DaemonNotaryTrust {
             exchange.verify(&key)?;
             return Ok(key);
         }
-        let records = match &self.cluster_runtime {
-            Some(cluster_runtime) => {
-                cluster_runtime
-                    .metadata()
-                    .registry_snapshot()
-                    .await?
-                    .context("shared Registry is not pinned")?
-                    .records
-            }
-            None => super::registry::cached_registry_records()?,
-        };
+        let records = self
+            .cluster_runtime
+            .metadata()
+            .registry_snapshot()
+            .await?
+            .context("shared Registry is not pinned")?
+            .records;
         super::registry::witness_key_from_records(&records, exchange)
     }
 
@@ -188,18 +162,15 @@ impl NotaryTrust for DaemonNotaryTrust {
                 Ok((key, endpoint))
             }
             (None, None) => {
-                let (key, record) = if let Some(cluster_runtime) = &self.cluster_runtime {
-                    let (registry, source) =
-                        fetch_registry_from(&auth::configured_api_origin()?).await?;
-                    let trust = cluster_runtime
-                        .metadata()
-                        .pin_registry(registry, source.as_str())
-                        .await?;
-                    super::registry::registry_record_for_checkpoint(&trust, checkpoint)?
-                } else {
-                    let _ = refresh_registry().await;
-                    super::registry::cached_registry_record_for_checkpoint(checkpoint)?
-                };
+                let (registry, source) =
+                    fetch_registry_from(&auth::configured_api_origin()?).await?;
+                let trust = self
+                    .cluster_runtime
+                    .metadata()
+                    .pin_registry(registry, source.as_str())
+                    .await?;
+                let (key, record) =
+                    super::registry::registry_record_for_checkpoint(&trust, checkpoint)?;
                 let endpoint = resolve_notary(&record).await?;
                 Ok((key, endpoint))
             }
@@ -211,13 +182,9 @@ impl NotaryTrust for DaemonNotaryTrust {
         self.config.notary_public_key()
     }
 
-    /// Cluster replicas verify against the Registry pinned in shared
-    /// metadata; a single daemon uses its own Registry cache.
+    /// Replicas verify against the Registry pinned in shared metadata.
     async fn shared_registry(&self) -> Result<Option<RegistrySnapshot>> {
-        let Some(cluster_runtime) = &self.cluster_runtime else {
-            return Ok(None);
-        };
-        cluster_runtime
+        self.cluster_runtime
             .metadata()
             .registry_snapshot()
             .await?
@@ -240,8 +207,21 @@ impl NotaryTrust for DaemonNotaryTrust {
     }
 }
 
+/// Refuses a configuration without `[cluster]`. Server mode needs PostgreSQL
+/// metadata, S3 artifacts and admin authentication, which `[cluster]`
+/// already requires; local capture belongs to the desktop app.
+pub(crate) fn require_server_configuration(config: &CapturedConfig) -> Result<()> {
+    if config.cluster.is_none() {
+        bail!(
+            "captured runs only as a server: configure [cluster] with PostgreSQL metadata and S3 storage. For local capture, use the Exalto Capture app"
+        );
+    }
+    Ok(())
+}
+
 pub async fn run(args: ProxyArgs) -> Result<()> {
     let (config, config_path) = load_captured_config(args.config.as_deref())?;
+    require_server_configuration(&config)?;
     auth::validate_credential_configuration()?;
     let listen = config.proxy.listen;
     let max_frame_bytes = config.notary.max_frame_bytes;
@@ -255,88 +235,35 @@ pub async fn run(args: ProxyArgs) -> Result<()> {
     if max_attestable_http_bytes == 0 {
         bail!("maximum attestable HTTP bytes must be non-zero");
     }
-    // Open and validate persistence before notary discovery or interactive
-    // vault initialization. A PostgreSQL outage or unmigrated schema therefore
-    // fails startup directly and never causes a fallback or unrelated prompt.
-    let cluster_identity = config
-        .cluster
-        .is_some()
-        .then(ClusterRuntime::identity_from_environment)
-        .transpose()?;
-    if cluster_identity.is_some()
-        && hosted_admission_required(&config)
-        && !auth::api_key_mode_active()?
-    {
+    // Open and validate persistence before notary discovery. A PostgreSQL
+    // outage or unmigrated schema therefore fails startup directly.
+    let identity = ClusterRuntime::identity_from_environment()?;
+    if hosted_admission_required(&config) && !auth::api_key_mode_active()? {
         bail!(
             "hosted notary discovery requires CAPTURED_PLATFORM_API_KEY or CAPTURED_PLATFORM_API_KEY_FILE"
         );
     }
-    let (embedded_vault, shutdown) = match args.embedded {
-        Some(EmbeddedHost { vault, shutdown }) => (Some(vault), shutdown),
-        None => (
-            None,
-            Box::pin(system_shutdown_signal()) as Pin<Box<dyn Future<Output = ()> + Send>>,
-        ),
-    };
-    if cluster_identity.is_some() && embedded_vault.is_some() {
-        bail!("an application-embedded local service cannot run in cluster mode");
-    }
-    let (persistence, cluster_runtime) = match cluster_identity {
-        Some(identity) => {
-            let (persistence, cluster_runtime) =
-                Persistence::open_cluster(&config, identity).await?;
-            (persistence, Some(Arc::new(cluster_runtime)))
-        }
-        None => (Persistence::open(&config).await?, None),
-    };
-    let vault = match embedded_vault {
-        Some(vault) => vault,
-        None if cluster_runtime.is_some() => {
-            Arc::new(Vault::open_cluster().context("opening the shared cluster vault")?)
-        }
-        None => Arc::new(Vault::open_or_init_interactive().context(
-            "opening the local checkpoint vault (set CAPTURED_VAULT_PASSPHRASE_FILE before first start when an OS vault is unavailable)",
-        )?),
-    };
-    if let Some(cluster_runtime) = &cluster_runtime {
-        let vault_identity = vault.cluster_identity_sha256()?;
-        cluster_runtime
-            .metadata()
-            .register_replica(
-                cluster_runtime.identity(),
-                &config.cluster_compatibility_sha256(&vault_identity)?,
-                cluster_runtime.lease_seconds(),
-            )
-            .await?;
-    } else {
-        let recovery = persistence
-            .storage()
-            .reconcile_incomplete_captures()
-            .await?;
-        if recovery.recovered_checkpoints > 0
-            || recovery.interrupted_captures > 0
-            || recovery.pending_commits > 0
-        {
-            tracing::warn!(
-                recovered_checkpoints = recovery.recovered_checkpoints,
-                interrupted_captures = recovery.interrupted_captures,
-                pending_commits = recovery.pending_commits,
-                "reconciled traces left incomplete by an earlier proxy process"
-            );
-        }
-    }
-    let captures: Arc<dyn CaptureLedger> = match &cluster_runtime {
-        Some(cluster_runtime) => Arc::new(ClusterCaptureLedger::new(
-            cluster_runtime.clone(),
-            persistence.artifacts.clone(),
-        )),
-        None => Arc::new(LocalCaptureLedger::new(persistence.storage())),
-    };
+    let (persistence, cluster_runtime) = Persistence::open_cluster(&config, identity).await?;
+    let cluster_runtime = Arc::new(cluster_runtime);
+    let vault = Arc::new(Vault::open_cluster().context("opening the shared cluster vault")?);
+    let vault_identity = vault.cluster_identity_sha256()?;
+    cluster_runtime
+        .metadata()
+        .register_replica(
+            cluster_runtime.identity(),
+            &config.cluster_compatibility_sha256(&vault_identity)?,
+            cluster_runtime.lease_seconds(),
+        )
+        .await?;
+    let captures: Arc<dyn CaptureLedger> = Arc::new(ClusterCaptureLedger::new(
+        cluster_runtime.clone(),
+        persistence.artifacts.clone(),
+    ));
     let hosted_admission = hosted_admission_required(&config);
     let stored_mode = persistence.metadata.capture_mode().await?;
     let config = Arc::new(config);
     let notary = if stored_mode != CaptureMode::Off {
-        Some(initialize_notary(&config, cluster_runtime.as_deref()).await?)
+        Some(initialize_notary(&config, &cluster_runtime).await?)
     } else {
         None
     };
@@ -344,7 +271,7 @@ pub async fn run(args: ProxyArgs) -> Result<()> {
         stored_mode,
         notary.clone(),
         persistence.metadata.clone(),
-        cluster_runtime.is_some(),
+        true,
         Arc::new(DaemonNotaryDiscovery::new(
             config.clone(),
             cluster_runtime.clone(),
@@ -391,10 +318,6 @@ pub async fn run(args: ProxyArgs) -> Result<()> {
         state.persistence.clone(),
         state.config.clone(),
         cluster_runtime.clone(),
-        cluster_runtime
-            .as_ref()
-            .map(|_| state.vault.cluster_identity_sha256())
-            .transpose()?,
         Some(capture_mode),
     )
     .await?;
@@ -412,30 +335,17 @@ pub async fn run(args: ProxyArgs) -> Result<()> {
     tracing::info!(address = %state.config.admin.listen, "Notary daemon admin API listening");
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let (heartbeat_shutdown_tx, heartbeat_shutdown_rx) = watch::channel(false);
-    if let Some(cluster_runtime) = &cluster_runtime {
-        cluster_runtime.mark_ready();
-    }
+    cluster_runtime.mark_ready();
     let mut heartbeat = spawn_server_heartbeat(cluster_runtime.clone(), heartbeat_shutdown_rx);
     let capture_recovery = spawn_capture_recovery_worker(
         captures.clone(),
         cluster_runtime.clone(),
         shutdown_rx.clone(),
     );
-    let update_checker = if cluster_runtime.is_none() {
-        crate::update::spawn_background_checker(
-            admin_state.update_status.clone(),
-            shutdown_rx.clone(),
-        )
-    } else {
-        None
-    };
-    let notarizations: Arc<dyn NotarizationQueue> = match &cluster_runtime {
-        Some(cluster_runtime) => Arc::new(ClusterNotarizationQueue::new(
-            cluster_runtime.clone(),
-            state.persistence.artifacts.clone(),
-        )),
-        None => Arc::new(LocalNotarizationQueue::new(state.persistence.storage())),
-    };
+    let notarizations: Arc<dyn NotarizationQueue> = Arc::new(ClusterNotarizationQueue::new(
+        cluster_runtime.clone(),
+        state.persistence.artifacts.clone(),
+    ));
     let mut worker = spawn_notarization_worker(
         NotarizationContext::new(
             state.persistence.storage(),
@@ -475,50 +385,42 @@ pub async fn run(args: ProxyArgs) -> Result<()> {
         result = &mut admin_server => Exit::Admin(joined(result, "admin server")),
         result = &mut worker => Exit::Worker(joined(result, "notarization worker")),
         result = &mut heartbeat => Exit::Heartbeat(joined(result, "cluster replica heartbeat")),
-        () = shutdown => Exit::Requested,
+        () = system_shutdown_signal() => Exit::Requested,
     };
-    if let Some(cluster_runtime) = &cluster_runtime {
-        cluster_runtime.mark_draining();
-        if matches!(&exit, Exit::Requested) {
-            tokio::time::sleep(std::time::Duration::from_secs(
-                cluster_runtime.withdrawal_delay_seconds(),
-            ))
-            .await;
-        }
+    cluster_runtime.mark_draining();
+    if matches!(&exit, Exit::Requested) {
+        tokio::time::sleep(std::time::Duration::from_secs(
+            cluster_runtime.withdrawal_delay_seconds(),
+        ))
+        .await;
     }
     tracing::info!("Notary daemon draining before shutdown");
     let _ = shutdown_tx.send(true);
     let mut forced_server_shutdown = false;
     match exit {
         Exit::Requested => {
-            if let Some(cluster_runtime) = &cluster_runtime {
-                let graceful = tokio::time::timeout(
-                    std::time::Duration::from_secs(cluster_runtime.shutdown_grace_seconds()),
-                    async {
-                        joined((&mut proxy_server).await, "proxy server")?;
-                        joined((&mut admin_server).await, "admin server")?;
-                        joined((&mut worker).await, "notarization worker")?;
-                        Ok::<_, anyhow::Error>(())
-                    },
-                )
-                .await;
-                match graceful {
-                    Ok(result) => result?,
-                    Err(_) => {
-                        forced_server_shutdown = true;
-                        tracing::warn!(
-                            shutdown_grace_seconds = cluster_runtime.shutdown_grace_seconds(),
-                            "server shutdown grace expired; stopping remaining local tasks"
-                        );
-                        proxy_server.abort();
-                        admin_server.abort();
-                        worker.abort();
-                    }
+            let graceful = tokio::time::timeout(
+                std::time::Duration::from_secs(cluster_runtime.shutdown_grace_seconds()),
+                async {
+                    joined((&mut proxy_server).await, "proxy server")?;
+                    joined((&mut admin_server).await, "admin server")?;
+                    joined((&mut worker).await, "notarization worker")?;
+                    Ok::<_, anyhow::Error>(())
+                },
+            )
+            .await;
+            match graceful {
+                Ok(result) => result?,
+                Err(_) => {
+                    forced_server_shutdown = true;
+                    tracing::warn!(
+                        shutdown_grace_seconds = cluster_runtime.shutdown_grace_seconds(),
+                        "server shutdown grace expired; stopping remaining local tasks"
+                    );
+                    proxy_server.abort();
+                    admin_server.abort();
+                    worker.abort();
                 }
-            } else {
-                joined(proxy_server.await, "proxy server")?;
-                joined(admin_server.await, "admin server")?;
-                joined(worker.await, "notarization worker")?;
             }
         }
         Exit::Proxy(result) => {
@@ -553,9 +455,6 @@ pub async fn run(args: ProxyArgs) -> Result<()> {
             bail!("cluster replica heartbeat stopped unexpectedly");
         }
     }
-    if let Some(update_checker) = update_checker {
-        update_checker.await.context("update checker task exited")?;
-    }
     if forced_server_shutdown {
         capture_recovery.abort();
     } else {
@@ -569,8 +468,6 @@ pub async fn run(args: ProxyArgs) -> Result<()> {
         heartbeat.abort();
     } else {
         joined(heartbeat.await, "cluster replica heartbeat")?;
-    }
-    if let (Some(cluster_runtime), false) = (&cluster_runtime, forced_server_shutdown) {
         cluster_runtime
             .metadata()
             .release_replica(cluster_runtime.identity())
@@ -586,7 +483,7 @@ pub(crate) fn hosted_admission_required(config: &CapturedConfig) -> bool {
 
 fn spawn_capture_recovery_worker(
     captures: Arc<dyn CaptureLedger>,
-    cluster_runtime: Option<Arc<ClusterRuntime>>,
+    cluster_runtime: Arc<ClusterRuntime>,
     mut shutdown: watch::Receiver<bool>,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
@@ -599,10 +496,7 @@ fn spawn_capture_recovery_worker(
                 }
                 () = tokio::time::sleep(std::time::Duration::from_secs(2)) => {}
             }
-            if cluster_runtime
-                .as_ref()
-                .is_some_and(|cluster_runtime| cluster_runtime.lifecycle() != Lifecycle::Ready)
-            {
+            if cluster_runtime.lifecycle() != Lifecycle::Ready {
                 continue;
             }
             match captures.recover_pending().await {
@@ -623,14 +517,10 @@ fn spawn_capture_recovery_worker(
 }
 
 fn spawn_server_heartbeat(
-    cluster_runtime: Option<Arc<ClusterRuntime>>,
+    cluster_runtime: Arc<ClusterRuntime>,
     mut shutdown: watch::Receiver<bool>,
 ) -> tokio::task::JoinHandle<Result<()>> {
     tokio::spawn(async move {
-        let Some(cluster_runtime) = cluster_runtime else {
-            while !*shutdown.borrow() && shutdown.changed().await.is_ok() {}
-            return Ok(());
-        };
         loop {
             tokio::select! {
                 result = shutdown.changed() => {
@@ -697,11 +587,11 @@ async fn system_shutdown_signal() {
 
 async fn initialize_notary(
     config: &CapturedConfig,
-    cluster_runtime: Option<&ClusterRuntime>,
+    cluster_runtime: &ClusterRuntime,
 ) -> Result<NotaryEndpoint> {
-    match (config.notary_endpoint()?, cluster_runtime) {
-        (Some(notary), _) => Ok(notary),
-        (None, Some(cluster_runtime)) => {
+    match config.notary_endpoint()? {
+        Some(notary) => Ok(notary),
+        None => {
             let (registry, registry_source_url) =
                 fetch_registry_from(&super::auth::configured_api_origin()?).await?;
             let snapshot = cluster_runtime
@@ -715,17 +605,12 @@ async fn initialize_notary(
                 .context("shared Registry is missing its active endpoint")?;
             resolve_notary(active).await
         }
-        (None, None) => discover_notary().await,
     }
 }
 
 #[axum::debug_handler]
 async fn proxy(State(state): State<AppState>, request: Request) -> Response {
-    if state
-        .cluster_runtime
-        .as_ref()
-        .is_some_and(|cluster_runtime| cluster_runtime.lifecycle() != Lifecycle::Ready)
-    {
+    if state.cluster_runtime.lifecycle() != Lifecycle::Ready {
         return (
             StatusCode::SERVICE_UNAVAILABLE,
             [("content-type", "application/json")],
@@ -756,6 +641,16 @@ async fn proxy(State(state): State<AppState>, request: Request) -> Response {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn local_configurations_are_refused() {
+        let error = require_server_configuration(&CapturedConfig::default()).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .starts_with("captured runs only as a server")
+        );
+    }
 
     #[test]
     fn explicit_self_hosted_notaries_never_require_admission_tickets() {

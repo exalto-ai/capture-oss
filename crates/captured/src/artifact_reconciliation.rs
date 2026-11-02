@@ -7,8 +7,9 @@ use serde::Serialize;
 
 use crate::{
     archive::MAX_ARCHIVE_WIRE_BYTES,
-    artifact_store::{ArtifactStore, ArtifactStoreError},
+    artifact_store::{ArtifactRecord, ArtifactStore, ArtifactStoreError},
     metadata::{TraceFilters, TracePagePosition},
+    metadata_store::MetadataStore,
     persistence::Persistence,
 };
 
@@ -54,11 +55,36 @@ pub(crate) async fn reconcile_artifacts(
     persistence: &Persistence,
     orphan_grace_seconds: u64,
 ) -> Result<ArtifactReconciliationReport> {
+    let (mut report, referenced) = verify_references(
+        persistence.metadata.as_ref(),
+        persistence.artifacts.as_ref(),
+    )
+    .await?;
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .context("system clock is before the Unix epoch")?
+        .as_secs();
+    let cutoff = i64::try_from(now.saturating_sub(orphan_grace_seconds)).unwrap_or(i64::MAX);
+    let inventory = persistence
+        .artifacts
+        .reconciliation_inventory(&referenced, S3_PAGE_SIZE, cutoff)
+        .await
+        .map_err(|_| anyhow!("S3 artifact reconciliation inventory failed"))?;
+    report.s3_scanned_objects = inventory.scanned_objects;
+    report.s3_unreferenced_candidates = inventory.unreferenced_candidates;
+    Ok(report.finish())
+}
+
+/// Reads every artifact that metadata references and counts what is missing
+/// or fails verification.
+async fn verify_references(
+    metadata: &dyn MetadataStore,
+    artifacts: &dyn ArtifactStore,
+) -> Result<(ArtifactReconciliationReport, Vec<ArtifactRecord>)> {
     let mut referenced = Vec::new();
     let mut cursor = None;
     loop {
-        let traces = persistence
-            .metadata
+        let traces = metadata
             .traces(TraceFilters {
                 cursor,
                 limit: CAPTURE_PAGE_SIZE,
@@ -71,8 +97,7 @@ pub(crate) async fn reconcile_artifacts(
         }
         for capture in &traces {
             referenced.extend(
-                persistence
-                    .metadata
+                metadata
                     .artifacts(&capture.trace_id)
                     .await
                     .context("listing artifact metadata for reconciliation")?,
@@ -89,8 +114,7 @@ pub(crate) async fn reconcile_artifacts(
         ..ArtifactReconciliationReport::default()
     };
     for record in &referenced {
-        match persistence
-            .artifacts
+        match artifacts
             .read_verified(record, MAX_ARCHIVE_WIRE_BYTES)
             .await
         {
@@ -110,21 +134,7 @@ pub(crate) async fn reconcile_artifacts(
         }
     }
 
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .context("system clock is before the Unix epoch")?
-        .as_secs();
-    let cutoff = i64::try_from(now.saturating_sub(orphan_grace_seconds)).unwrap_or(i64::MAX);
-    if let Some(inventory) = persistence
-        .artifacts
-        .s3_reconciliation_inventory(&referenced, S3_PAGE_SIZE, cutoff)
-        .await
-        .map_err(|_| anyhow!("S3 artifact reconciliation inventory failed"))?
-    {
-        report.s3_scanned_objects = inventory.scanned_objects;
-        report.s3_unreferenced_candidates = inventory.unreferenced_candidates;
-    }
-    Ok(report.finish())
+    Ok((report, referenced))
 }
 
 #[cfg(test)]
@@ -132,25 +142,27 @@ mod tests {
     use std::fs;
 
     use crate::{
-        artifact_store::{ArtifactKey, ArtifactKind, ArtifactSource, ArtifactStore},
-        config::CapturedConfig,
+        artifact_store::{
+            ArtifactKey, ArtifactKind, ArtifactSource, ArtifactStore, FileSystemArtifactStore,
+        },
         metadata::{CaptureCompletion, NewTrace},
-        persistence::Persistence,
+        metadata_store::MetadataStore,
+        sqlite_metadata_store::SqliteMetadataStore,
     };
 
-    use super::reconcile_artifacts;
+    use super::verify_references;
 
     #[tokio::test]
     async fn reports_verified_and_missing_files_without_mutating_metadata() {
         let directory = tempfile::tempdir().unwrap();
-        let mut config = CapturedConfig::default();
-        config.metadata.path = directory.path().join("metadata.db");
-        config.storage.checkpoint_dir = directory.path().join("checkpoints");
-        config.storage.package_dir = directory.path().join("traces");
-        let persistence = Persistence::open(&config).await.unwrap();
+        let checkpoints = directory.path().join("checkpoints");
+        let metadata = SqliteMetadataStore::open(directory.path().join("metadata.db"), true)
+            .await
+            .unwrap();
+        let artifacts =
+            FileSystemArtifactStore::new(checkpoints.clone(), directory.path().join("traces"));
         let trace_id = "trc-reconciliation";
-        persistence
-            .metadata
+        metadata
             .begin_capture(NewTrace {
                 evidence_kind: crate::metadata::EvidenceKind::Notarized,
                 trace_id: trace_id.to_owned(),
@@ -180,13 +192,11 @@ mod tests {
             expected_artifact_sha256:
                 "c9d0036bed6744bcdf692fc980d8717d7e5f5a4f4e8266b4a84982602fb1cd09".to_owned(),
         };
-        persistence
-            .metadata
+        metadata
             .prepare_capture_completion(completion.clone())
             .await
             .unwrap();
-        let artifact = persistence
-            .artifacts
+        let artifact = artifacts
             .put(
                 &ArtifactKey::new(trace_id, ArtifactKind::CaptureCheckpoint).unwrap(),
                 ArtifactSource::from_bytes(b"sealed".to_vec()),
@@ -194,30 +204,24 @@ mod tests {
             )
             .await
             .unwrap();
-        persistence
-            .metadata
+        metadata
             .complete_capture(completion, artifact)
             .await
             .unwrap();
 
-        let clean = reconcile_artifacts(&persistence, 0).await.unwrap();
+        let (clean, _) = verify_references(&metadata, &artifacts).await.unwrap();
+        let clean = clean.finish();
         assert_eq!(clean.status, "clean");
         assert_eq!(clean.referenced_artifacts, 1);
         assert_eq!(clean.verified_artifacts, 1);
 
-        fs::remove_file(
-            config
-                .storage
-                .checkpoint_dir
-                .join(format!("{trace_id}.llmcapture")),
-        )
-        .unwrap();
-        let missing = reconcile_artifacts(&persistence, 0).await.unwrap();
+        fs::remove_file(checkpoints.join(format!("{trace_id}.llmcapture"))).unwrap();
+        let (missing, _) = verify_references(&metadata, &artifacts).await.unwrap();
+        let missing = missing.finish();
         assert_eq!(missing.status, "findings");
         assert_eq!(missing.missing_references, 1);
         assert_eq!(
-            persistence
-                .metadata
+            metadata
                 .trace(trace_id)
                 .await
                 .unwrap()

@@ -315,9 +315,11 @@ export function StandaloneSettingsView({ status, api }: { status: Status; api: L
           </Paper>
         </SimpleGrid>
       </SettingsGroup>
-      <SettingsGroup id="settings-account" title="Account">
-        <AccountConnectionCard api={api} />
-      </SettingsGroup>
+      {!isCluster && (
+        <SettingsGroup id="settings-account" title="Account">
+          <AccountConnectionCard api={api} />
+        </SettingsGroup>
+      )}
       <SettingsGroup id="settings-notarization" title="Sealing">
         <SettingsNotaries api={api} />
       </SettingsGroup>

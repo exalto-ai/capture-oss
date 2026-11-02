@@ -38,6 +38,7 @@ pub(crate) const S3_ARTIFACT_LOCATOR_PREFIX: &str = "artifact/v1/s3/";
 ///
 /// Malformed locators still classify as S3 so routing fails closed in this
 /// backend instead of interpreting them as legacy filesystem paths.
+#[cfg(test)]
 pub(crate) fn is_s3_artifact_locator(locator: &ArtifactLocator) -> bool {
     locator.as_stored().starts_with(S3_ARTIFACT_LOCATOR_PREFIX)
 }
@@ -128,6 +129,10 @@ impl S3ArtifactStore {
             prefix: config.prefix().to_owned(),
             operation_timeout: config.operation_timeout(),
         })
+    }
+
+    pub(crate) const fn backend_name(&self) -> &'static str {
+        "s3"
     }
 
     /// Performs one bounded, non-mutating probe inside the managed prefix.
@@ -913,11 +918,7 @@ mod tests {
     use url::Url;
 
     use super::*;
-    use crate::{
-        artifact_router::RoutedArtifactStore,
-        artifact_store::{FileSystemArtifactStore, conformance},
-        config::ArtifactStorageBackend,
-    };
+    use crate::artifact_store::conformance;
 
     /// Keep in step with the SeaweedFS image in the runtime Compose files.
     const SEAWEEDFS_TAG: &str = "4.47";
@@ -1383,63 +1384,6 @@ mod tests {
                 ..
             }
         ));
-
-        let filesystem_directory = tempfile::tempdir().unwrap();
-        let filesystem = FileSystemArtifactStore::new(
-            filesystem_directory.path().join("checkpoints"),
-            filesystem_directory.path().join("traces"),
-        );
-        let s3_writer = RoutedArtifactStore::new(
-            ArtifactStorageBackend::S3,
-            filesystem.clone(),
-            Some(store.clone()),
-        )
-        .unwrap();
-        let s3_key = ArtifactKey::new("trc-s3-switch", ArtifactKind::CaptureCheckpoint).unwrap();
-        let s3_record = s3_writer
-            .put(
-                &s3_key,
-                ArtifactSource::from_bytes(b"stored in S3".to_vec()),
-                12,
-            )
-            .await
-            .unwrap();
-        let filesystem_writer = RoutedArtifactStore::new(
-            ArtifactStorageBackend::Filesystem,
-            filesystem,
-            Some(store.clone()),
-        )
-        .unwrap();
-        assert_eq!(
-            filesystem_writer
-                .read_verified(&s3_record, 12)
-                .await
-                .unwrap()
-                .into_bytes()
-                .await
-                .unwrap(),
-            b"stored in S3"
-        );
-        let filesystem_key =
-            ArtifactKey::new("trc-filesystem-switch", ArtifactKind::TracePackage).unwrap();
-        let filesystem_record = filesystem_writer
-            .put(
-                &filesystem_key,
-                ArtifactSource::from_bytes(b"stored on disk".to_vec()),
-                14,
-            )
-            .await
-            .unwrap();
-        assert_eq!(
-            s3_writer
-                .read_verified(&filesystem_record, 14)
-                .await
-                .unwrap()
-                .into_bytes()
-                .await
-                .unwrap(),
-            b"stored on disk"
-        );
 
         let missing_key =
             ArtifactKey::new("trc-s3-deleted", ArtifactKind::CaptureCheckpoint).unwrap();

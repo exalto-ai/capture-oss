@@ -413,6 +413,7 @@ function View({
           navigate={navigate}
           hideActivity={desktopShell}
           emptyAction={desktopBridge.tracesEmptyAction}
+          sharing={status.runtime_profile !== 'cluster'}
         />
       );
     case 'activity':
