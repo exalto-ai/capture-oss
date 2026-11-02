@@ -212,30 +212,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/v1/session": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Start a dashboard session
-         * @description Exchanges configured HTTP Basic credentials for an HttpOnly browser session cookie. Returns without a cookie when admin authentication is disabled.
-         */
-        post: operations["start_session"];
-        /**
-         * End a dashboard session
-         * @description Deletes the current browser session and expires its local cookie.
-         */
-        delete: operations["end_session"];
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/v1/settings/auto-seal": {
         parameters: {
             query?: never;
@@ -961,14 +937,6 @@ export interface operations {
                     "application/json": components["schemas"]["AccountConnectionResponse"];
                 };
             };
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -998,14 +966,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AccountConnectionStartedResponse"];
-                };
-            };
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
             409: {
@@ -1042,14 +1002,6 @@ export interface operations {
                 };
                 content?: never;
             };
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -1085,14 +1037,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AccountConnectionResponse"];
-                };
-            };
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
             404: {
@@ -1148,14 +1092,6 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -1181,14 +1117,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["NotariesResponse"];
-                };
-            };
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
             500: {
@@ -1237,14 +1165,6 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
             500: {
                 headers: {
                     [name: string]: unknown;
@@ -1272,14 +1192,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TechnicalOperation"];
-                };
-            };
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
             404: {
@@ -1317,82 +1229,6 @@ export interface operations {
                     "application/json": components["schemas"]["ProvidersResponse"];
                 };
             };
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-        };
-    };
-    start_session: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Dashboard access established */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-        };
-    };
-    end_session: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Dashboard session ended */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
         };
     };
     auto_seal_setting: {
@@ -1410,14 +1246,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AutoSealSettingResponse"];
-                };
-            };
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
             503: {
@@ -1449,14 +1277,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AutoSealSettingResponse"];
-                };
-            };
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
             409: {
@@ -1494,14 +1314,6 @@ export interface operations {
                     "application/json": components["schemas"]["CaptureSettingResponse"];
                 };
             };
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -1533,14 +1345,6 @@ export interface operations {
                     "application/json": components["schemas"]["CaptureSettingResponse"];
                 };
             };
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -1566,14 +1370,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["StatusResponse"];
-                };
-            };
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
             503: {
@@ -1624,14 +1420,6 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -1659,14 +1447,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TraceDetail"];
-                };
-            };
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
             404: {
@@ -1713,14 +1493,6 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -1756,14 +1528,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TraceContent"];
-                };
-            };
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
             404: {
@@ -1819,14 +1583,6 @@ export interface operations {
                     "application/json": components["schemas"]["NotarizationRequest"];
                 };
             };
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -1870,14 +1626,6 @@ export interface operations {
                 };
                 content: {
                     "application/vnd.exalto.notary.trace-package+zip": number[];
-                };
-            };
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
             404: {
@@ -1934,14 +1682,6 @@ export interface operations {
                 };
             };
             400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            401: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -2023,14 +1763,6 @@ export interface operations {
                 };
             };
             400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            401: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -2123,14 +1855,6 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
             402: {
                 headers: {
                     [name: string]: unknown;
@@ -2190,14 +1914,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["VerificationResult"];
-                };
-            };
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
             404: {
@@ -2267,14 +1983,6 @@ export interface operations {
                 };
             };
             400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            401: {
                 headers: {
                     [name: string]: unknown;
                 };

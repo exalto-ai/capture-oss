@@ -15,7 +15,7 @@ use tokio::sync::watch;
 use crate::service_client::daemon_is_healthy;
 use crate::vault::{VaultSession, local_vault_mode, vault_for_service};
 
-/// Matches the standalone `captured` binary. JSON transcript parsing is
+/// Matches the `captured` server binary. JSON transcript parsing is
 /// bounded by the vendored spansy patch; the larger worker stack remains as
 /// containment, so an input-proportional stack consumer fails one request
 /// instead of aborting the app.
@@ -174,15 +174,12 @@ fn serve(vault: Arc<Vault>, stop: watch::Receiver<Stop>) -> anyhow::Result<()> {
     let mut drain = stop.clone();
     let mut abort = stop;
     let result = runtime.block_on(async move {
-        let host = captured::EmbeddedHost {
-            vault,
-            // A dropped sender also stops the service.
-            shutdown: Box::pin(async move {
-                let _ = drain.wait_for(|stop| *stop != Stop::Running).await;
-            }),
+        // A dropped sender also stops the service.
+        let shutdown = async move {
+            let _ = drain.wait_for(|stop| *stop != Stop::Running).await;
         };
         tokio::select! {
-            result = captured::run_embedded(None, host) => result,
+            result = crate::service::run(None, vault, shutdown) => result,
             _ = abort.wait_for(|stop| *stop == Stop::Abort) => {
                 Err(anyhow::anyhow!("stopped before it became ready"))
             }

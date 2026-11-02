@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Exalto Capture local administration API",
-    "description": "Loopback administration API. Routes are available without credentials by default; configure admin.auth to require HTTP Basic authentication.",
+    "description": "Loopback administration API of the desktop app's local capture service. It listens only on the configured loopback address and requires no credentials.",
     "license": {
       "name": "MIT",
       "identifier": "MIT"
@@ -98,16 +98,6 @@
               }
             }
           },
-          "401": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
           "503": {
             "description": "",
             "content": {
@@ -118,13 +108,7 @@
               }
             }
           }
-        },
-        "security": [
-          {},
-          {
-            "basicAuth": []
-          }
-        ]
+        }
       },
       "post": {
         "tags": [
@@ -154,16 +138,6 @@
               }
             }
           },
-          "401": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
           "409": {
             "description": "",
             "content": {
@@ -184,13 +158,7 @@
               }
             }
           }
-        },
-        "security": [
-          {},
-          {
-            "basicAuth": []
-          }
-        ]
+        }
       },
       "delete": {
         "tags": [
@@ -203,16 +171,6 @@
           "204": {
             "description": "Account disconnected; hosted sessions return to public access"
           },
-          "401": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
           "409": {
             "description": "",
             "content": {
@@ -233,13 +191,7 @@
               }
             }
           }
-        },
-        "security": [
-          {},
-          {
-            "basicAuth": []
-          }
-        ]
+        }
       }
     },
     "/v1/account/{request_id}": {
@@ -271,16 +223,6 @@
               }
             }
           },
-          "401": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
           "404": {
             "description": "",
             "content": {
@@ -301,13 +243,7 @@
               }
             }
           }
-        },
-        "security": [
-          {},
-          {
-            "basicAuth": []
-          }
-        ]
+        }
       }
     },
     "/v1/activity": {
@@ -411,16 +347,6 @@
               }
             }
           },
-          "401": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
           "503": {
             "description": "",
             "content": {
@@ -431,13 +357,7 @@
               }
             }
           }
-        },
-        "security": [
-          {},
-          {
-            "basicAuth": []
-          }
-        ]
+        }
       }
     },
     "/v1/notaries": {
@@ -455,16 +375,6 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/NotariesResponse"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }
@@ -489,13 +399,7 @@
               }
             }
           }
-        },
-        "security": [
-          {},
-          {
-            "basicAuth": []
-          }
-        ]
+        }
       }
     },
     "/v1/notaries/readiness": {
@@ -539,16 +443,6 @@
               }
             }
           },
-          "401": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
           "500": {
             "description": "",
             "content": {
@@ -559,13 +453,7 @@
               }
             }
           }
-        },
-        "security": [
-          {},
-          {
-            "basicAuth": []
-          }
-        ]
+        }
       }
     },
     "/v1/operations/{operation_id}": {
@@ -597,16 +485,6 @@
               }
             }
           },
-          "401": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
           "404": {
             "description": "",
             "content": {
@@ -627,13 +505,7 @@
               }
             }
           }
-        },
-        "security": [
-          {},
-          {
-            "basicAuth": []
-          }
-        ]
+        }
       }
     },
     "/v1/providers": {
@@ -654,104 +526,8 @@
                 }
               }
             }
-          },
-          "401": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
           }
-        },
-        "security": [
-          {},
-          {
-            "basicAuth": []
-          }
-        ]
-      }
-    },
-    "/v1/session": {
-      "post": {
-        "tags": [
-          "local-admin"
-        ],
-        "summary": "Start a dashboard session",
-        "description": "Exchanges configured HTTP Basic credentials for an HttpOnly browser session cookie. Returns without a cookie when admin authentication is disabled.",
-        "operationId": "start_session",
-        "responses": {
-          "204": {
-            "description": "Dashboard access established"
-          },
-          "401": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {},
-          {
-            "basicAuth": []
-          }
-        ]
-      },
-      "delete": {
-        "tags": [
-          "local-admin"
-        ],
-        "summary": "End a dashboard session",
-        "description": "Deletes the current browser session and expires its local cookie.",
-        "operationId": "end_session",
-        "responses": {
-          "204": {
-            "description": "Dashboard session ended"
-          },
-          "401": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {},
-          {
-            "basicAuth": []
-          }
-        ]
+        }
       }
     },
     "/v1/settings/auto-seal": {
@@ -773,16 +549,6 @@
               }
             }
           },
-          "401": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
           "503": {
             "description": "",
             "content": {
@@ -793,13 +559,7 @@
               }
             }
           }
-        },
-        "security": [
-          {},
-          {
-            "basicAuth": []
-          }
-        ]
+        }
       },
       "put": {
         "tags": [
@@ -829,16 +589,6 @@
               }
             }
           },
-          "401": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
           "409": {
             "description": "",
             "content": {
@@ -859,13 +609,7 @@
               }
             }
           }
-        },
-        "security": [
-          {},
-          {
-            "basicAuth": []
-          }
-        ]
+        }
       }
     },
     "/v1/settings/capture": {
@@ -887,16 +631,6 @@
               }
             }
           },
-          "401": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
           "503": {
             "description": "",
             "content": {
@@ -907,13 +641,7 @@
               }
             }
           }
-        },
-        "security": [
-          {},
-          {
-            "basicAuth": []
-          }
-        ]
+        }
       },
       "put": {
         "tags": [
@@ -943,16 +671,6 @@
               }
             }
           },
-          "401": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
           "503": {
             "description": "",
             "content": {
@@ -963,13 +681,7 @@
               }
             }
           }
-        },
-        "security": [
-          {},
-          {
-            "basicAuth": []
-          }
-        ]
+        }
       }
     },
     "/v1/status": {
@@ -991,16 +703,6 @@
               }
             }
           },
-          "401": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
           "503": {
             "description": "",
             "content": {
@@ -1011,13 +713,7 @@
               }
             }
           }
-        },
-        "security": [
-          {},
-          {
-            "basicAuth": []
-          }
-        ]
+        }
       }
     },
     "/v1/traces": {
@@ -1147,16 +843,6 @@
               }
             }
           },
-          "401": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
           "503": {
             "description": "",
             "content": {
@@ -1167,13 +853,7 @@
               }
             }
           }
-        },
-        "security": [
-          {},
-          {
-            "basicAuth": []
-          }
-        ]
+        }
       }
     },
     "/v1/traces/{trace_id}": {
@@ -1205,16 +885,6 @@
               }
             }
           },
-          "401": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
           "404": {
             "description": "",
             "content": {
@@ -1235,13 +905,7 @@
               }
             }
           }
-        },
-        "security": [
-          {},
-          {
-            "basicAuth": []
-          }
-        ]
+        }
       },
       "delete": {
         "tags": [
@@ -1274,16 +938,6 @@
               }
             }
           },
-          "401": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
           "409": {
             "description": "",
             "content": {
@@ -1304,13 +958,7 @@
               }
             }
           }
-        },
-        "security": [
-          {},
-          {
-            "basicAuth": []
-          }
-        ]
+        }
       }
     },
     "/v1/traces/{trace_id}/content": {
@@ -1338,16 +986,6 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/TraceContent"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }
@@ -1392,13 +1030,7 @@
               }
             }
           }
-        },
-        "security": [
-          {},
-          {
-            "basicAuth": []
-          }
-        ]
+        }
       }
     },
     "/v1/traces/{trace_id}/notarizations": {
@@ -1426,16 +1058,6 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/NotarizationRequest"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }
@@ -1470,13 +1092,7 @@
               }
             }
           }
-        },
-        "security": [
-          {},
-          {
-            "basicAuth": []
-          }
-        ]
+        }
       }
     },
     "/v1/traces/{trace_id}/package.llmtrace": {
@@ -1513,16 +1129,6 @@
               }
             }
           },
-          "401": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
           "404": {
             "description": "",
             "content": {
@@ -1563,13 +1169,7 @@
               }
             }
           }
-        },
-        "security": [
-          {},
-          {
-            "basicAuth": []
-          }
-        ]
+        }
       }
     },
     "/v1/traces/{trace_id}/share": {
@@ -1602,16 +1202,6 @@
             }
           },
           "400": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "401": {
             "description": "",
             "content": {
               "application/json": {
@@ -1671,13 +1261,7 @@
               }
             }
           }
-        },
-        "security": [
-          {},
-          {
-            "basicAuth": []
-          }
-        ]
+        }
       },
       "put": {
         "tags": [
@@ -1737,16 +1321,6 @@
               }
             }
           },
-          "401": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
           "402": {
             "description": "",
             "content": {
@@ -1817,13 +1391,7 @@
               }
             }
           }
-        },
-        "security": [
-          {},
-          {
-            "basicAuth": []
-          }
-        ]
+        }
       },
       "delete": {
         "tags": [
@@ -1863,16 +1431,6 @@
               }
             }
           },
-          "401": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
           "402": {
             "description": "",
             "content": {
@@ -1923,13 +1481,7 @@
               }
             }
           }
-        },
-        "security": [
-          {},
-          {
-            "basicAuth": []
-          }
-        ]
+        }
       }
     },
     "/v1/traces/{trace_id}/verify": {
@@ -1957,16 +1509,6 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/VerificationResult"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }
@@ -2021,13 +1563,7 @@
               }
             }
           }
-        },
-        "security": [
-          {},
-          {
-            "basicAuth": []
-          }
-        ]
+        }
       }
     },
     "/v1/verify": {
@@ -2088,16 +1624,6 @@
               }
             }
           },
-          "401": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
           "500": {
             "description": "",
             "content": {
@@ -2118,13 +1644,7 @@
               }
             }
           }
-        },
-        "security": [
-          {},
-          {
-            "basicAuth": []
-          }
-        ]
+        }
       }
     }
   },
@@ -3564,12 +3084,6 @@
             "minimum": 0
           }
         }
-      }
-    },
-    "securitySchemes": {
-      "basicAuth": {
-        "type": "http",
-        "scheme": "basic"
       }
     }
   },

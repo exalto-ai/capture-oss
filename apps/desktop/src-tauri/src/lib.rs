@@ -11,6 +11,7 @@ mod connections;
 mod credentials;
 mod daemon;
 mod models;
+pub mod service;
 mod service_client;
 mod symbols;
 mod tray;
