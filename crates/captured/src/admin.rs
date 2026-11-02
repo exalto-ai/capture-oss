@@ -415,16 +415,55 @@ fn embedded_dashboard_response(path: &str, desktop_embed: bool) -> Response {
 )]
 struct ApiDoc;
 
+/// Declares this host's optional HTTP Basic authentication. Shared engine
+/// routes leave authentication to the host, so every `/v1` route without its
+/// own declaration gets the same optional scheme and 401 response.
 struct SecurityAddon;
 
 impl Modify for SecurityAddon {
     fn modify(&self, openapi: &mut utoipa::openapi::OpenApi) {
-        use utoipa::openapi::security::{HttpAuthScheme, HttpBuilder, SecurityScheme};
+        use utoipa::openapi::{
+            ContentBuilder, Ref, ResponseBuilder,
+            security::{HttpAuthScheme, HttpBuilder, SecurityRequirement, SecurityScheme},
+        };
         if let Some(components) = openapi.components.as_mut() {
             components.add_security_scheme(
                 "basicAuth",
                 SecurityScheme::Http(HttpBuilder::new().scheme(HttpAuthScheme::Basic).build()),
             );
+        }
+        for (path, item) in openapi.paths.paths.iter_mut() {
+            if !path.starts_with("/v1/") {
+                continue;
+            }
+            for operation in [
+                &mut item.get,
+                &mut item.put,
+                &mut item.post,
+                &mut item.delete,
+            ]
+            .into_iter()
+            .flatten()
+            .filter(|operation| operation.security.is_none())
+            {
+                operation.security = Some(vec![
+                    SecurityRequirement::default(),
+                    SecurityRequirement::new("basicAuth", Vec::<String>::new()),
+                ]);
+                operation.responses.responses.insert(
+                    "401".to_owned(),
+                    ResponseBuilder::new()
+                        .description("")
+                        .content(
+                            "application/json",
+                            ContentBuilder::new()
+                                .schema(Some(Ref::from_schema_name("ErrorEnvelope")))
+                                .build(),
+                        )
+                        .build()
+                        .into(),
+                );
+            }
         }
     }
 }
