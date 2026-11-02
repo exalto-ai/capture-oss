@@ -1,11 +1,4 @@
-use std::{
-    path::PathBuf,
-    sync::{
-        Arc,
-        atomic::{AtomicU8, Ordering},
-    },
-    time::{SystemTime, UNIX_EPOCH},
-};
+use std::{path::PathBuf, sync::Arc};
 
 use anyhow::{Context, Result, bail};
 use axum::{
@@ -19,16 +12,14 @@ use axum::{
 use capture_engine::{
     admission::{Admission, AdmissionTicket, NoAdmission},
     capture_ledger::{CaptureLedger, LocalCaptureLedger},
+    capture_mode::NotaryDiscovery,
     notarization::{
         LocalNotarizationQueue, NotarizationContext, NotarizationQueue, spawn_notarization_worker,
     },
     providers::Provider,
-    proxy::{
-        CaptureContext, CaptureModeSource, CaptureSettings, NotaryTrust,
-        ReqwestDirectUpstreamConnector,
-    },
+    proxy::{CaptureContext, CaptureSettings, NotaryTrust, ReqwestDirectUpstreamConnector},
 };
-use tokio::sync::{Mutex, RwLock, watch};
+use tokio::sync::watch;
 
 use super::{
     auth,
@@ -48,16 +39,7 @@ use crate::{
     witness::WitnessedExchange,
 };
 
-#[cfg(test)]
-use std::sync::atomic::AtomicBool;
-
 const DESKTOP_CONTROL_STDIN_ENV: &str = "CAPTURED_DESKTOP_CONTROL_STDIN";
-
-#[cfg(test)]
-use crate::{
-    artifact_router::RoutedArtifactStore, artifact_store::FileSystemArtifactStore,
-    sqlite_metadata::SqliteMetadata, sqlite_metadata_store::SqliteMetadataStore,
-};
 
 #[derive(Debug)]
 pub struct ProxyArgs {
@@ -76,142 +58,31 @@ pub(crate) struct AppState {
     cluster_runtime: Option<Arc<ClusterRuntime>>,
 }
 
-/// The daemon's durable capture mode and the notary state it needs.
-pub(crate) struct CaptureSetting {
-    mode: AtomicU8,
-    notary: RwLock<Option<NotaryEndpoint>>,
-    transition: Mutex<()>,
+pub(crate) use capture_engine::capture_mode::CaptureSetting;
+
+/// Finds the trusted notary: the configured endpoint, the Registry pinned in
+/// shared metadata for a cluster replica, or the hosted Registry.
+pub(crate) struct DaemonNotaryDiscovery {
     config: Arc<CapturedConfig>,
-    persistence: Persistence,
     cluster_runtime: Option<Arc<ClusterRuntime>>,
-    #[cfg(test)]
-    fail_notary_initialization: AtomicBool,
 }
 
-fn encode_mode(mode: CaptureMode) -> u8 {
-    match mode {
-        CaptureMode::Off => 0,
-        CaptureMode::Witnessed => 1,
-        CaptureMode::Notarized => 2,
-    }
-}
-
-fn decode_mode(value: u8) -> CaptureMode {
-    match value {
-        1 => CaptureMode::Witnessed,
-        2 => CaptureMode::Notarized,
-        _ => CaptureMode::Off,
-    }
-}
-
-impl CaptureSetting {
+impl DaemonNotaryDiscovery {
     pub(crate) fn new(
-        mode: CaptureMode,
-        notary: Option<NotaryEndpoint>,
         config: Arc<CapturedConfig>,
-        persistence: Persistence,
         cluster_runtime: Option<Arc<ClusterRuntime>>,
     ) -> Self {
         Self {
-            mode: AtomicU8::new(encode_mode(mode)),
-            notary: RwLock::new(notary),
-            transition: Mutex::new(()),
             config,
-            persistence,
             cluster_runtime,
-            #[cfg(test)]
-            fail_notary_initialization: AtomicBool::new(false),
         }
-    }
-
-    pub(crate) fn mode(&self) -> CaptureMode {
-        decode_mode(self.mode.load(Ordering::Acquire))
-    }
-
-    /// Whether new requests are captured in either mode.
-    pub(crate) fn enabled(&self) -> bool {
-        self.mode() != CaptureMode::Off
-    }
-
-    async fn snapshot_mode(&self) -> Result<CaptureMode> {
-        // PostgreSQL is the shared daemon setting. Refreshing at admission
-        // lets replicas converge without keeping a competing process-local
-        // preference or letting a stale value execute the wrong request path.
-        if self.cluster_runtime.is_some() {
-            let persisted = self.persistence.metadata.capture_mode().await?;
-            if persisted != self.mode() {
-                if persisted != CaptureMode::Off {
-                    self.ensure_notary().await?;
-                }
-                self.mode.store(encode_mode(persisted), Ordering::Release);
-            }
-        }
-        Ok(self.mode())
-    }
-
-    async fn current_notary(&self) -> Result<NotaryEndpoint> {
-        self.notary
-            .read()
-            .await
-            .clone()
-            .context("capture mode has no initialized trusted notary")
-    }
-
-    async fn ensure_notary(&self) -> Result<NotaryEndpoint> {
-        #[cfg(test)]
-        if self.fail_notary_initialization.load(Ordering::Acquire) {
-            bail!("injected trusted notary initialization failure");
-        }
-        if let Some(notary) = self.notary.read().await.clone() {
-            return Ok(notary);
-        }
-        let notary = initialize_notary(&self.config, self.cluster_runtime.as_deref()).await?;
-        *self.notary.write().await = Some(notary.clone());
-        Ok(notary)
-    }
-
-    /// Resolve the same trusted endpoint used by capture and sealing without
-    /// changing the durable capture setting.
-    pub(crate) async fn trusted_notary(&self) -> Result<NotaryEndpoint> {
-        self.ensure_notary().await
-    }
-
-    pub(crate) async fn set_mode(&self, mode: CaptureMode) -> Result<CaptureMode> {
-        let _transition = self.transition.lock().await;
-        let persisted = self.persistence.metadata.capture_mode().await?;
-        // Both capture modes need trusted notary state. It is prepared before
-        // the durable transition, so a discovery or trust failure cannot
-        // leave the selected mode half-on.
-        if mode != CaptureMode::Off {
-            self.ensure_notary().await?;
-        }
-        if persisted == mode {
-            self.mode.store(encode_mode(persisted), Ordering::Release);
-            return Ok(persisted);
-        }
-        let authoritative = self
-            .persistence
-            .metadata
-            .set_capture_mode(mode, current_unix_ms()?)
-            .await?;
-        self.mode
-            .store(encode_mode(authoritative), Ordering::Release);
-        Ok(authoritative)
     }
 }
 
 #[async_trait::async_trait]
-impl CaptureModeSource for CaptureSetting {
-    async fn snapshot(&self) -> Result<CaptureMode> {
-        self.snapshot_mode().await
-    }
-
-    async fn notary(&self) -> Result<NotaryEndpoint> {
-        self.current_notary().await
-    }
-
-    async fn set_mode(&self, mode: CaptureMode) -> Result<CaptureMode> {
-        CaptureSetting::set_mode(self, mode).await
+impl NotaryDiscovery for DaemonNotaryDiscovery {
+    async fn discover(&self) -> Result<NotaryEndpoint> {
+        initialize_notary(&self.config, self.cluster_runtime.as_deref()).await
     }
 }
 
@@ -455,9 +326,12 @@ pub async fn run(args: ProxyArgs) -> Result<()> {
     let capture_mode = Arc::new(CaptureSetting::new(
         stored_mode,
         notary.clone(),
-        config.clone(),
-        persistence.clone(),
-        cluster_runtime.clone(),
+        persistence.metadata.clone(),
+        cluster_runtime.is_some(),
+        Arc::new(DaemonNotaryDiscovery::new(
+            config.clone(),
+            cluster_runtime.clone(),
+        )),
     ));
     let vault = Arc::new(vault);
     let admission: Arc<dyn Admission> = if hosted_admission {
@@ -927,15 +801,6 @@ async fn proxy(State(state): State<AppState>, request: Request) -> Response {
     capture_engine::proxy::handle(state.capture.clone(), request).await
 }
 
-fn current_unix_ms() -> Result<u64> {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .context("system clock is before the Unix epoch")?
-        .as_millis()
-        .try_into()
-        .context("current time does not fit in u64 milliseconds")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -948,39 +813,5 @@ mod tests {
         config.notary.endpoint = Some("tcp://127.0.0.1:7047".to_owned());
         config.notary.public_key = Some("02".to_owned() + &"ab".repeat(32));
         assert!(!hosted_admission_required(&config));
-    }
-
-    #[tokio::test]
-    async fn failed_enable_is_atomic_and_leaves_capture_off() {
-        let config = Arc::new(CapturedConfig::default());
-        let artifacts = RoutedArtifactStore::new(
-            config.storage.backend,
-            FileSystemArtifactStore::new("checkpoints", "traces"),
-            None,
-        )
-        .unwrap();
-        let persistence = Persistence {
-            metadata: Arc::new(SqliteMetadataStore::from_sqlite(
-                SqliteMetadata::open(std::path::Path::new(":memory:"), true).unwrap(),
-                true,
-            )),
-            artifacts: Arc::new(artifacts),
-        };
-        persistence
-            .metadata
-            .set_capture_mode(CaptureMode::Off, 1)
-            .await
-            .unwrap();
-        let mode = CaptureSetting::new(CaptureMode::Off, None, config, persistence.clone(), None);
-        mode.fail_notary_initialization
-            .store(true, Ordering::Release);
-        for requested in [CaptureMode::Witnessed, CaptureMode::Notarized] {
-            assert!(mode.set_mode(requested).await.is_err());
-            assert!(!mode.enabled());
-            assert_eq!(
-                persistence.metadata.capture_mode().await.unwrap(),
-                CaptureMode::Off
-            );
-        }
     }
 }

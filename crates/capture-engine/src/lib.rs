@@ -6,6 +6,7 @@ pub mod admission;
 pub mod api;
 pub mod artifact_store;
 pub mod capture_ledger;
+pub mod capture_mode;
 pub mod metadata;
 pub mod metadata_store;
 pub mod notarization;

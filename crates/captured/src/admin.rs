@@ -123,9 +123,12 @@ impl AdminState {
             None => Arc::new(crate::service::proxy::CaptureSetting::new(
                 persistence.metadata.capture_mode().await?,
                 config.notary_endpoint()?,
-                config.clone(),
-                persistence.clone(),
-                cluster_runtime.clone(),
+                persistence.metadata.clone(),
+                cluster_runtime.is_some(),
+                Arc::new(crate::service::proxy::DaemonNotaryDiscovery::new(
+                    config.clone(),
+                    cluster_runtime.clone(),
+                )),
             )),
         };
         let work_available = Arc::new(Notify::new());
