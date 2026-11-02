@@ -90,7 +90,28 @@ pub async fn run_daemon() -> Result<()> {
         None => {}
     }
     let _telemetry = telemetry::init("captured")?;
-    service::proxy::run(service::proxy::ProxyArgs { config: cli.config }).await
+    service::proxy::run(service::proxy::ProxyArgs {
+        config: cli.config,
+        embedded: None,
+    })
+    .await
+}
+
+pub use service::proxy::EmbeddedHost;
+
+/// Runs the local proxy and administration service inside an application's
+/// process until `host.shutdown` resolves, reading the same configuration
+/// file as the standalone service.
+///
+/// The caller owns process telemetry and the runtime. The service's tasks run
+/// on the caller's Tokio runtime, so give it worker stacks as large as the
+/// standalone binary's.
+pub async fn run_embedded(config: Option<PathBuf>, host: EmbeddedHost) -> Result<()> {
+    service::proxy::run(service::proxy::ProxyArgs {
+        config,
+        embedded: Some(host),
+    })
+    .await
 }
 
 /// Runs a bounded, report-only artifact reconciliation without initializing

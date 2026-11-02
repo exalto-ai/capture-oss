@@ -26,7 +26,6 @@ const run = (command, args, options = {}) =>
     env,
     ...options,
   });
-run(process.execPath, ['scripts/prepare-sidecar.mjs', 'debug']);
 // Explicit signing below avoids requiring release notarization/updater secrets.
 run('npm', ['exec', '--', 'tauri', 'build', '--debug', '--bundles', 'app', '--no-sign', '--ci']);
 const metadata = JSON.parse(
@@ -37,17 +36,7 @@ const metadata = JSON.parse(
   }),
 );
 const bundle = resolve(metadata.target_directory, 'debug/bundle/macos/Exalto Capture.app');
-const sidecar = resolve(bundle, 'Contents/MacOS/captured');
-if (!existsSync(sidecar)) throw new Error(`Missing bundled sidecar: ${sidecar}`);
-run('/usr/bin/codesign', [
-  '--force',
-  '--sign',
-  identity,
-  '--options',
-  'runtime',
-  '--timestamp=none',
-  sidecar,
-]);
+if (!existsSync(bundle)) throw new Error(`Missing application bundle: ${bundle}`);
 run('/usr/bin/codesign', [
   '--force',
   '--sign',

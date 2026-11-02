@@ -85,7 +85,7 @@ fn with_vault<T>(
         return Err("Unlock the vault before managing connections.".into());
     }
     let vault = Vault::open(None).map_err(|_| "Unlock the vault before managing connections.")?;
-    *held = Some(vault);
+    *held = Some(std::sync::Arc::new(vault));
     operation(held.as_ref().unwrap())
 }
 fn key_path(provider: Provider) -> Result<PathBuf, String> {

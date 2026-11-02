@@ -1,22 +1,40 @@
+//! The local capture service, run inside the app on its own Tokio runtime.
+
 use std::{
     sync::{
-        Mutex,
+        Arc, Mutex,
         atomic::{AtomicU64, AtomicUsize, Ordering},
     },
     time::Duration,
 };
 
-use capture_core::vault::CHILD_KEY_STDIN_ENV;
+use capture_core::vault::Vault;
 use tauri::Manager;
-use tauri_plugin_shell::{ShellExt, process::CommandChild};
+use tokio::sync::watch;
 
 use crate::service_client::daemon_is_healthy;
-use crate::vault::{VaultSession, local_vault_mode, vault_unlock_key_for_child};
+use crate::vault::{VaultSession, local_vault_mode, vault_for_service};
 
-const DESKTOP_CONTROL_STDIN_ENV: &str = "CAPTURED_DESKTOP_CONTROL_STDIN";
+/// Matches the standalone `captured` binary. JSON transcript parsing is
+/// bounded by the vendored spansy patch; the larger worker stack remains as
+/// containment, so an input-proportional stack consumer fails one request
+/// instead of aborting the app.
+const WORKER_STACK_BYTES: usize = 32 << 20;
+
+/// How long a stopped service's remaining tasks may take to finish.
+const RUNTIME_SHUTDOWN_GRACE: Duration = Duration::from_secs(5);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Stop {
+    Running,
+    /// Finish in-flight work, then stop.
+    Drain,
+    /// Stop now. Used only when the service never became ready.
+    Abort,
+}
 
 pub(super) struct ManagedDaemon {
-    child: CommandChild,
+    stop: watch::Sender<Stop>,
     generation: u64,
 }
 
@@ -67,6 +85,18 @@ impl DaemonProcess {
             )
         }
     }
+
+    /// Forgets the service once its runtime has stopped, unless a newer one
+    /// has already replaced it.
+    fn service_stopped(&self, generation: u64) {
+        if let Ok(mut child) = self.child.lock()
+            && child
+                .as_ref()
+                .is_some_and(|child| child.generation == generation)
+        {
+            *child = None;
+        }
+    }
 }
 
 pub(super) fn owned_child_present(process: &DaemonProcess) -> Result<bool, String> {
@@ -110,12 +140,12 @@ async fn wait_for_managed_daemon(process: &DaemonProcess) -> Result<(), String> 
             .map_err(|_| "daemon process state is unavailable")?
             .is_some();
         if !still_running {
-            return Err("The bundled local service exited before becoming ready.".into());
+            return Err("The local capture service stopped before becoming ready.".into());
         }
         if tokio::time::Instant::now() >= deadline {
             stop_managed_daemon_after_start_failure(process)?;
             return Err(
-                "The bundled local service did not become ready. Another service may be using the capture ports."
+                "The local capture service did not become ready. Another service may be using the capture ports."
                     .into(),
             );
         }
@@ -126,59 +156,72 @@ async fn wait_for_managed_daemon(process: &DaemonProcess) -> Result<(), String> 
 async fn reject_external_listener() -> Result<(), String> {
     if daemon_is_healthy().await {
         return Err(
-            "A compatible local service started outside Exalto Capture is already using the capture ports. Stop it before starting the bundled service."
+            "A compatible local service started outside Exalto Capture is already using the capture ports. Stop it before starting Exalto Capture's service."
                 .into(),
         );
     }
     Ok(())
 }
 
+/// Runs the service until it is told to stop, on a dedicated runtime so its
+/// worker stacks and shutdown are independent of the app's.
+fn serve(vault: Arc<Vault>, stop: watch::Receiver<Stop>) -> anyhow::Result<()> {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .thread_name("capture-service")
+        .thread_stack_size(WORKER_STACK_BYTES)
+        .build()?;
+    let mut drain = stop.clone();
+    let mut abort = stop;
+    let result = runtime.block_on(async move {
+        let host = captured::EmbeddedHost {
+            vault,
+            // A dropped sender also stops the service.
+            shutdown: Box::pin(async move {
+                let _ = drain.wait_for(|stop| *stop != Stop::Running).await;
+            }),
+        };
+        tokio::select! {
+            result = captured::run_embedded(None, host) => result,
+            _ = abort.wait_for(|stop| *stop == Stop::Abort) => {
+                Err(anyhow::anyhow!("stopped before it became ready"))
+            }
+        }
+    });
+    runtime.shutdown_timeout(RUNTIME_SHUTDOWN_GRACE);
+    result
+}
+
 fn spawn_daemon_inner(app: &tauri::AppHandle, process: &DaemonProcess) -> Result<(), String> {
-    let vault_session = app.state::<VaultSession>();
-    let mut child_initialization = vault_unlock_key_for_child(&vault_session)?;
-    let command = app
-        .shell()
-        .sidecar("captured")
-        .map_err(|error| format!("Could not locate the bundled local capture service: {error}"))?
-        .env(CHILD_KEY_STDIN_ENV, "1")
-        .env(DESKTOP_CONTROL_STDIN_ENV, "1");
-    let (mut events, mut child) = command
-        .spawn()
-        .map_err(|error| format!("Could not start the bundled local capture service: {error}"))?;
-
-    if child.write(&child_initialization).is_err() {
-        let _ = child.kill();
-        return Err("Could not initialize the bundled local capture service securely.".into());
-    }
-    child_initialization.fill(0);
-
+    let vault = vault_for_service(&app.state::<VaultSession>())?;
     let generation = process
         .generation
         .fetch_add(1, Ordering::AcqRel)
         .saturating_add(1);
+    let (stop, stop_receiver) = watch::channel(Stop::Running);
     *process
         .child
         .lock()
         .map_err(|_| "daemon process state is unavailable")? =
-        Some(ManagedDaemon { child, generation });
+        Some(ManagedDaemon { stop, generation });
 
     let app_handle = app.clone();
-    tauri::async_runtime::spawn(async move {
-        while let Some(event) = events.recv().await {
-            if matches!(
-                event,
-                tauri_plugin_shell::process::CommandEvent::Terminated(_)
-            ) {
-                let process = app_handle.state::<DaemonProcess>();
-                if let Ok(mut child) = process.child.lock()
-                    && process.generation.load(Ordering::Acquire) == generation
-                {
-                    *child = None;
-                }
-                break;
+    let spawned = std::thread::Builder::new()
+        .name("capture-service".into())
+        .spawn(move || {
+            if let Err(error) = serve(vault, stop_receiver) {
+                eprintln!("The local capture service stopped: {error:#}");
             }
-        }
-    });
+            app_handle
+                .state::<DaemonProcess>()
+                .service_stopped(generation);
+        });
+    if let Err(error) = spawned {
+        process.service_stopped(generation);
+        return Err(format!(
+            "Could not start the local capture service: {error}"
+        ));
+    }
     Ok(())
 }
 
@@ -206,7 +249,7 @@ fn stop_managed_daemon_after_start_failure(process: &DaemonProcess) -> Result<()
         .map_err(|_| "daemon process state is unavailable")?
         .take();
     if let Some(child) = child {
-        let _ = child.child.kill();
+        child.stop.send_replace(Stop::Abort);
     }
     Ok(())
 }
@@ -215,17 +258,14 @@ pub(super) async fn request_managed_daemon_shutdown_inner(
     process: &DaemonProcess,
 ) -> Result<bool, String> {
     {
-        let mut guard = process
+        let guard = process
             .child
             .lock()
             .map_err(|_| "daemon process state is unavailable")?;
-        let Some(child) = guard.as_mut() else {
+        let Some(child) = guard.as_ref() else {
             return Ok(false);
         };
-        child
-            .child
-            .write(b"shutdown\n")
-            .map_err(|error| format!("Could not request a safe local-service shutdown: {error}"))?;
+        child.stop.send_replace(Stop::Drain);
     }
     for _ in 0..6_000 {
         let stopped = process
@@ -328,5 +368,20 @@ mod tests {
 
         drop(update_block);
         assert!(process.ensure_starts_allowed().is_ok());
+    }
+
+    #[test]
+    fn a_stale_service_exit_never_forgets_its_replacement() {
+        let process = DaemonProcess::default();
+        let (stop, _receiver) = watch::channel(Stop::Running);
+        *process.child.lock().unwrap() = Some(ManagedDaemon {
+            stop,
+            generation: 2,
+        });
+
+        process.service_stopped(1);
+        assert!(owned_child_present(&process).unwrap());
+        process.service_stopped(2);
+        assert!(!owned_child_present(&process).unwrap());
     }
 }

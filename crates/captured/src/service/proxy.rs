@@ -1,4 +1,4 @@
-use std::{path::PathBuf, sync::Arc};
+use std::{future::Future, path::PathBuf, pin::Pin, sync::Arc};
 
 use anyhow::{Context, Result, bail};
 use axum::{
@@ -37,13 +37,23 @@ use crate::{
     witness::WitnessedExchange,
 };
 
-const DESKTOP_CONTROL_STDIN_ENV: &str = "CAPTURED_DESKTOP_CONTROL_STDIN";
-
-#[derive(Debug)]
 pub struct ProxyArgs {
     /// Versioned local captured configuration file. Defaults to the standard
     /// path, creating an editable default there on first use.
     pub(crate) config: Option<PathBuf>,
+    /// Set when an application runs the service in its own process.
+    pub(crate) embedded: Option<EmbeddedHost>,
+}
+
+/// What an application supplies to run the local service in its own process,
+/// as the desktop app does.
+pub struct EmbeddedHost {
+    /// The application's unlocked local vault. The service never opens or
+    /// initializes a vault itself, and never prompts.
+    pub vault: Arc<Vault>,
+    /// Resolves when the application wants the service to drain and stop.
+    /// The service installs no process signal handlers of its own.
+    pub shutdown: Pin<Box<dyn Future<Output = ()> + Send>>,
 }
 
 #[derive(Clone)]
@@ -261,8 +271,15 @@ pub async fn run(args: ProxyArgs) -> Result<()> {
             "hosted notary discovery requires CAPTURED_PLATFORM_API_KEY or CAPTURED_PLATFORM_API_KEY_FILE"
         );
     }
-    if cluster_identity.is_some() && std::env::var_os(DESKTOP_CONTROL_STDIN_ENV).is_some() {
-        bail!("desktop child-process control is unavailable in cluster mode");
+    let (embedded_vault, shutdown) = match args.embedded {
+        Some(EmbeddedHost { vault, shutdown }) => (Some(vault), shutdown),
+        None => (
+            None,
+            Box::pin(system_shutdown_signal()) as Pin<Box<dyn Future<Output = ()> + Send>>,
+        ),
+    };
+    if cluster_identity.is_some() && embedded_vault.is_some() {
+        bail!("an application-embedded local service cannot run in cluster mode");
     }
     let (persistence, cluster_runtime) = match cluster_identity {
         Some(identity) => {
@@ -272,12 +289,14 @@ pub async fn run(args: ProxyArgs) -> Result<()> {
         }
         None => (Persistence::open(&config).await?, None),
     };
-    let vault = if cluster_runtime.is_some() {
-        Vault::open_cluster().context("opening the shared cluster vault")?
-    } else {
-        Vault::open_or_init_interactive().context(
+    let vault = match embedded_vault {
+        Some(vault) => vault,
+        None if cluster_runtime.is_some() => {
+            Arc::new(Vault::open_cluster().context("opening the shared cluster vault")?)
+        }
+        None => Arc::new(Vault::open_or_init_interactive().context(
             "opening the local checkpoint vault (set CAPTURED_VAULT_PASSPHRASE_FILE before first start when an OS vault is unavailable)",
-        )?
+        )?),
     };
     if let Some(cluster_runtime) = &cluster_runtime {
         let vault_identity = vault.cluster_identity_sha256()?;
@@ -331,7 +350,6 @@ pub async fn run(args: ProxyArgs) -> Result<()> {
             cluster_runtime.clone(),
         )),
     ));
-    let vault = Arc::new(vault);
     let admission: Arc<dyn Admission> = if hosted_admission {
         Arc::new(HostedAdmission)
     } else {
@@ -457,7 +475,7 @@ pub async fn run(args: ProxyArgs) -> Result<()> {
         result = &mut admin_server => Exit::Admin(joined(result, "admin server")),
         result = &mut worker => Exit::Worker(joined(result, "notarization worker")),
         result = &mut heartbeat => Exit::Heartbeat(joined(result, "cluster replica heartbeat")),
-        () = shutdown_signal() => Exit::Requested,
+        () = shutdown => Exit::Requested,
     };
     if let Some(cluster_runtime) = &cluster_runtime {
         cluster_runtime.mark_draining();
@@ -656,17 +674,6 @@ pub(crate) fn router(state: AppState) -> Router {
     Router::new().fallback(any(proxy)).with_state(state)
 }
 
-async fn shutdown_signal() {
-    if std::env::var_os("CAPTURED_DESKTOP_CONTROL_STDIN").is_some() {
-        tokio::select! {
-            () = system_shutdown_signal() => unblock_desktop_control_stdin(),
-            () = desktop_shutdown_signal() => {},
-        }
-    } else {
-        system_shutdown_signal().await;
-    }
-}
-
 async fn system_shutdown_signal() {
     let interrupt = async {
         tokio::signal::ctrl_c()
@@ -687,59 +694,6 @@ async fn system_shutdown_signal() {
         () = terminate => {},
     }
 }
-
-async fn desktop_shutdown_signal() {
-    let command = tokio::task::spawn_blocking(|| {
-        use std::io::BufRead as _;
-        let mut line = String::new();
-        let read = std::io::stdin().lock().read_line(&mut line)?;
-        Ok::<_, std::io::Error>((read, line))
-    })
-    .await;
-    match command {
-        Ok(Ok((0, _))) => tracing::info!("desktop control pipe closed"),
-        Ok(Ok((_, line))) if line.trim_end_matches(['\r', '\n']) == "shutdown" => {
-            tracing::info!("desktop requested graceful shutdown");
-        }
-        Ok(Ok(_)) => {
-            tracing::warn!("ignoring an invalid desktop control command");
-            std::future::pending::<()>().await;
-        }
-        Ok(Err(_)) | Err(_) => {
-            tracing::warn!("desktop control pipe failed");
-            std::future::pending::<()>().await;
-        }
-    }
-}
-
-#[cfg(unix)]
-fn unblock_desktop_control_stdin() {
-    // SAFETY: the process is already shutting down. Closing its private
-    // desktop-control pipe releases the one blocking reader so the Tokio
-    // runtime cannot wait on that thread during teardown.
-    unsafe {
-        libc::close(libc::STDIN_FILENO);
-    }
-}
-
-#[cfg(windows)]
-fn unblock_desktop_control_stdin() {
-    use windows_sys::Win32::{
-        Foundation::CloseHandle,
-        System::Console::{GetStdHandle, STD_INPUT_HANDLE},
-    };
-    // SAFETY: the process is already shutting down and no further stdin reads
-    // are attempted after the desktop-control reader is released.
-    unsafe {
-        let handle = GetStdHandle(STD_INPUT_HANDLE);
-        if !handle.is_null() {
-            CloseHandle(handle);
-        }
-    }
-}
-
-#[cfg(not(any(unix, windows)))]
-fn unblock_desktop_control_stdin() {}
 
 async fn initialize_notary(
     config: &CapturedConfig,

@@ -1400,7 +1400,6 @@ dependencies = [
  "http 1.4.2",
  "http-body-util",
  "k256",
- "libc",
  "mime_guess",
  "reqwest 0.12.28",
  "rusqlite",
@@ -1422,7 +1421,6 @@ dependencies = [
  "url",
  "utoipa",
  "uuid",
- "windows-sys 0.61.2",
  "zeroize",
 ]
 

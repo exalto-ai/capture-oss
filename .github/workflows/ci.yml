@@ -52,7 +52,6 @@ jobs:
           cache: npm
           cache-dependency-path: apps/desktop/package-lock.json
       - run: npm --prefix apps/desktop ci
-      - run: npm --prefix apps/desktop run prepare:sidecar:debug
       - run: cargo clippy --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets -- -D warnings
       - run: npm --prefix apps/desktop exec -- tauri build --debug --bundles app -- --locked
 
@@ -76,7 +75,6 @@ jobs:
           cache: npm
           cache-dependency-path: apps/desktop/package-lock.json
       - run: npm --prefix apps/desktop ci
-      - run: npm --prefix apps/desktop run prepare:sidecar:debug
       - run: cargo clippy --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets -- -D warnings
       - run: npm --prefix apps/desktop exec -- tauri build --debug --no-bundle -- --locked
 

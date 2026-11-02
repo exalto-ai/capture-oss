@@ -2,7 +2,7 @@ use std::{
     fs,
     io::Write as _,
     path::{Path, PathBuf},
-    sync::Mutex,
+    sync::{Arc, Mutex},
 };
 
 use capture_core::vault::Vault;
@@ -10,8 +10,9 @@ use zeroize::Zeroizing;
 
 const ONBOARDING_MARKER: &str = "desktop-onboarding-v1";
 
+/// The unlocked vault, shared with the in-process capture service.
 #[derive(Default)]
-pub(super) struct VaultSession(pub(super) Mutex<Option<Vault>>);
+pub(super) struct VaultSession(pub(super) Mutex<Option<Arc<Vault>>>);
 
 pub(super) fn local_vault_mode() -> (bool, String) {
     match Vault::status() {
@@ -95,9 +96,7 @@ fn validate_new_passphrase(passphrase: &str) -> Result<(), String> {
     Ok(())
 }
 
-pub(super) fn vault_unlock_key_for_child(
-    session: &VaultSession,
-) -> Result<Zeroizing<Vec<u8>>, String> {
+pub(super) fn vault_for_service(session: &VaultSession) -> Result<Arc<Vault>, String> {
     match Vault::status() {
         Ok("OS vault") => {
             let mut held = session
@@ -105,20 +104,19 @@ pub(super) fn vault_unlock_key_for_child(
                 .lock()
                 .map_err(|_| "capture vault session is unavailable".to_string())?;
             if held.is_none() {
-                *held = Some(Vault::open(None).map_err(|error| {
+                *held = Some(Arc::new(Vault::open(None).map_err(|error| {
                     format!(
                         "Could not unlock the capture key with the OS credential vault: {error}"
                     )
-                })?);
+                })?));
             }
-            Ok(held.as_ref().unwrap().child_unlock_key_line())
+            Ok(Arc::clone(held.as_ref().unwrap()))
         }
         Ok("passphrase vault") => session
             .0
             .lock()
             .map_err(|_| "capture vault session is unavailable".to_string())?
-            .as_ref()
-            .map(Vault::child_unlock_key_line)
+            .clone()
             .ok_or_else(|| {
                 "Enter the capture vault passphrase before starting the service.".into()
             }),
@@ -154,7 +152,8 @@ pub(super) fn configure_vault(
             *vault_session
                 .0
                 .lock()
-                .map_err(|_| "capture vault session is unavailable".to_string())? = Some(vault);
+                .map_err(|_| "capture vault session is unavailable".to_string())? =
+                Some(Arc::new(vault));
             Ok(())
         }
         "passphrase" => {
@@ -168,7 +167,8 @@ pub(super) fn configure_vault(
             *vault_session
                 .0
                 .lock()
-                .map_err(|_| "capture vault session is unavailable".to_string())? = Some(vault);
+                .map_err(|_| "capture vault session is unavailable".to_string())? =
+                Some(Arc::new(vault));
             Ok(())
         }
         _ => Err("Choose Keychain protection or a passphrase.".into()),
@@ -201,6 +201,6 @@ pub(super) fn unlock_vault(
     *vault_session
         .0
         .lock()
-        .map_err(|_| "capture vault session is unavailable".to_string())? = Some(vault);
+        .map_err(|_| "capture vault session is unavailable".to_string())? = Some(Arc::new(vault));
     Ok(())
 }

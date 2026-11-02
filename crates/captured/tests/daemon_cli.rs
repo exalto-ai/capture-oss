@@ -2,7 +2,6 @@
 
 use std::{
     fs,
-    io::Write as _,
     net::{IpAddr, Ipv4Addr, SocketAddr},
     os::unix::fs::PermissionsExt as _,
     process::{Child, Command, Stdio},
@@ -22,12 +21,11 @@ struct Daemon(Option<Child>);
 impl Daemon {
     fn graceful_shutdown(&mut self) {
         let child = self.0.as_mut().unwrap();
-        child
-            .stdin
-            .as_mut()
-            .unwrap()
-            .write_all(b"shutdown\n")
+        let terminated = Command::new("kill")
+            .args(["-TERM", &child.id().to_string()])
+            .status()
             .unwrap();
+        assert!(terminated.success(), "could not signal the daemon");
         for _ in 0..200 {
             if child.try_wait().unwrap().is_some() {
                 let status = self.0.take().unwrap().wait().unwrap();
@@ -36,7 +34,7 @@ impl Daemon {
             }
             std::thread::sleep(Duration::from_millis(25));
         }
-        panic!("daemon did not drain after its desktop control request");
+        panic!("daemon did not drain after SIGTERM");
     }
 }
 
@@ -127,8 +125,7 @@ async fn daemon_uses_the_versioned_loopback_api_for_reads_and_mutations() {
         .env("XDG_CONFIG_HOME", &isolated_config)
         .env("XDG_DATA_HOME", &isolated_data)
         .env("CAPTURED_VAULT_PASSPHRASE_FILE", &passphrase_path)
-        .env("CAPTURED_DESKTOP_CONTROL_STDIN", "1")
-        .stdin(Stdio::piped())
+        .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()

@@ -286,7 +286,6 @@ pub fn run() {
         .manage(VaultSession::default())
         .manage(ExitState::default())
         .manage(DesktopUpdaterState::default())
-        .plugin(tauri_plugin_shell::init())
         .plugin(
             tauri_plugin_updater::Builder::new()
                 .pubkey(include_str!("../../../../config/updater-public-key.txt").trim())

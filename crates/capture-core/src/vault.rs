@@ -2,7 +2,7 @@
 
 use std::{
     env, fs,
-    io::{BufRead as _, Read as _, Write as _},
+    io::{Read as _, Write as _},
     path::{Path, PathBuf},
 };
 
@@ -26,9 +26,6 @@ const SERVICE: &str = "ai.exalto.capture";
 const PASSPHRASE_FILE_ENV: &str = "CAPTURED_VAULT_PASSPHRASE_FILE";
 /// Private 32-byte key file shared by every replica in cluster mode.
 pub const CLUSTER_KEY_FILE_ENV: &str = "CAPTURED_CLUSTER_VAULT_KEY_FILE";
-/// Requests that a supervised child read its already-unlocked vault key from
-/// stdin instead of contacting the OS credential store itself.
-pub const CHILD_KEY_STDIN_ENV: &str = "CAPTURED_VAULT_KEY_STDIN";
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -62,9 +59,6 @@ impl Vault {
     /// Opens a vault, prompting for a passphrase only when that mode was
     /// explicitly configured.
     pub fn open_interactive() -> Result<Self> {
-        if env::var_os(CHILD_KEY_STDIN_ENV).is_some() {
-            return Self::open(None);
-        }
         let config = read_config(&config_path()?)?;
         match config.mode {
             VaultMode::Os => Self::open(None),
@@ -150,34 +144,19 @@ impl Vault {
 
     /// Opens an initialized vault. Passphrase vaults require the passphrase.
     pub fn open(passphrase: Option<&str>) -> Result<Self> {
-        let config_path = config_path()?;
-        let child_key = if env::var_os(CHILD_KEY_STDIN_ENV).is_some() {
-            Some(read_child_key_from_stdin()?)
-        } else {
-            None
-        };
-        Self::open_at(&config_path, passphrase, child_key)
+        Self::open_at(&config_path()?, passphrase)
     }
 
-    fn open_at(
-        config_path: &Path,
-        passphrase: Option<&str>,
-        child_key: Option<[u8; 32]>,
-    ) -> Result<Self> {
+    fn open_at(config_path: &Path, passphrase: Option<&str>) -> Result<Self> {
         let config = read_config(config_path)?;
-        let key = if let Some(child_key) = child_key {
-            Zeroizing::new(child_key)
-        } else {
-            match config.mode {
-                VaultMode::Os => Zeroizing::new(read_os_key()?),
-                VaultMode::Passphrase => derive_passphrase_key(
-                    passphrase
-                        .ok_or_else(|| anyhow::anyhow!("this vault requires a passphrase"))?,
-                    &config
-                        .salt_hex
-                        .ok_or_else(|| anyhow::anyhow!("passphrase vault is missing a salt"))?,
-                )?,
-            }
+        let key = match config.mode {
+            VaultMode::Os => Zeroizing::new(read_os_key()?),
+            VaultMode::Passphrase => derive_passphrase_key(
+                passphrase.ok_or_else(|| anyhow::anyhow!("this vault requires a passphrase"))?,
+                &config
+                    .salt_hex
+                    .ok_or_else(|| anyhow::anyhow!("passphrase vault is missing a salt"))?,
+            )?,
         };
         if matches!(config.mode, VaultMode::Passphrase) {
             let key_check = read_key_check(config_path)?
@@ -289,17 +268,6 @@ impl Vault {
     /// the vault or reading key material.
     pub fn configuration_path() -> Result<PathBuf> {
         config_path()
-    }
-
-    /// Encodes this already-unlocked key for a supervised child process.
-    ///
-    /// The caller must send the returned bytes only through a private
-    /// anonymous pipe connected to the child's stdin. The zeroizing wrapper
-    /// clears the temporary buffer when it is dropped.
-    pub fn child_unlock_key_line(&self) -> Zeroizing<Vec<u8>> {
-        let mut line = hex::encode(self.key).into_bytes();
-        line.push(b'\n');
-        Zeroizing::new(line)
     }
 
     /// Returns the configured local vault mode without exposing key material.
@@ -484,25 +452,6 @@ fn write_os_key(key: &[u8; 32]) -> Result<()> {
         .context("storing the Notary key in the OS vault")
 }
 
-fn read_child_key_from_stdin() -> Result<[u8; 32]> {
-    let mut line = Zeroizing::new(String::new());
-    std::io::stdin()
-        .lock()
-        .read_line(&mut line)
-        .context("reading the desktop-provided vault key from stdin")?;
-    decode_child_key_line(line.trim_end_matches(['\r', '\n']))
-}
-
-fn decode_child_key_line(value: &str) -> Result<[u8; 32]> {
-    if value.len() != 64 {
-        bail!("the desktop-provided vault key has an invalid length");
-    }
-    let mut key = [0; 32];
-    hex::decode_to_slice(value, &mut key)
-        .map_err(|_| anyhow::anyhow!("the desktop-provided vault key is invalid"))?;
-    Ok(key)
-}
-
 fn derive_passphrase_key(passphrase: &str, salt_hex: &str) -> Result<Zeroizing<[u8; 32]>> {
     let salt = hex::decode(salt_hex)?;
     let mut key = Zeroizing::new([0; 32]);
@@ -632,19 +581,6 @@ mod tests {
     }
 
     #[test]
-    fn supervised_child_key_line_round_trips_without_debug_formatting() {
-        let vault = Vault::test_only();
-        let line = vault.child_unlock_key_line();
-        assert_eq!(line.len(), 65);
-        assert_eq!(line.last(), Some(&b'\n'));
-        assert_eq!(
-            decode_child_key_line("07".repeat(32).as_str()).unwrap(),
-            [7; 32]
-        );
-        assert!(decode_child_key_line("07").is_err());
-    }
-
-    #[test]
     fn passphrase_key_check_rejects_the_wrong_derived_key() {
         let encoded = create_key_check(&[7; 32]).unwrap();
         verify_key_check(&[7; 32], &encoded).unwrap();
@@ -691,20 +627,20 @@ mod tests {
                 0o600
             );
         }
-        assert!(Vault::open_at(&config_path, Some("wrong horse"), None).is_err());
+        assert!(Vault::open_at(&config_path, Some("wrong horse")).is_err());
 
         let mut tampered = hex::decode(&original_check).unwrap();
         *tampered.last_mut().unwrap() ^= 1;
         fs::write(&check_path, hex::encode(tampered)).unwrap();
-        assert!(Vault::open_at(&config_path, Some("correct horse"), None).is_err());
+        assert!(Vault::open_at(&config_path, Some("correct horse")).is_err());
 
         fs::write(&check_path, original_check).unwrap();
-        let reopened = Vault::open_at(&config_path, Some("correct horse"), None).unwrap();
+        let reopened = Vault::open_at(&config_path, Some("correct horse")).unwrap();
         assert_eq!(reopened.decrypt(&encrypted).unwrap(), b"private checkpoint");
         drop(reopened);
 
         fs::remove_file(&check_path).unwrap();
-        assert!(Vault::open_at(&config_path, Some("correct horse"), None).is_err());
+        assert!(Vault::open_at(&config_path, Some("correct horse")).is_err());
     }
 
     #[cfg(unix)]

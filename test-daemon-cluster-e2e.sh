@@ -192,12 +192,6 @@ if [[ $profile == full ]]; then
     echo "server daemon started without an injected API key" >&2
     exit 1
   fi
-  if "${compose[@]}" run --rm --no-deps \
-      -e CAPTURED_DESKTOP_CONTROL_STDIN=1 daemon-a \
-      --config /state/config-cluster-a.toml </dev/null >/dev/null 2>&1; then
-    echo "server daemon accepted desktop process control" >&2
-    exit 1
-  fi
   if "${compose[@]}" run --rm --no-deps --entrypoint /bin/sh daemon-a -ec \
       'dd if=/dev/zero of=/tmp/wrong-vault.key bs=32 count=1 status=none; chmod 600 /tmp/wrong-vault.key; export CAPTURED_CLUSTER_VAULT_KEY_FILE=/tmp/wrong-vault.key; exec captured --config /state/config-cluster-a.toml' \
       >/dev/null 2>&1; then

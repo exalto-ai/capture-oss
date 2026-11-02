@@ -59,8 +59,9 @@ npm --prefix apps/admin-dashboard ci
 npm --prefix apps/admin-dashboard run build
 ```
 
-The desktop app builds on macOS and Linux. It is its own Cargo workspace, so
-building the CLI and daemon never requires WebKitGTK. Install the
+The desktop app builds on macOS and Linux and runs the local service
+in-process. It is its own Cargo workspace, so building the CLI and daemon never
+requires WebKitGTK. Install the
 [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/), then build a
 macOS `.app` bundle with:
 
@@ -73,7 +74,6 @@ On Linux, build the application without a bundle:
 
 ```bash
 npm --prefix apps/desktop ci
-npm --prefix apps/desktop run prepare:sidecar:debug
 npm --prefix apps/desktop exec -- tauri build --debug --no-bundle
 ```
 
