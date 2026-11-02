@@ -1313,6 +1313,7 @@ name = "capture-engine"
 version = "0.0.1"
 dependencies = [
  "anyhow",
+ "argon2",
  "async-trait",
  "axum",
  "base64 0.22.1",
@@ -1334,6 +1335,7 @@ dependencies = [
  "thiserror 2.0.19",
  "tokio",
  "tokio-stream",
+ "toml",
  "tracing",
  "url",
  "utoipa",

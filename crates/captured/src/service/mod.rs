@@ -1,4 +1,3 @@
-pub(crate) mod config;
 pub(crate) mod proxy;
 
 pub(crate) use capture_engine::platform::{

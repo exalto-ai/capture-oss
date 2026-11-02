@@ -22,15 +22,13 @@ use capture_engine::{
 use tokio::sync::watch;
 
 use super::{
-    auth,
-    config::load_captured_config,
-    http_client_builder,
+    auth, http_client_builder,
     registry::{discover_notary, fetch_registry_from, refresh_registry, resolve_notary},
 };
 use crate::{
     CaptureCheckpoint,
     cluster_runtime::{ClusterCaptureLedger, ClusterNotarizationQueue, ClusterRuntime, Lifecycle},
-    config::CapturedConfig,
+    config::{CapturedConfig, load_captured_config},
     metadata::{CaptureMode, RegistrySnapshot},
     metadata_store::MetadataStoreError,
     persistence::Persistence,

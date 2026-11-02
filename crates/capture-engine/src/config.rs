@@ -7,18 +7,21 @@ use std::{
     io::{ErrorKind, Read as _, Write as _},
     net::SocketAddr,
     path::{Path, PathBuf},
+    time::Duration,
 };
 
-use anyhow::{Context, Result, bail, ensure};
+use anyhow::{Context, Result, anyhow, bail, ensure};
 use argon2::{Argon2, PasswordHash, PasswordHasher as _, password_hash::SaltString};
-pub use capture_engine::providers::{ProviderConfig, ProvidersConfig};
 use k256::ecdsa::VerifyingKey;
 use serde::{Deserialize, Serialize};
 
-use crate::{
+use capture_core::{
     DEFAULT_MAX_ATTESTABLE_HTTP_BYTES, DEFAULT_NOTARY_MAX_FRAME_BYTES, registry::NotaryEndpoint,
-    s3_artifact_store::S3ArtifactStoreConfig, sha256_hex,
+    sha256_hex,
 };
+
+use crate::artifact_store::{ArtifactResult, invalid};
+pub use crate::providers::{ProviderConfig, ProvidersConfig};
 
 /// The versioned identifier for a captured configuration file.
 pub const CONFIG_FORMAT: &str = "ecp/captured-config/v1";
@@ -179,7 +182,7 @@ pub struct S3StorageConfig {
 }
 
 impl S3StorageConfig {
-    pub(crate) fn artifact_store_config(&self) -> Result<S3ArtifactStoreConfig> {
+    pub fn artifact_store_config(&self) -> Result<S3ArtifactStoreConfig> {
         let endpoint = self
             .endpoint
             .as_deref()
@@ -193,29 +196,206 @@ impl S3StorageConfig {
             self.prefix.clone(),
             self.force_path_style,
             self.allow_insecure_http,
-            std::time::Duration::from_secs(self.connect_timeout_seconds),
-            std::time::Duration::from_secs(self.operation_timeout_seconds),
+            Duration::from_secs(self.connect_timeout_seconds),
+            Duration::from_secs(self.operation_timeout_seconds),
         )
         .map_err(|error| anyhow::Error::new(error).context("storage.s3 configuration is invalid"))
     }
 }
 
-pub(crate) struct SecretS3Credentials {
+/// Non-secret connection and namespace settings for daemon-private objects.
+#[derive(Clone, Debug)]
+pub struct S3ArtifactStoreConfig {
+    endpoint: Option<url::Url>,
+    region: String,
+    bucket: String,
+    prefix: String,
+    force_path_style: bool,
+    connect_timeout: Duration,
+    operation_timeout: Duration,
+}
+
+impl S3ArtifactStoreConfig {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        endpoint: Option<url::Url>,
+        region: String,
+        bucket: String,
+        prefix: String,
+        force_path_style: bool,
+        allow_insecure_http: bool,
+        connect_timeout: Duration,
+        operation_timeout: Duration,
+    ) -> ArtifactResult<Self> {
+        validate_s3_config(
+            endpoint.as_ref(),
+            &region,
+            &bucket,
+            allow_insecure_http,
+            connect_timeout,
+            operation_timeout,
+        )?;
+        Ok(Self {
+            endpoint,
+            region,
+            bucket,
+            prefix: normalize_s3_prefix(&prefix)?,
+            force_path_style,
+            connect_timeout,
+            operation_timeout,
+        })
+    }
+
+    pub fn endpoint(&self) -> Option<&url::Url> {
+        self.endpoint.as_ref()
+    }
+
+    pub fn region(&self) -> &str {
+        &self.region
+    }
+
+    pub fn bucket(&self) -> &str {
+        &self.bucket
+    }
+
+    /// The validated prefix, without leading or trailing slashes.
+    pub fn prefix(&self) -> &str {
+        &self.prefix
+    }
+
+    pub fn force_path_style(&self) -> bool {
+        self.force_path_style
+    }
+
+    pub fn connect_timeout(&self) -> Duration {
+        self.connect_timeout
+    }
+
+    pub fn operation_timeout(&self) -> Duration {
+        self.operation_timeout
+    }
+}
+
+fn validate_s3_config(
+    endpoint: Option<&url::Url>,
+    region: &str,
+    bucket: &str,
+    allow_insecure_http: bool,
+    connect_timeout: Duration,
+    operation_timeout: Duration,
+) -> ArtifactResult<()> {
+    if let Some(endpoint) = endpoint {
+        if endpoint.cannot_be_a_base()
+            || endpoint.host_str().is_none()
+            || !endpoint.username().is_empty()
+            || endpoint.password().is_some()
+            || endpoint.path() != "/"
+            || endpoint.query().is_some()
+            || endpoint.fragment().is_some()
+        {
+            return Err(invalid(
+                "invalid_s3_endpoint",
+                anyhow!(
+                    "S3 endpoint must be an origin URL without credentials, path, query, or fragment"
+                ),
+            ));
+        }
+        match endpoint.scheme() {
+            "https" => {}
+            "http" if allow_insecure_http => {}
+            "http" => {
+                return Err(invalid(
+                    "insecure_s3_endpoint",
+                    anyhow!("HTTP S3 endpoints require explicit insecure-local opt-in"),
+                ));
+            }
+            _ => {
+                return Err(invalid(
+                    "invalid_s3_endpoint",
+                    anyhow!("S3 endpoint must use HTTPS or explicitly allowed HTTP"),
+                ));
+            }
+        }
+    } else if allow_insecure_http {
+        return Err(invalid(
+            "invalid_s3_endpoint",
+            anyhow!("allow_insecure_http requires an explicit S3 endpoint"),
+        ));
+    }
+    if !(1..=128).contains(&region.len())
+        || !safe_s3_namespace_component(region)
+        || !(1..=255).contains(&bucket.len())
+        || !safe_s3_namespace_component(bucket)
+    {
+        return Err(invalid(
+            "invalid_s3_namespace",
+            anyhow!("S3 region or bucket is outside its safe length/character bounds"),
+        ));
+    }
+    if connect_timeout.is_zero()
+        || connect_timeout > Duration::from_secs(300)
+        || operation_timeout.is_zero()
+        || operation_timeout > Duration::from_secs(300)
+    {
+        return Err(invalid(
+            "invalid_s3_timeout",
+            anyhow!("S3 connect and operation timeouts must be between 1 and 300 seconds"),
+        ));
+    }
+    Ok(())
+}
+
+fn normalize_s3_prefix(prefix: &str) -> ArtifactResult<String> {
+    if prefix.len() > 512 {
+        return Err(invalid(
+            "invalid_s3_prefix",
+            anyhow!("S3 prefix exceeds 512 bytes"),
+        ));
+    }
+    let prefix = prefix.trim_matches('/');
+    if prefix.is_empty() {
+        return Ok(String::new());
+    }
+    if prefix.contains("//")
+        || prefix.contains('\\')
+        || prefix.split('/').any(|part| {
+            part.is_empty()
+                || matches!(part, "." | "..")
+                || !part
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+        })
+    {
+        return Err(invalid(
+            "invalid_s3_prefix",
+            anyhow!("S3 prefix must contain only safe, non-empty path segments"),
+        ));
+    }
+    Ok(prefix.to_owned())
+}
+
+fn safe_s3_namespace_component(value: &str) -> bool {
+    value
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+}
+
+pub struct SecretS3Credentials {
     access_key_id: String,
     secret_access_key: String,
     session_token: Option<String>,
 }
 
 impl SecretS3Credentials {
-    pub(crate) fn access_key_id(&self) -> &str {
+    pub fn access_key_id(&self) -> &str {
         &self.access_key_id
     }
 
-    pub(crate) fn secret_access_key(&self) -> &str {
+    pub fn secret_access_key(&self) -> &str {
         &self.secret_access_key
     }
 
-    pub(crate) fn session_token(&self) -> Option<&str> {
+    pub fn session_token(&self) -> Option<&str> {
         self.session_token.as_deref()
     }
 }
@@ -306,10 +486,10 @@ pub enum PostgresSslMode {
 }
 
 /// A PostgreSQL connection URL whose debug output never contains credentials.
-pub(crate) struct SecretDatabaseUrl(String);
+pub struct SecretDatabaseUrl(String);
 
 impl SecretDatabaseUrl {
-    pub(crate) fn expose(&self) -> &str {
+    pub fn expose(&self) -> &str {
         &self.0
     }
 }
@@ -391,7 +571,7 @@ impl CapturedConfig {
     /// Loads only enough configuration for the one-shot metadata migrator.
     /// Unrelated listener, vault, provider, and notary settings are neither
     /// initialized nor validated by that command.
-    pub(crate) fn load_for_metadata_migration(path: &Path) -> Result<Self> {
+    pub fn load_for_metadata_migration(path: &Path) -> Result<Self> {
         let source = fs::read_to_string(path)
             .with_context(|| format!("reading captured configuration {}", path.display()))?;
         let config: Self = toml::from_str(&source)
@@ -652,7 +832,7 @@ impl CapturedConfig {
 
     /// Identifies the exact non-secret cluster configuration and shared vault
     /// key expected by every replica.
-    pub(crate) fn cluster_compatibility_sha256(&self, vault_identity: &str) -> Result<String> {
+    pub fn cluster_compatibility_sha256(&self, vault_identity: &str) -> Result<String> {
         ensure!(self.cluster.is_some(), "cluster mode is not enabled");
         ensure!(
             vault_identity.len() == 64
@@ -688,7 +868,7 @@ impl CapturedConfig {
             .transpose()
     }
 
-    pub(crate) fn s3_credentials(&self) -> Result<SecretS3Credentials> {
+    pub fn s3_credentials(&self) -> Result<SecretS3Credentials> {
         ensure!(
             self.storage.s3.is_some(),
             "S3 artifact storage is not configured"
@@ -717,7 +897,7 @@ impl CapturedConfig {
             session_token,
         })
     }
-    pub(crate) fn postgres_runtime_url(&self) -> Result<SecretDatabaseUrl> {
+    pub fn postgres_runtime_url(&self) -> Result<SecretDatabaseUrl> {
         ensure!(
             self.metadata.backend == MetadataBackend::Postgres,
             "PostgreSQL metadata is not selected"
@@ -730,7 +910,7 @@ impl CapturedConfig {
         )
     }
 
-    pub(crate) fn postgres_migration_url(&self) -> Result<SecretDatabaseUrl> {
+    pub fn postgres_migration_url(&self) -> Result<SecretDatabaseUrl> {
         ensure!(
             self.metadata.backend == MetadataBackend::Postgres,
             "PostgreSQL metadata is not selected"
@@ -745,7 +925,7 @@ impl CapturedConfig {
 
     /// Resolves the cluster dashboard password once at startup. Plaintext is
     /// never retained in the configuration or written back to disk.
-    pub(crate) fn resolve_runtime_secrets(&mut self) -> Result<()> {
+    pub fn resolve_runtime_secrets(&mut self) -> Result<()> {
         if self.cluster.is_none() {
             return Ok(());
         }
@@ -887,7 +1067,7 @@ fn route_prefixes_overlap(left: &str, right: &str) -> bool {
             .is_some_and(|suffix| suffix.starts_with('/'))
 }
 
-pub(crate) fn valid_instance_id(value: &str) -> bool {
+pub fn valid_instance_id(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= 64
         && value
@@ -911,6 +1091,32 @@ fn validate_public_https_origin(value: &str, name: &str) -> Result<()> {
 }
 
 pub use capture_updater::default_config_path;
+
+fn config_path(path: Option<&Path>) -> Result<PathBuf> {
+    match path {
+        Some(path) => Ok(path.to_owned()),
+        None => default_config_path(),
+    }
+}
+
+/// Loads an captured configuration, generating the editable defaults on first
+/// use. Every config-driven command shares this behavior so a fresh install
+/// can start the proxy without a setup command.
+pub fn load_captured_config(path: Option<&Path>) -> Result<(CapturedConfig, PathBuf)> {
+    let explicit = path.is_some();
+    let path = config_path(path)?;
+    if explicit {
+        let mut config = CapturedConfig::load(&path)?;
+        config.resolve_runtime_secrets()?;
+        return Ok((config, path));
+    }
+    let (mut config, created) = CapturedConfig::load_or_create(&path)?;
+    if created {
+        eprintln!("created default captured configuration: {}", path.display());
+    }
+    config.resolve_runtime_secrets()?;
+    Ok((config, path))
+}
 
 fn default_listen() -> SocketAddr {
     "127.0.0.1:8787"

@@ -16,13 +16,13 @@ use aws_sdk_s3::{
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use sha2::{Digest as _, Sha256};
 use tokio::io::{AsyncReadExt as _, AsyncSeekExt as _, AsyncWriteExt as _};
-use url::Url;
 
 use crate::artifact_store::{
     ArtifactKey, ArtifactKind, ArtifactLocator, ArtifactRecord, ArtifactResult, ArtifactSource,
     ArtifactStore, ArtifactStoreError, VerifiedArtifact, backend, conflict, integrity, invalid,
     is_lowercase_sha256_hex, not_found,
 };
+use crate::config::S3ArtifactStoreConfig;
 
 const SHA256_METADATA: &str = "artifact-sha256";
 const SIZE_METADATA: &str = "artifact-size";
@@ -40,50 +40,6 @@ pub(crate) const S3_ARTIFACT_LOCATOR_PREFIX: &str = "artifact/v1/s3/";
 /// backend instead of interpreting them as legacy filesystem paths.
 pub(crate) fn is_s3_artifact_locator(locator: &ArtifactLocator) -> bool {
     locator.as_stored().starts_with(S3_ARTIFACT_LOCATOR_PREFIX)
-}
-
-/// Non-secret connection and namespace settings for daemon-private objects.
-#[derive(Clone, Debug)]
-pub(crate) struct S3ArtifactStoreConfig {
-    endpoint: Option<Url>,
-    region: String,
-    bucket: String,
-    prefix: String,
-    force_path_style: bool,
-    connect_timeout: Duration,
-    operation_timeout: Duration,
-}
-
-impl S3ArtifactStoreConfig {
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn new(
-        endpoint: Option<Url>,
-        region: String,
-        bucket: String,
-        prefix: String,
-        force_path_style: bool,
-        allow_insecure_http: bool,
-        connect_timeout: Duration,
-        operation_timeout: Duration,
-    ) -> ArtifactResult<Self> {
-        validate_config(
-            endpoint.as_ref(),
-            &region,
-            &bucket,
-            allow_insecure_http,
-            connect_timeout,
-            operation_timeout,
-        )?;
-        Ok(Self {
-            endpoint,
-            region,
-            bucket,
-            prefix: normalize_prefix(&prefix)?,
-            force_path_style,
-            connect_timeout,
-            operation_timeout,
-        })
-    }
 }
 
 /// Explicit static credentials for one daemon-private S3 namespace.
@@ -152,25 +108,25 @@ impl S3ArtifactStore {
             "captured-config",
         );
         let timeout_config = TimeoutConfig::builder()
-            .connect_timeout(config.connect_timeout)
-            .operation_attempt_timeout(config.operation_timeout)
-            .operation_timeout(config.operation_timeout)
+            .connect_timeout(config.connect_timeout())
+            .operation_attempt_timeout(config.operation_timeout())
+            .operation_timeout(config.operation_timeout())
             .build();
         let mut sdk_config = aws_sdk_s3::Config::builder()
             .behavior_version(BehaviorVersion::latest())
             .credentials_provider(sdk_credentials)
-            .region(Region::new(config.region.clone()))
-            .force_path_style(config.force_path_style)
+            .region(Region::new(config.region().to_owned()))
+            .force_path_style(config.force_path_style())
             .timeout_config(timeout_config);
-        if let Some(endpoint) = &config.endpoint {
+        if let Some(endpoint) = config.endpoint() {
             sdk_config = sdk_config.endpoint_url(endpoint.as_str());
         }
         let sdk_config = sdk_config.build();
         Ok(Self {
             client: Client::from_conf(sdk_config),
-            bucket: config.bucket,
-            prefix: config.prefix,
-            operation_timeout: config.operation_timeout,
+            bucket: config.bucket().to_owned(),
+            prefix: config.prefix().to_owned(),
+            operation_timeout: config.operation_timeout(),
         })
     }
 
@@ -918,75 +874,6 @@ async fn create_private_spool() -> ArtifactResult<PrivateSpool> {
     })
 }
 
-fn validate_config(
-    endpoint: Option<&Url>,
-    region: &str,
-    bucket: &str,
-    allow_insecure_http: bool,
-    connect_timeout: Duration,
-    operation_timeout: Duration,
-) -> ArtifactResult<()> {
-    if let Some(endpoint) = endpoint {
-        if endpoint.cannot_be_a_base()
-            || endpoint.host_str().is_none()
-            || !endpoint.username().is_empty()
-            || endpoint.password().is_some()
-            || endpoint.path() != "/"
-            || endpoint.query().is_some()
-            || endpoint.fragment().is_some()
-        {
-            return Err(invalid(
-                "invalid_s3_endpoint",
-                anyhow!(
-                    "S3 endpoint must be an origin URL without credentials, path, query, or fragment"
-                ),
-            ));
-        }
-        match endpoint.scheme() {
-            "https" => {}
-            "http" if allow_insecure_http => {}
-            "http" => {
-                return Err(invalid(
-                    "insecure_s3_endpoint",
-                    anyhow!("HTTP S3 endpoints require explicit insecure-local opt-in"),
-                ));
-            }
-            _ => {
-                return Err(invalid(
-                    "invalid_s3_endpoint",
-                    anyhow!("S3 endpoint must use HTTPS or explicitly allowed HTTP"),
-                ));
-            }
-        }
-    } else if allow_insecure_http {
-        return Err(invalid(
-            "invalid_s3_endpoint",
-            anyhow!("allow_insecure_http requires an explicit S3 endpoint"),
-        ));
-    }
-    if !(1..=128).contains(&region.len())
-        || !safe_namespace_component(region)
-        || !(1..=255).contains(&bucket.len())
-        || !safe_namespace_component(bucket)
-    {
-        return Err(invalid(
-            "invalid_s3_namespace",
-            anyhow!("S3 region or bucket is outside its safe length/character bounds"),
-        ));
-    }
-    if connect_timeout.is_zero()
-        || connect_timeout > Duration::from_secs(300)
-        || operation_timeout.is_zero()
-        || operation_timeout > Duration::from_secs(300)
-    {
-        return Err(invalid(
-            "invalid_s3_timeout",
-            anyhow!("S3 connect and operation timeouts must be between 1 and 300 seconds"),
-        ));
-    }
-    Ok(())
-}
-
 fn validate_credentials(credentials: &S3ArtifactStoreCredentials) -> ArtifactResult<()> {
     if credentials.access_key_id.is_empty() || credentials.secret_access_key.is_empty() {
         return Err(invalid(
@@ -995,41 +882,6 @@ fn validate_credentials(credentials: &S3ArtifactStoreCredentials) -> ArtifactRes
         ));
     }
     Ok(())
-}
-
-fn normalize_prefix(prefix: &str) -> ArtifactResult<String> {
-    if prefix.len() > 512 {
-        return Err(invalid(
-            "invalid_s3_prefix",
-            anyhow!("S3 prefix exceeds 512 bytes"),
-        ));
-    }
-    let prefix = prefix.trim_matches('/');
-    if prefix.is_empty() {
-        return Ok(String::new());
-    }
-    if prefix.contains("//")
-        || prefix.contains('\\')
-        || prefix.split('/').any(|part| {
-            part.is_empty()
-                || matches!(part, "." | "..")
-                || !part
-                    .bytes()
-                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
-        })
-    {
-        return Err(invalid(
-            "invalid_s3_prefix",
-            anyhow!("S3 prefix must contain only safe, non-empty path segments"),
-        ));
-    }
-    Ok(prefix.to_owned())
-}
-
-fn safe_namespace_component(value: &str) -> bool {
-    value
-        .bytes()
-        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
 }
 
 fn validate_sha256(value: &str) -> ArtifactResult<()> {
@@ -1058,6 +910,7 @@ mod tests {
         runners::AsyncRunner as _,
     };
     use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+    use url::Url;
 
     use super::*;
     use crate::{
@@ -1097,6 +950,25 @@ mod tests {
             Duration::from_secs(3),
             Duration::from_secs(10),
         )
+    }
+
+    fn timed_config(
+        endpoint: &str,
+        prefix: &str,
+        connect_timeout: Duration,
+        operation_timeout: Duration,
+    ) -> S3ArtifactStoreConfig {
+        S3ArtifactStoreConfig::new(
+            Some(Url::parse(endpoint).unwrap()),
+            "us-east-1".to_owned(),
+            "daemon-private-test".to_owned(),
+            prefix.to_owned(),
+            true,
+            true,
+            connect_timeout,
+            operation_timeout,
+        )
+        .unwrap()
     }
 
     fn credentials() -> S3ArtifactStoreCredentials {
@@ -1260,8 +1132,14 @@ mod tests {
             })
         ));
 
-        let mut root_config = config("https://s3.example.com", false);
-        root_config.prefix.clear();
+        let root_config = config_result(
+            "https://s3.example.com",
+            false,
+            "",
+            "daemon-private-test",
+            "us-east-1",
+        )
+        .unwrap();
         let root_store = S3ArtifactStore::new(root_config, credentials()).unwrap();
         assert_eq!(
             root_store.object_key(&record.key),
@@ -1282,9 +1160,12 @@ mod tests {
             let (_connection, _) = listener.accept().await.unwrap();
             std::future::pending::<()>().await;
         });
-        let mut deadline_config = config(&format!("http://{address}"), true);
-        deadline_config.connect_timeout = Duration::from_millis(100);
-        deadline_config.operation_timeout = Duration::from_millis(200);
+        let deadline_config = timed_config(
+            &format!("http://{address}"),
+            "/tenant_1/private-artifacts/",
+            Duration::from_millis(100),
+            Duration::from_millis(200),
+        );
         let store = S3ArtifactStore::new(deadline_config, credentials()).unwrap();
         let started = tokio::time::Instant::now();
         assert!(matches!(
@@ -1313,10 +1194,12 @@ mod tests {
             }
         });
 
-        let mut delayed_config = config(&format!("http://{address}"), true);
-        delayed_config.prefix = "delayed".to_owned();
-        delayed_config.connect_timeout = Duration::from_millis(500);
-        delayed_config.operation_timeout = Duration::from_secs(1);
+        let delayed_config = timed_config(
+            &format!("http://{address}"),
+            "delayed",
+            Duration::from_millis(500),
+            Duration::from_secs(1),
+        );
         let store = S3ArtifactStore::new(delayed_config, credentials()).unwrap();
         let key = ArtifactKey::new("trc-delayed-commit", ArtifactKind::CaptureCheckpoint).unwrap();
         let bytes = b"delayed immutable commit".to_vec();
@@ -1636,8 +1519,14 @@ mod tests {
             ArtifactStoreError::TooLarge { .. }
         ));
 
-        let mut inventory_config = config(&endpoint, true);
-        inventory_config.prefix = "reconciliation-only".to_owned();
+        let inventory_config = config_result(
+            &endpoint,
+            true,
+            "reconciliation-only",
+            "daemon-private-test",
+            "us-east-1",
+        )
+        .unwrap();
         let inventory_store = S3ArtifactStore::new(inventory_config, credentials()).unwrap();
         inventory_store.readiness().await.unwrap();
         inventory_store.readiness().await.unwrap();
