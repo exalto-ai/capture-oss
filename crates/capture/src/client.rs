@@ -397,7 +397,7 @@ impl CapturedClient {
         serde_json::from_value(value).map_err(|_| {
             CliError::new(
                 EXIT_RETRYABLE,
-                "the daemon returned an invalid status response; check that capture and captured versions match",
+                "the local service returned an invalid status response; check that capture and Exalto Capture are up to date",
             )
         })
     }
@@ -523,7 +523,7 @@ impl CapturedClient {
         serde_json::from_value(value).map_err(|_| {
             CliError::new(
                 EXIT_RETRYABLE,
-                "the daemon returned an invalid response; check that capture and captured versions match",
+                "the local service returned an invalid response; check that capture and Exalto Capture are up to date",
             )
         })
     }
@@ -536,7 +536,7 @@ impl CapturedClient {
         }
         let response = request.send().await.map_err(|_| {
             CliError::unavailable(format!(
-                "captured is unavailable at {}; start it and try again",
+                "the local capture service is unavailable at {}; open Exalto Capture and try again",
                 self.origin
             ))
         })?;
@@ -581,7 +581,7 @@ impl CapturedClient {
         }
         let response = request.send().await.map_err(|_| {
             CliError::unavailable(format!(
-                "captured is unavailable at {}; start it and try again",
+                "the local capture service is unavailable at {}; open Exalto Capture and try again",
                 self.origin
             ))
         })?;
@@ -621,7 +621,7 @@ impl CapturedClient {
         }
         let response = request.send().await.map_err(|_| {
             CliError::unavailable(format!(
-                "captured is unavailable at {}; start it and try again",
+                "the local capture service is unavailable at {}; open Exalto Capture and try again",
                 self.origin
             ))
         })?;

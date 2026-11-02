@@ -84,7 +84,6 @@ pub struct InstallOutcome {
     pub previous_build_id: String,
     pub new_build_id: String,
     pub updated_on_disk: bool,
-    pub daemon_restart_required: bool,
 }
 
 #[derive(Clone, Debug)]

@@ -41,50 +41,6 @@ pub(crate) fn cli_file_name() -> &'static str {
     }
 }
 
-pub(crate) fn daemon_file_name() -> &'static str {
-    if cfg!(windows) {
-        "captured.exe"
-    } else {
-        "captured"
-    }
-}
-
-#[cfg(windows)]
-pub(crate) fn ensure_windows_daemon_stopped(install: &InstallPaths) -> Result<()> {
-    use std::os::windows::ffi::OsStrExt as _;
-    use windows_sys::Win32::{
-        Foundation::{CloseHandle, INVALID_HANDLE_VALUE},
-        Storage::FileSystem::{
-            CreateFileW, DELETE, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_DELETE, FILE_SHARE_READ,
-            FILE_SHARE_WRITE, OPEN_EXISTING,
-        },
-    };
-
-    let path = install
-        .daemon
-        .as_os_str()
-        .encode_wide()
-        .chain(std::iter::once(0))
-        .collect::<Vec<_>>();
-    let handle = unsafe {
-        CreateFileW(
-            path.as_ptr(),
-            DELETE,
-            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-            std::ptr::null(),
-            OPEN_EXISTING,
-            FILE_ATTRIBUTE_NORMAL,
-            std::ptr::null_mut(),
-        )
-    };
-    ensure!(
-        handle != INVALID_HANDLE_VALUE,
-        "captured.exe is running, locked, or cannot be replaced; stop the local service before updating"
-    );
-    unsafe { CloseHandle(handle) };
-    Ok(())
-}
-
 pub(crate) fn make_executable(path: &Path) -> Result<()> {
     #[cfg(unix)]
     {
@@ -162,7 +118,7 @@ pub fn run_windows_apply_helper(
         message: if result.is_ok() {
             "The staged Windows update completed.".into()
         } else {
-            "The staged Windows update failed safely. Run capture update again after stopping captured.".into()
+            "The staged Windows update failed safely. Run capture update again.".into()
         },
     };
     let report_path = install_directory.join(WINDOWS_RESULT_NAME);
@@ -188,13 +144,7 @@ pub(crate) fn run_windows_apply_helper_inner(
     );
     let _lock = lock_install_directory(&install)?;
     recover_interrupted_update(&install)?;
-    ensure_windows_daemon_stopped(&install)?;
-    apply_update_transaction(
-        &install,
-        &staging_directory.join(cli_file_name()),
-        &staging_directory.join(daemon_file_name()),
-        build_id,
-    )?;
+    apply_update_transaction(&install, &staging_directory.join(cli_file_name()), build_id)?;
     schedule_windows_helper_cleanup(staging_directory);
     Ok(())
 }
@@ -255,49 +205,4 @@ pub(crate) fn schedule_windows_helper_cleanup(staging_directory: &Path) {
         schedule(&helper);
     }
     schedule(staging_directory);
-}
-
-#[cfg(test)]
-mod tests {
-    #[cfg(windows)]
-    use super::*;
-    #[cfg(windows)]
-    use crate::install::InstallPaths;
-
-    #[cfg(windows)]
-    #[test]
-    fn windows_preflight_requires_the_daemon_file_to_be_unlocked() {
-        use std::os::windows::ffi::OsStrExt as _;
-        use windows_sys::Win32::{
-            Foundation::{CloseHandle, GENERIC_READ, INVALID_HANDLE_VALUE},
-            Storage::FileSystem::{CreateFileW, FILE_ATTRIBUTE_NORMAL, OPEN_EXISTING},
-        };
-
-        let directory = tempfile::tempdir().unwrap();
-        let install = InstallPaths::from_directory(directory.path());
-        fs::write(&install.daemon, b"daemon fixture").unwrap();
-        ensure_windows_daemon_stopped(&install).unwrap();
-
-        let path = install
-            .daemon
-            .as_os_str()
-            .encode_wide()
-            .chain(std::iter::once(0))
-            .collect::<Vec<_>>();
-        let handle = unsafe {
-            CreateFileW(
-                path.as_ptr(),
-                GENERIC_READ,
-                0,
-                std::ptr::null(),
-                OPEN_EXISTING,
-                FILE_ATTRIBUTE_NORMAL,
-                std::ptr::null_mut(),
-            )
-        };
-        assert_ne!(handle, INVALID_HANDLE_VALUE);
-        assert!(ensure_windows_daemon_stopped(&install).is_err());
-        unsafe { CloseHandle(handle) };
-        ensure_windows_daemon_stopped(&install).unwrap();
-    }
 }

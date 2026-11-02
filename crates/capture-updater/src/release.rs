@@ -29,10 +29,9 @@ pub struct ReleaseArtifact {
 #[serde(deny_unknown_fields)]
 pub struct ReleasePlatform {
     pub archive: ReleaseArtifact,
-    // The signed channel names the CLI and service artifacts by their crates;
-    // desktop apps already in the field parse this schema too.
+    // The signed channel names the CLI artifact by its crate. Desktop apps
+    // parse this schema too, so it changes only with them.
     pub capture: ReleaseArtifact,
-    pub captured: ReleaseArtifact,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -157,11 +156,6 @@ pub(crate) fn validate_manifest(manifest: &ReleaseManifest) -> Result<()> {
             &artifacts.capture,
             &manifest.build_id,
             Some(&format!("capture-{platform}{suffix}")),
-        )?;
-        validate_artifact(
-            &artifacts.captured,
-            &manifest.build_id,
-            Some(&format!("captured-{platform}{suffix}")),
         )?;
     }
     ensure!(

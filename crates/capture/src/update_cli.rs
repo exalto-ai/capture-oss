@@ -62,11 +62,9 @@ pub(super) fn update_human_output(value: &Value, check: bool) -> Result<String, 
         .unwrap_or("unknown");
     Ok(match state {
         "current" => format!("capture is already up to date ({build})."),
-        "staged" => format!(
-            "Update {build} is staged and will finish after this command exits. Restart captured when no capture or sealing is active."
-        ),
-        _ => format!(
-            "Updated capture and captured to {build}. Restart captured when no capture or sealing is active."
-        ),
+        "staged" => {
+            format!("Update {build} is staged and will finish after this command exits.")
+        }
+        _ => format!("Updated capture to {build}."),
     })
 }

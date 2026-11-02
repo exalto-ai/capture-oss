@@ -1,4 +1,4 @@
-//! Rollback-safe installation transaction for the capture/captured pair.
+//! Rollback-safe installation transaction for the `capture` command.
 
 use std::{
     fs,
@@ -14,21 +14,17 @@ use fs2::FileExt as _;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 
-#[cfg(windows)]
-use crate::platform::ensure_windows_daemon_stopped;
 use crate::{
     BUILD_ID, InstallOutcome,
     channel::{VerifiedRelease, check_latest},
     is_official_build,
-    platform::{cli_file_name, daemon_file_name, make_executable, replace_file, sync_directory},
+    platform::{cli_file_name, make_executable, replace_file, sync_directory},
     release::{download_artifact, platform_name, update_http_client, validate_identifier},
     storage,
 };
 const JOURNAL_NAME: &str = ".capture-runtime-update.json";
 
 const CLI_BACKUP_NAME: &str = ".capture.update-backup";
-
-const DAEMON_BACKUP_NAME: &str = ".captured.update-backup";
 
 const TRANSACTION_LOCK_NAME: &str = ".capture-runtime-update.lock";
 
@@ -44,8 +40,6 @@ struct UpdateJournal {
 #[serde(rename_all = "snake_case")]
 enum JournalPhase {
     Prepared,
-    ReplacingCaptured,
-    CapturedReplaced,
     ReplacingCapture,
     CaptureReplaced,
 }
@@ -54,10 +48,8 @@ enum JournalPhase {
 pub(crate) struct InstallPaths {
     pub(crate) directory: PathBuf,
     pub(crate) cli: PathBuf,
-    pub(crate) daemon: PathBuf,
     pub(crate) journal: PathBuf,
     pub(crate) cli_backup: PathBuf,
-    pub(crate) daemon_backup: PathBuf,
 }
 
 impl InstallPaths {
@@ -75,7 +67,7 @@ impl InstallPaths {
         let display = cli.to_string_lossy().to_ascii_lowercase();
         ensure!(
             !display.contains(".app/contents/macos/"),
-            "the desktop app must update its bundled service as part of the whole app"
+            "the desktop app updates as a whole; this command is not part of it"
         );
         ensure!(
             !display.contains("/cellar/")
@@ -84,23 +76,18 @@ impl InstallPaths {
                 && !display.contains("/opt/local/"),
             "this installation is managed by a package manager; update it with that package manager"
         );
-        let daemon = directory.join(daemon_file_name());
-        for path in [&cli, &daemon] {
-            let metadata = fs::symlink_metadata(path)
-                .with_context(|| format!("inspecting {}", path.display()))?;
-            ensure!(
-                metadata.file_type().is_file() && !metadata.file_type().is_symlink(),
-                "{} is not a regular installed file",
-                path.display()
-            );
-        }
+        let metadata =
+            fs::symlink_metadata(&cli).with_context(|| format!("inspecting {}", cli.display()))?;
+        ensure!(
+            metadata.file_type().is_file() && !metadata.file_type().is_symlink(),
+            "{} is not a regular installed file",
+            cli.display()
+        );
         Ok(Self {
             journal: directory.join(JOURNAL_NAME),
             cli_backup: directory.join(CLI_BACKUP_NAME),
-            daemon_backup: directory.join(DAEMON_BACKUP_NAME),
             directory,
             cli,
-            daemon,
         })
     }
 
@@ -109,10 +96,8 @@ impl InstallPaths {
         Self {
             directory: directory.to_owned(),
             cli: directory.join(cli_file_name()),
-            daemon: directory.join(daemon_file_name()),
             journal: directory.join(JOURNAL_NAME),
             cli_backup: directory.join(CLI_BACKUP_NAME),
-            daemon_backup: directory.join(DAEMON_BACKUP_NAME),
         }
     }
 }
@@ -125,7 +110,7 @@ pub async fn install_latest() -> Result<InstallOutcome> {
     let install = InstallPaths::discover()?;
     let _lock = lock_install_directory(&install)?;
     recover_interrupted_update(&install)?;
-    ensure_current_pair(&install)?;
+    ensure_candidate_build(&install.cli, BUILD_ID, "capture")?;
     let check = check_latest().await?;
     if !check.update_available {
         return Ok(InstallOutcome {
@@ -133,7 +118,6 @@ pub async fn install_latest() -> Result<InstallOutcome> {
             previous_build_id: BUILD_ID.into(),
             new_build_id: BUILD_ID.into(),
             updated_on_disk: false,
-            daemon_restart_required: false,
         });
     }
     let release = check
@@ -146,8 +130,6 @@ async fn install_verified_release(
     install: &InstallPaths,
     release: &VerifiedRelease,
 ) -> Result<InstallOutcome> {
-    #[cfg(windows)]
-    ensure_windows_daemon_stopped(install)?;
     let platform = platform_name()?;
     let artifacts = release
         .manifest
@@ -164,29 +146,19 @@ async fn install_verified_release(
             )
         })?;
     let cli_candidate = staging.path().join(cli_file_name());
-    let daemon_candidate = staging.path().join(daemon_file_name());
     let client = update_http_client()?;
     download_artifact(&client, &artifacts.capture, &cli_candidate).await?;
-    download_artifact(&client, &artifacts.captured, &daemon_candidate).await?;
     make_executable(&cli_candidate)?;
-    make_executable(&daemon_candidate)?;
     ensure_candidate_build(&cli_candidate, &release.manifest.build_id, "capture")?;
-    ensure_candidate_build(&daemon_candidate, &release.manifest.build_id, "captured")?;
 
     #[cfg(unix)]
     {
-        apply_update_transaction(
-            install,
-            &cli_candidate,
-            &daemon_candidate,
-            &release.manifest.build_id,
-        )?;
+        apply_update_transaction(install, &cli_candidate, &release.manifest.build_id)?;
         Ok(InstallOutcome {
             state: "updated".into(),
             previous_build_id: BUILD_ID.into(),
             new_build_id: release.manifest.build_id.clone(),
             updated_on_disk: true,
-            daemon_restart_required: true,
         })
     }
     #[cfg(windows)]
@@ -218,18 +190,12 @@ async fn install_verified_release(
             previous_build_id: BUILD_ID.into(),
             new_build_id: release.manifest.build_id.clone(),
             updated_on_disk: false,
-            daemon_restart_required: true,
         })
     }
     #[cfg(not(any(unix, windows)))]
     {
         bail!("automatic installation is not implemented on this operating system")
     }
-}
-
-fn ensure_current_pair(install: &InstallPaths) -> Result<()> {
-    ensure_candidate_build(&install.cli, BUILD_ID, "capture")?;
-    ensure_candidate_build(&install.daemon, BUILD_ID, "captured")
 }
 
 pub(crate) fn ensure_candidate_build(path: &Path, build_id: &str, program: &str) -> Result<()> {
@@ -302,24 +268,20 @@ pub(crate) fn lock_install_directory(install: &InstallPaths) -> Result<fs::File>
 pub(crate) fn apply_update_transaction(
     install: &InstallPaths,
     cli_candidate: &Path,
-    daemon_candidate: &Path,
     build_id: &str,
 ) -> Result<()> {
     ensure!(
-        path_is_absent(&install.cli_backup)?
-            && path_is_absent(&install.daemon_backup)?
-            && path_is_absent(&install.journal)?,
+        path_is_absent(&install.cli_backup)? && path_is_absent(&install.journal)?,
         "a previous update has not been recovered"
     );
     write_journal(install, build_id, JournalPhase::Prepared)?;
-    // Once the first executable is replaced, every later failure must go
-    // through recovery. The journal records how far the replacement got, so
-    // recovery restores exactly the files that changed and the installation
-    // never keeps a mixed pair.
-    match replace_installed_pair(install, cli_candidate, daemon_candidate, build_id) {
+    // Once the executable is replaced, every later failure must go through
+    // recovery. The journal records how far the replacement got, so recovery
+    // restores the previous build exactly when it was changed.
+    match replace_installed_cli(install, cli_candidate, build_id) {
         Ok(()) => finish_transaction(install),
         Err(error) => match recover_interrupted_update(install) {
-            Ok(()) => Err(error.context("the update failed and the previous pair was restored")),
+            Ok(()) => Err(error.context("the update failed and the previous build was restored")),
             Err(recovery_error) => Err(error.context(format!(
                 "the update failed and recovery also failed: {recovery_error:#}"
             ))),
@@ -327,24 +289,17 @@ pub(crate) fn apply_update_transaction(
     }
 }
 
-fn replace_installed_pair(
+fn replace_installed_cli(
     install: &InstallPaths,
     cli_candidate: &Path,
-    daemon_candidate: &Path,
     build_id: &str,
 ) -> Result<()> {
-    hard_link_backup(&install.daemon, &install.daemon_backup)?;
-    write_journal(install, build_id, JournalPhase::ReplacingCaptured)?;
-    replace_file(daemon_candidate, &install.daemon).context("installing the new captured")?;
-    sync_directory(&install.directory)?;
-    write_journal(install, build_id, JournalPhase::CapturedReplaced)?;
     hard_link_backup(&install.cli, &install.cli_backup)?;
     write_journal(install, build_id, JournalPhase::ReplacingCapture)?;
     replace_file(cli_candidate, &install.cli).context("installing the new capture")?;
     sync_directory(&install.directory)?;
     write_journal(install, build_id, JournalPhase::CaptureReplaced)?;
     ensure_candidate_build(&install.cli, build_id, "capture")
-        .and_then(|()| ensure_candidate_build(&install.daemon, build_id, "captured"))
         .context("validating the installed update")
 }
 
@@ -408,10 +363,9 @@ pub(crate) fn recover_interrupted_update(install: &InstallPaths) -> Result<()> {
         // cannot act on. A retired build's journal used a different file name,
         // so its copies land here.
         ensure!(
-            path_is_absent(&install.cli_backup)? && path_is_absent(&install.daemon_backup)?,
-            "orphaned update rollback files require manual inspection; check {} and {}, then delete them if the installed capture and captured both run",
-            install.cli_backup.display(),
-            install.daemon_backup.display()
+            path_is_absent(&install.cli_backup)?,
+            "an orphaned update rollback file requires manual inspection; check {}, then delete it if the installed capture runs",
+            install.cli_backup.display()
         );
         return Ok(());
     }
@@ -425,30 +379,21 @@ pub(crate) fn recover_interrupted_update(install: &InstallPaths) -> Result<()> {
     validate_identifier(&journal.build_id, "journal build ID")?;
     match journal.phase {
         JournalPhase::Prepared => {}
-        JournalPhase::ReplacingCaptured | JournalPhase::CapturedReplaced => {
-            restore_backup(&install.daemon_backup, &install.daemon)?;
-        }
-        JournalPhase::ReplacingCapture => {
-            restore_backup(&install.cli_backup, &install.cli)?;
-            restore_backup(&install.daemon_backup, &install.daemon)?;
-        }
+        JournalPhase::ReplacingCapture => restore_backup(&install.cli_backup, &install.cli)?,
         JournalPhase::CaptureReplaced => {
-            if ensure_candidate_build(&install.cli, &journal.build_id, "capture").is_ok()
-                && ensure_candidate_build(&install.daemon, &journal.build_id, "captured").is_ok()
-            {
+            if ensure_candidate_build(&install.cli, &journal.build_id, "capture").is_ok() {
                 return finish_transaction(install);
             }
             restore_backup(&install.cli_backup, &install.cli)?;
-            restore_backup(&install.daemon_backup, &install.daemon)?;
         }
     }
     finish_transaction(install)
 }
 
-/// Restores one installed file from its rollback copy without consuming that
-/// copy. Recovery restores both executables before it deletes either copy, so
-/// an interruption part way through recovery can be retried instead of
-/// stranding the installation with one restored file and no way back.
+/// Restores the installed file from its rollback copy without consuming that
+/// copy. Recovery deletes the copy only after the journal is finished, so an
+/// interruption part way through recovery can be retried instead of
+/// stranding the installation with no way back.
 fn restore_backup(backup: &Path, target: &Path) -> Result<()> {
     let metadata = fs::symlink_metadata(backup)
         .with_context(|| format!("inspecting update rollback copy {}", backup.display()))?;
@@ -511,7 +456,6 @@ fn file_sha256(path: &Path) -> Result<[u8; 32]> {
 
 fn finish_transaction(install: &InstallPaths) -> Result<()> {
     remove_if_exists(&install.cli_backup)?;
-    remove_if_exists(&install.daemon_backup)?;
     remove_if_exists(&install.journal)?;
     sync_directory(&install.directory)
 }
@@ -542,100 +486,88 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn replaces_both_programs_and_removes_the_journal() {
+    fn replaces_capture_and_removes_the_journal() {
         let directory = tempfile::tempdir().unwrap();
         let install = InstallPaths::from_directory(directory.path());
         executable(&install.cli, "capture", "old-build");
-        executable(&install.daemon, "captured", "old-build");
         let cli_candidate = directory.path().join("new-cli");
-        let daemon_candidate = directory.path().join("new-daemon");
         executable(&cli_candidate, "capture", "new-build");
-        executable(&daemon_candidate, "captured", "new-build");
 
-        apply_update_transaction(&install, &cli_candidate, &daemon_candidate, "new-build").unwrap();
+        apply_update_transaction(&install, &cli_candidate, "new-build").unwrap();
 
         ensure_candidate_build(&install.cli, "new-build", "capture").unwrap();
-        ensure_candidate_build(&install.daemon, "new-build", "captured").unwrap();
         assert!(!install.journal.exists());
         assert!(!install.cli_backup.exists());
-        assert!(!install.daemon_backup.exists());
     }
 
     #[cfg(unix)]
     #[test]
-    fn restores_the_old_pair_when_the_second_replace_fails() {
+    fn a_captured_beside_capture_is_left_untouched() {
         let directory = tempfile::tempdir().unwrap();
         let install = InstallPaths::from_directory(directory.path());
         executable(&install.cli, "capture", "old-build");
-        executable(&install.daemon, "captured", "old-build");
-        let missing_cli_candidate = directory.path().join("missing-cli");
-        let daemon_candidate = directory.path().join("new-daemon");
-        executable(&daemon_candidate, "captured", "new-build");
+        let captured = directory.path().join("captured");
+        executable(&captured, "captured", "old-build");
+        let cli_candidate = directory.path().join("new-cli");
+        executable(&cli_candidate, "capture", "new-build");
 
-        assert!(
-            apply_update_transaction(
-                &install,
-                &missing_cli_candidate,
-                &daemon_candidate,
-                "new-build",
-            )
-            .is_err()
-        );
+        apply_update_transaction(&install, &cli_candidate, "new-build").unwrap();
+
+        ensure_candidate_build(&install.cli, "new-build", "capture").unwrap();
+        ensure_candidate_build(&captured, "old-build", "captured").unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn restores_the_old_build_when_the_replace_fails() {
+        let directory = tempfile::tempdir().unwrap();
+        let install = InstallPaths::from_directory(directory.path());
+        executable(&install.cli, "capture", "old-build");
+        let missing_cli_candidate = directory.path().join("missing-cli");
+
+        assert!(apply_update_transaction(&install, &missing_cli_candidate, "new-build").is_err());
 
         ensure_candidate_build(&install.cli, "old-build", "capture").unwrap();
-        ensure_candidate_build(&install.daemon, "old-build", "captured").unwrap();
         assert!(!install.journal.exists());
         assert!(!install.cli_backup.exists());
-        assert!(!install.daemon_backup.exists());
     }
 
     #[cfg(unix)]
     #[test]
-    fn recovers_a_crash_between_pair_replacements() {
+    fn recovers_a_crash_during_replacement() {
         let directory = tempfile::tempdir().unwrap();
         let install = InstallPaths::from_directory(directory.path());
         executable(&install.cli, "capture", "old-build");
-        executable(&install.daemon, "captured", "old-build");
         hard_link_backup(&install.cli, &install.cli_backup).unwrap();
-        hard_link_backup(&install.daemon, &install.daemon_backup).unwrap();
         let new_cli = directory.path().join("new-cli");
-        let new_daemon = directory.path().join("new-daemon");
         executable(&new_cli, "capture", "new-build");
-        executable(&new_daemon, "captured", "new-build");
         replace_file(&new_cli, &install.cli).unwrap();
-        replace_file(&new_daemon, &install.daemon).unwrap();
         write_journal(&install, "new-build", JournalPhase::ReplacingCapture).unwrap();
 
         recover_interrupted_update(&install).unwrap();
 
         ensure_candidate_build(&install.cli, "old-build", "capture").unwrap();
-        ensure_candidate_build(&install.daemon, "old-build", "captured").unwrap();
+        assert!(path_is_absent(&install.journal).unwrap());
+        assert!(path_is_absent(&install.cli_backup).unwrap());
     }
 
     #[cfg(unix)]
     #[test]
-    fn recovery_finishes_a_fully_replaced_current_pair() {
+    fn recovery_finishes_a_fully_replaced_update() {
         let directory = tempfile::tempdir().unwrap();
         let install = InstallPaths::from_directory(directory.path());
         executable(&install.cli, "capture", "old-build");
-        executable(&install.daemon, "captured", "old-build");
         hard_link_backup(&install.cli, &install.cli_backup).unwrap();
-        hard_link_backup(&install.daemon, &install.daemon_backup).unwrap();
         let new_cli = directory.path().join("new-cli");
-        let new_daemon = directory.path().join("new-daemon");
         executable(&new_cli, "capture", "new-build");
-        executable(&new_daemon, "captured", "new-build");
         replace_file(&new_cli, &install.cli).unwrap();
-        replace_file(&new_daemon, &install.daemon).unwrap();
         write_journal(&install, "new-build", JournalPhase::CaptureReplaced).unwrap();
 
         recover_interrupted_update(&install).unwrap();
 
         ensure_candidate_build(&install.cli, "new-build", "capture").unwrap();
-        ensure_candidate_build(&install.daemon, "new-build", "captured").unwrap();
         assert!(path_is_absent(&install.journal).unwrap());
         assert!(path_is_absent(&install.cli_backup).unwrap());
-        assert!(path_is_absent(&install.daemon_backup).unwrap());
     }
 
     #[cfg(unix)]
@@ -644,22 +576,16 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let install = InstallPaths::from_directory(directory.path());
         executable(&install.cli, "capture", "old-build");
-        executable(&install.daemon, "captured", "old-build");
         hard_link_backup(&install.cli, &install.cli_backup).unwrap();
-        hard_link_backup(&install.daemon, &install.daemon_backup).unwrap();
         let new_cli = directory.path().join("new-cli");
-        let new_daemon = directory.path().join("new-daemon");
         executable(&new_cli, "capture", "new-build");
-        executable(&new_daemon, "captured", "new-build");
         replace_file(&new_cli, &install.cli).unwrap();
-        replace_file(&new_daemon, &install.daemon).unwrap();
         write_journal(&install, "new-build", JournalPhase::ReplacingCapture).unwrap();
 
-        // Recovery restores capture first. Simulate losing power immediately
-        // afterwards: the journal is unchanged and the daemon is still new.
+        // Recovery restores capture, then loses power before it finishes:
+        // the journal is unchanged and the rollback copy must survive.
         restore_backup(&install.cli_backup, &install.cli).unwrap();
         ensure_candidate_build(&install.cli, "old-build", "capture").unwrap();
-        ensure_candidate_build(&install.daemon, "new-build", "captured").unwrap();
         assert!(
             install.cli_backup.exists(),
             "the rollback copy was consumed"
@@ -669,10 +595,8 @@ mod tests {
         recover_interrupted_update(&install).unwrap();
 
         ensure_candidate_build(&install.cli, "old-build", "capture").unwrap();
-        ensure_candidate_build(&install.daemon, "old-build", "captured").unwrap();
         assert!(path_is_absent(&install.journal).unwrap());
         assert!(path_is_absent(&install.cli_backup).unwrap());
-        assert!(path_is_absent(&install.daemon_backup).unwrap());
     }
 
     #[cfg(unix)]
@@ -712,28 +636,20 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn a_failure_after_the_daemon_is_replaced_restores_the_old_pair() {
+    fn a_failure_after_capture_is_replaced_restores_the_old_build() {
         let directory = tempfile::tempdir().unwrap();
         let install = InstallPaths::from_directory(directory.path());
         executable(&install.cli, "capture", "old-build");
-        executable(&install.daemon, "captured", "old-build");
-        let daemon_candidate = directory.path().join("new-daemon");
-        executable(&daemon_candidate, "captured", "new-build");
         // The staged capture reports the wrong build, so validation fails
-        // only after both executables have already been replaced.
+        // only after the executable has already been replaced.
         let cli_candidate = directory.path().join("new-cli");
         executable(&cli_candidate, "capture", "mismatched-build");
 
-        assert!(
-            apply_update_transaction(&install, &cli_candidate, &daemon_candidate, "new-build")
-                .is_err()
-        );
+        assert!(apply_update_transaction(&install, &cli_candidate, "new-build").is_err());
 
         ensure_candidate_build(&install.cli, "old-build", "capture").unwrap();
-        ensure_candidate_build(&install.daemon, "old-build", "captured").unwrap();
         assert!(path_is_absent(&install.journal).unwrap());
         assert!(path_is_absent(&install.cli_backup).unwrap());
-        assert!(path_is_absent(&install.daemon_backup).unwrap());
     }
 
     #[cfg(unix)]
@@ -742,7 +658,6 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let install = InstallPaths::from_directory(directory.path());
         executable(&install.cli, "capture", "old-build");
-        executable(&install.daemon, "captured", "old-build");
         fs::write(
             &install.journal,
             br#"{"schema_version":"llm-notary/update-journal/v1","build_id":"build","phase":"prepared"}"#,
@@ -758,8 +673,6 @@ mod tests {
     fn journal_phases_use_the_canonical_runtime_names() {
         let phases = [
             JournalPhase::Prepared,
-            JournalPhase::ReplacingCaptured,
-            JournalPhase::CapturedReplaced,
             JournalPhase::ReplacingCapture,
             JournalPhase::CaptureReplaced,
         ]
@@ -768,8 +681,6 @@ mod tests {
             phases,
             [
                 "\"prepared\"",
-                "\"replacing_captured\"",
-                "\"captured_replaced\"",
                 "\"replacing_capture\"",
                 "\"capture_replaced\"",
             ]

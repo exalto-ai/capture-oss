@@ -1156,7 +1156,11 @@ mod tests {
         let client = CapturedClient::new(address, None).unwrap();
         let error = client.verify_version().await.unwrap_err();
         assert_eq!(error.exit_code(), EXIT_UNAVAILABLE);
-        assert!(error.to_string().contains("captured is unavailable"));
+        assert!(
+            error
+                .to_string()
+                .contains("local capture service is unavailable")
+        );
     }
 
     #[test]
