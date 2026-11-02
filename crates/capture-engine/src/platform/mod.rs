@@ -12,7 +12,7 @@ pub mod storage;
 /// with `CAPTURE_API_PUBLIC_ORIGIN` when producing a self-hosted distribution.
 pub use capture_updater::{BUILD_ID, DEFAULT_API_ORIGIN};
 
-pub const DAEMON_USER_AGENT: &str = concat!("captured/", env!("CARGO_PKG_VERSION"));
+pub const DAEMON_USER_AGENT: &str = concat!("exalto-capture/", env!("CARGO_PKG_VERSION"));
 
 pub fn http_client_builder() -> reqwest::ClientBuilder {
     reqwest::Client::builder().user_agent(DAEMON_USER_AGENT)

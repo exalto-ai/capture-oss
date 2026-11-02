@@ -538,7 +538,9 @@ async fn notarize_operation(
     let package = package_result?;
     let record = notarization.store_package(package_key, package).await?;
     #[cfg(feature = "daemon-e2e")]
-    if let Some(milliseconds) = std::env::var_os("CAPTURED_E2E_PAUSE_AFTER_NOTARIZED_ARTIFACT_MS") {
+    if let Some(milliseconds) =
+        std::env::var_os("CAPTURE_SERVER_E2E_PAUSE_AFTER_NOTARIZED_ARTIFACT_MS")
+    {
         let milliseconds = milliseconds
             .to_str()
             .context("Docker E2E notarization pause must be UTF-8")?

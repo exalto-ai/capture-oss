@@ -54,7 +54,8 @@ pub(super) struct DaemonAdminAuth {
     pub(super) username: String,
 }
 
-/// Reusable typed client for the versioned `captured` administration API.
+/// Reusable typed client for the versioned administration API of the desktop
+/// app's local capture service.
 #[derive(Clone)]
 pub struct CapturedClient {
     origin: Url,
@@ -372,10 +373,12 @@ impl CapturedClient {
             .get("service")
             .and_then(Value::as_str)
             .unwrap_or("unknown");
-        if service != "captured" {
+        if service != "capture-app" {
             return Err(CliError::new(
                 EXIT_VERSION_MISMATCH,
-                format!("unexpected local service {service}; this CLI requires captured"),
+                format!(
+                    "unexpected local service {service}; this CLI requires the Exalto Capture app"
+                ),
             ));
         }
         let actual = health

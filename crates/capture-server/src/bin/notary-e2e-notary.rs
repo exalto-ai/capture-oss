@@ -5,12 +5,12 @@
 use std::{env, fs, sync::Arc};
 
 use anyhow::{Context as _, Result, bail};
-use captured::{DEFAULT_NOTARY_MAX_FRAME_BYTES, run_notary_session};
+use capture_server::{DEFAULT_NOTARY_MAX_FRAME_BYTES, run_notary_session};
 use k256::ecdsa::SigningKey;
 use tokio::net::TcpListener;
 
-const LISTEN_ENV: &str = "CAPTURED_E2E_NOTARY_LISTEN";
-const SIGNING_KEY_FILE_ENV: &str = "CAPTURED_E2E_SIGNING_KEY_FILE";
+const LISTEN_ENV: &str = "CAPTURE_SERVER_E2E_NOTARY_LISTEN";
+const SIGNING_KEY_FILE_ENV: &str = "CAPTURE_SERVER_E2E_SIGNING_KEY_FILE";
 const PROVIDER_HOST: &str = "api.openai.com";
 
 #[tokio::main]

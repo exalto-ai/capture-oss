@@ -294,7 +294,7 @@ struct ApiDoc;
 #[utoipa::path(get, path = "/healthz", summary = "Check service health", description = "Returns the local service health and API version without requiring authentication.", responses((status = 200, body = HealthResponse)), tag = "local-admin")]
 async fn health() -> Json<HealthResponse> {
     Json(HealthResponse {
-        service: "captured".into(),
+        service: "capture-app".into(),
         status: "ok".into(),
         api_version: API_VERSION.into(),
         build_id: BUILD_ID.into(),
@@ -305,7 +305,7 @@ async fn health() -> Json<HealthResponse> {
 async fn readiness(State(state): State<AdminState>) -> Result<Json<ReadinessResponse>, ApiError> {
     match probe_dependencies(&state).await {
         Ok(()) => Ok(Json(ReadinessResponse {
-            service: "captured".into(),
+            service: "capture-app".into(),
             status: "ready".into(),
             metadata_backend: state.persistence.metadata.backend_name().into(),
             artifact_backend: "filesystem".into(),
@@ -821,7 +821,7 @@ struct PutTraceShareRequest {
     #[schema(maximum = 365)]
     expires_in_days: Option<u32>,
     /// A new password, or an empty string to remove it. This value is never
-    /// logged, returned, or persisted by captured.
+    /// logged, returned, or persisted by the local service.
     #[schema(value_type = Option<String>, write_only, min_length = 0, max_length = 128)]
     password: Option<SecretInput>,
     /// Accept only reviewed, unexplained high-entropy safety findings.

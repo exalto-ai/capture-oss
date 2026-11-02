@@ -1,13 +1,13 @@
 [package]
-name = "captured"
+name = "capture-server"
 version.workspace = true
 edition = "2024"
 license = "MIT"
 description = "Local Notary proxy and administration daemon"
 
 [[bin]]
-name = "captured"
-path = "src/bin/captured.rs"
+name = "capture-server"
+path = "src/bin/capture-server.rs"
 
 [[bin]]
 name = "notary-e2e-notary"

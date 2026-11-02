@@ -74,7 +74,7 @@ when a configured explicit key was used for the initial local verification.
 
 Setting `notary.endpoint` and `notary.public_key` together in the local
 service's `config.toml` is an operator override. It does not use Registry
-lifecycle policy. Start with `captured --config /path/to/config.toml` when
+lifecycle policy. Start with `capture-server --config /path/to/config.toml` when
 that configuration is not in the standard user location. Explicit endpoints
 use `tls://host:port` or `tcp://host:port`. Bare `host:port` values are
 rejected so transport can never be selected implicitly.

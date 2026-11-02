@@ -5,15 +5,15 @@ x-daemon: &daemon
     context: .
     dockerfile: Dockerfile
     target: cluster
-  image: ${CAPTURED_CLUSTER_IMAGE:-captured-cluster:local}
+  image: ${CAPTURE_SERVER_CLUSTER_IMAGE:-capture-server-cluster:local}
   user: "${CLUSTER_UID:-10001}:${CLUSTER_GID:-10001}"
   command: ["--config", "/etc/capture/config.toml"]
   environment: &daemon-environment
-    CAPTURED_ADMIN_PASSWORD_FILE: /run/secrets/admin_password
-    CAPTURED_ARTIFACT_S3_ACCESS_KEY_ID_FILE: /run/secrets/s3_access_key
-    CAPTURED_ARTIFACT_S3_SECRET_ACCESS_KEY_FILE: /run/secrets/s3_secret_key
-    CAPTURED_METADATA_DATABASE_URL_FILE: /run/secrets/postgres_url
-    CAPTURED_CLUSTER_VAULT_KEY_FILE: /run/secrets/cluster_vault_key
+    CAPTURE_SERVER_ADMIN_PASSWORD_FILE: /run/secrets/admin_password
+    CAPTURE_SERVER_ARTIFACT_S3_ACCESS_KEY_ID_FILE: /run/secrets/s3_access_key
+    CAPTURE_SERVER_ARTIFACT_S3_SECRET_ACCESS_KEY_FILE: /run/secrets/s3_secret_key
+    CAPTURE_SERVER_METADATA_DATABASE_URL_FILE: /run/secrets/postgres_url
+    CAPTURE_SERVER_CLUSTER_VAULT_KEY_FILE: /run/secrets/cluster_vault_key
   secrets: &daemon-secrets
     - admin_password
     - postgres_url
@@ -126,8 +126,8 @@ services:
     <<: *daemon
     command: ["migrate", "--config", "/etc/capture/config.toml"]
     environment:
-      CAPTURED_METADATA_DATABASE_URL_FILE: /run/secrets/postgres_url
-      CAPTURED_CLUSTER_VAULT_KEY_FILE: /run/secrets/cluster_vault_key
+      CAPTURE_SERVER_METADATA_DATABASE_URL_FILE: /run/secrets/postgres_url
+      CAPTURE_SERVER_CLUSTER_VAULT_KEY_FILE: /run/secrets/cluster_vault_key
     secrets:
       - postgres_url
       - cluster_vault_key

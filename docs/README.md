@@ -9,4 +9,4 @@
 
 The desktop app's local service publishes its exact REST contract at
 `http://127.0.0.1:8788/openapi.json`; the server's contract is committed at
-`crates/captured/openapi.json`. `capture --help` lists the CLI.
+`crates/capture-server/openapi.json`. `capture --help` lists the CLI.

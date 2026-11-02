@@ -55,7 +55,7 @@ impl Persistence {
             .await
             .map_err(|_| {
                 anyhow::anyhow!(
-                    "PostgreSQL metadata database is unavailable or its daemon schema is not current; run `captured migrate --config <path>`"
+                    "PostgreSQL metadata database is unavailable or its daemon schema is not current; run `capture-server migrate --config <path>`"
                 )
             })?,
         );

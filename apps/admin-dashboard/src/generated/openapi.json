@@ -2419,7 +2419,7 @@
               "string",
               "null"
             ],
-            "description": "A new password, or an empty string to remove it. This value is never\nlogged, returned, or persisted by captured.",
+            "description": "A new password, or an empty string to remove it. This value is never\nlogged, returned, or persisted by the local service.",
             "writeOnly": true,
             "maxLength": 128,
             "minLength": 0

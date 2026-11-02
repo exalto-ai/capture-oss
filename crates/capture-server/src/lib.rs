@@ -28,7 +28,7 @@ pub use capture_updater as update;
 
 #[derive(Parser, Debug)]
 #[command(
-    name = "captured",
+    name = "capture-server",
     about = "Run an Exalto Capture server replica",
     version,
     long_version = format!(
@@ -90,7 +90,7 @@ pub async fn run_daemon() -> Result<()> {
         }
         None => {}
     }
-    let _telemetry = telemetry::init("captured")?;
+    let _telemetry = telemetry::init("capture-server")?;
     service::proxy::run(service::proxy::ProxyArgs { config: cli.config }).await
 }
 
@@ -162,20 +162,22 @@ mod tests {
 
     #[test]
     fn daemon_accepts_only_configuration() {
-        assert!(DaemonCli::try_parse_from(["captured"]).is_ok());
-        assert!(DaemonCli::try_parse_from(["captured", "traces"]).is_err());
-        assert!(DaemonCli::try_parse_from(["captured", "migrate", "traces"]).is_err());
-        assert!(DaemonCli::try_parse_from(["captured", "migrate"]).is_ok());
+        assert!(DaemonCli::try_parse_from(["capture-server"]).is_ok());
+        assert!(DaemonCli::try_parse_from(["capture-server", "traces"]).is_err());
+        assert!(DaemonCli::try_parse_from(["capture-server", "migrate", "traces"]).is_err());
+        assert!(DaemonCli::try_parse_from(["capture-server", "migrate"]).is_ok());
         assert!(
-            DaemonCli::try_parse_from(["captured", "--config", "agent.toml", "migrate"]).is_ok()
+            DaemonCli::try_parse_from(["capture-server", "--config", "agent.toml", "migrate"])
+                .is_ok()
         );
         assert!(
-            DaemonCli::try_parse_from(["captured", "migrate", "--config", "agent.toml"]).is_ok()
+            DaemonCli::try_parse_from(["capture-server", "migrate", "--config", "agent.toml"])
+                .is_ok()
         );
-        assert!(DaemonCli::try_parse_from(["captured", "reconcile-artifacts"]).is_ok());
+        assert!(DaemonCli::try_parse_from(["capture-server", "reconcile-artifacts"]).is_ok());
         assert!(
             DaemonCli::try_parse_from([
-                "captured",
+                "capture-server",
                 "cluster",
                 "init",
                 "--vault-key",
@@ -185,7 +187,7 @@ mod tests {
         );
         assert!(
             DaemonCli::try_parse_from([
-                "captured",
+                "capture-server",
                 "server",
                 "init",
                 "--vault-key",
@@ -195,7 +197,7 @@ mod tests {
         );
         assert!(
             DaemonCli::try_parse_from([
-                "captured",
+                "capture-server",
                 "--config",
                 "agent.toml",
                 "reconcile-artifacts",
@@ -208,7 +210,7 @@ mod tests {
 
     #[test]
     fn version_flag_reports_the_exact_build_identity() {
-        let error = DaemonCli::try_parse_from(["captured", "--version"]).unwrap_err();
+        let error = DaemonCli::try_parse_from(["capture-server", "--version"]).unwrap_err();
 
         assert_eq!(error.kind(), clap::error::ErrorKind::DisplayVersion);
         assert!(error.to_string().contains(&format!(

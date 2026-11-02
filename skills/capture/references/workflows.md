@@ -123,7 +123,7 @@ operation:
 
 1. Resolve the admin listener from the user's daemon configuration. Keep it on
    loopback.
-2. Check `GET /healthz` and require service `captured` with API version
+2. Check `GET /healthz` and require service `capture-app` with API version
    `v1`.
 3. Fetch `GET /openapi.json`.
 4. Use only a method, path, parameters, body, and response fields described by

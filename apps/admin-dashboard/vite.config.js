@@ -38,7 +38,7 @@ export default defineConfig({
     },
   ],
   build: {
-    outDir: '../../crates/captured/dashboard',
+    outDir: '../../crates/capture-server/dashboard',
     emptyOutDir: true,
     rollupOptions: {
       input: resolve(process.cwd(), 'local.html'),

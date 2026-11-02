@@ -4,7 +4,7 @@ WORKDIR /app
 COPY . .
 RUN cargo build --locked --release \
     -p capture --bin capture \
-    -p captured --bin captured \
+    -p capture-server --bin capture-server \
     -p capture-notary --bin capture-notary
 
 FROM debian:bookworm-slim AS daemon
@@ -12,10 +12,10 @@ FROM debian:bookworm-slim AS daemon
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates \
     && rm -rf /var/lib/apt/lists/*
-COPY --from=builder /app/target/release/captured /usr/local/bin/captured
+COPY --from=builder /app/target/release/capture-server /usr/local/bin/capture-server
 COPY --from=builder /app/target/release/capture /usr/local/bin/capture
-RUN captured --help >/dev/null && capture --help >/dev/null
-ENTRYPOINT ["captured"]
+RUN capture-server --help >/dev/null && capture --help >/dev/null
+ENTRYPOINT ["capture-server"]
 
 FROM daemon AS cluster
 
@@ -66,17 +66,17 @@ COPY --from=daemon-e2e-planner /app/recipe.json recipe.json
 COPY vendor vendor
 RUN find vendor -exec touch -h -d @0 {} + \
     && cargo chef cook --locked --release --recipe-path recipe.json \
-        -p captured --features daemon-e2e --bins \
+        -p capture-server --features daemon-e2e --bins \
         -p capture --bin capture
 COPY . .
 # Removing target/ in the same step keeps the full build tree out of this
 # layer, so a cache exporter stores only the three binaries.
 RUN find vendor -exec touch -h -d @0 {} + \
     && cargo build --locked --release \
-        -p captured --features daemon-e2e --bins \
+        -p capture-server --features daemon-e2e --bins \
         -p capture --bin capture \
     && mkdir /out \
-    && cp target/release/captured target/release/capture \
+    && cp target/release/capture-server target/release/capture \
         target/release/notary-e2e-notary /out/ \
     && rm -rf target
 
@@ -85,9 +85,9 @@ FROM debian:bookworm-slim AS daemon-e2e
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl jq openssl python3 \
     && rm -rf /var/lib/apt/lists/*
-COPY --from=daemon-e2e-builder /out/captured /out/capture /out/notary-e2e-notary /usr/local/bin/
-RUN captured --help >/dev/null && capture --help >/dev/null
-ENTRYPOINT ["captured"]
+COPY --from=daemon-e2e-builder /out/capture-server /out/capture /out/notary-e2e-notary /usr/local/bin/
+RUN capture-server --help >/dev/null && capture --help >/dev/null
+ENTRYPOINT ["capture-server"]
 COPY deploy-daemon-e2e/config-cluster-template.toml /etc/capture/config-cluster-template.toml
 COPY deploy-daemon-e2e/provider.py /usr/local/libexec/notary-e2e-provider.py
 

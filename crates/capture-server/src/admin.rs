@@ -370,7 +370,7 @@ impl Modify for SecurityAddon {
 #[utoipa::path(get, path = "/healthz", summary = "Check service health", description = "Returns the local service health and API version without requiring authentication.", responses((status = 200, body = HealthResponse)), tag = "local-admin")]
 async fn health() -> Json<HealthResponse> {
     Json(HealthResponse {
-        service: "captured".into(),
+        service: "capture-server".into(),
         status: "ok".into(),
         api_version: API_VERSION.into(),
         build_id: crate::service::BUILD_ID.into(),
@@ -384,7 +384,7 @@ async fn readiness(State(state): State<AdminState>) -> Result<Json<ReadinessResp
     }
     match probe_dependencies(&state).await {
         Ok(()) => Ok(Json(ReadinessResponse {
-            service: "captured".into(),
+            service: "capture-server".into(),
             status: "ready".into(),
             metadata_backend: state.persistence.metadata.backend_name().into(),
             artifact_backend: state.persistence.artifacts.backend_name().into(),
@@ -1633,7 +1633,7 @@ mod tests {
         let served = serde_json::to_string_pretty(&openapi_document()).unwrap();
         assert!(
             committed.trim_end() == served,
-            "The committed server contract is stale. Run `cargo run --manifest-path oss/Cargo.toml -p captured --example export-openapi > oss/crates/captured/openapi.json`."
+            "The committed server contract is stale. Run `cargo run --manifest-path oss/Cargo.toml -p capture-server --example export-openapi > oss/crates/capture-server/openapi.json`."
         );
     }
 

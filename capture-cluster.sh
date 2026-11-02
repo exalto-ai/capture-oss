@@ -2,7 +2,7 @@
 set -euo pipefail
 
 runtime_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-state_dir=${CAPTURED_CLUSTER_STATE_DIR:-"$runtime_dir/.captured-cluster"}
+state_dir=${CAPTURE_SERVER_CLUSTER_STATE_DIR:-"$runtime_dir/.capture-server-cluster"}
 compose_file="$runtime_dir/compose.cluster.yml"
 env_file="$state_dir/.env"
 
@@ -15,7 +15,7 @@ Usage:
   ./capture-cluster.sh logs
   ./capture-cluster.sh down
 
-Set CAPTURED_CLUSTER_STATE_DIR to keep generated configuration elsewhere.
+Set CAPTURE_SERVER_CLUSTER_STATE_DIR to keep generated configuration elsewhere.
 EOF
 }
 

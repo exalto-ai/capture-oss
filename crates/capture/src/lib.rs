@@ -988,7 +988,7 @@ mod tests {
         let router = Router::new()
             .route(
                 "/healthz",
-                get(|| async { Json(json!({ "service": "captured", "api_version": "v1" })) }),
+                get(|| async { Json(json!({ "service": "capture-app", "api_version": "v1" })) }),
             )
             .route(
                 "/v1/status",
@@ -1021,7 +1021,7 @@ mod tests {
                 "/healthz",
                 get(|headers: axum::http::HeaderMap| async move {
                     assert!(!headers.contains_key(axum::http::header::AUTHORIZATION));
-                    Json(json!({ "service": "captured", "api_version": "v1" }))
+                    Json(json!({ "service": "capture-app", "api_version": "v1" }))
                 }),
             )
             .route(
@@ -1138,7 +1138,7 @@ mod tests {
     async fn rejects_api_version_mismatch_before_commands() {
         let router = Router::new().route(
             "/healthz",
-            get(|| async { Json(json!({ "service": "captured", "api_version": "v2" })) }),
+            get(|| async { Json(json!({ "service": "capture-app", "api_version": "v2" })) }),
         );
         let (address, server) = serve(router).await;
         let client = CapturedClient::new(address, None).unwrap();

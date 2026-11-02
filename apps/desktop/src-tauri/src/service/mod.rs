@@ -238,7 +238,7 @@ async fn proxy(State(state): State<ProxyState>, request: Request) -> Response {
             Response::new(Body::empty())
         } else {
             Response::new(Body::from(format!(
-                r#"{{"service":"captured","status":"ok","build_id":"{BUILD_ID}"}}"#
+                r#"{{"service":"capture-app","status":"ok","build_id":"{BUILD_ID}"}}"#
             )))
         };
         response.headers_mut().insert(

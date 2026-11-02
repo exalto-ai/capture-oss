@@ -1,6 +1,6 @@
 services:
   setup:
-    image: ${DAEMON_E2E_IMAGE:-captured-e2e:local}
+    image: ${DAEMON_E2E_IMAGE:-capture-server-e2e:local}
     entrypoint: ["/bin/sh", "-ec"]
     command:
       - |
@@ -140,7 +140,7 @@ services:
     restart: "no"
 
   provider:
-    image: ${DAEMON_E2E_IMAGE:-captured-e2e:local}
+    image: ${DAEMON_E2E_IMAGE:-capture-server-e2e:local}
     depends_on:
       setup:
         condition: service_completed_successfully
@@ -169,7 +169,7 @@ services:
       start_period: 1s
 
   notary:
-    image: ${DAEMON_E2E_IMAGE:-captured-e2e:local}
+    image: ${DAEMON_E2E_IMAGE:-capture-server-e2e:local}
     depends_on:
       setup:
         condition: service_completed_successfully
@@ -177,8 +177,8 @@ services:
         condition: service_healthy
     entrypoint: ["notary-e2e-notary"]
     environment:
-      CAPTURED_E2E_ROOT_CA_DER: /fixtures/ca.der
-      CAPTURED_E2E_SIGNING_KEY_FILE: /fixtures/notary-signing-key
+      CAPTURE_SERVER_E2E_ROOT_CA_DER: /fixtures/ca.der
+      CAPTURE_SERVER_E2E_SIGNING_KEY_FILE: /fixtures/notary-signing-key
     volumes:
       - fixture-state:/fixtures:ro
     read_only: true
@@ -197,7 +197,7 @@ services:
       start_period: 1s
 
   daemon-a:
-    image: ${DAEMON_E2E_IMAGE:-captured-e2e:local}
+    image: ${DAEMON_E2E_IMAGE:-capture-server-e2e:local}
     build:
       context: .
       dockerfile: Dockerfile
@@ -217,15 +217,15 @@ services:
         condition: service_healthy
     command: ["--config", "/state/config-cluster-a.toml"]
     environment:
-      CAPTURED_CLUSTER_INSTANCE_ID: daemon-a
-      CAPTURED_CLUSTER_VAULT_KEY_FILE: /state/secrets/cluster-vault.key
-      CAPTURED_PLATFORM_API_ORIGIN: http://127.0.0.1:9797
-      CAPTURED_PLATFORM_API_KEY: notary_key_11111111111111111111111111111111_2222222222222222222222222222222222222222222222222222222222222222
-      CAPTURED_E2E_ROOT_CA_DER: /fixtures/ca.der
-      CAPTURED_E2E_PAUSE_AFTER_NOTARIZED_ARTIFACT_MS: ${DAEMON_E2E_SERVER_NOTARIZATION_PAUSE_MS:-0}
-      CAPTURED_METADATA_DATABASE_URL: postgresql://daemon_e2e:synthetic-daemon-e2e-password@postgres:5432/daemon_e2e
-      CAPTURED_ARTIFACT_S3_ACCESS_KEY_ID: daemon-e2e-access-key
-      CAPTURED_ARTIFACT_S3_SECRET_ACCESS_KEY: synthetic-daemon-e2e-secret-key
+      CAPTURE_SERVER_CLUSTER_INSTANCE_ID: daemon-a
+      CAPTURE_SERVER_CLUSTER_VAULT_KEY_FILE: /state/secrets/cluster-vault.key
+      CAPTURE_PLATFORM_API_ORIGIN: http://127.0.0.1:9797
+      CAPTURE_PLATFORM_API_KEY: notary_key_11111111111111111111111111111111_2222222222222222222222222222222222222222222222222222222222222222
+      CAPTURE_SERVER_E2E_ROOT_CA_DER: /fixtures/ca.der
+      CAPTURE_SERVER_E2E_PAUSE_AFTER_NOTARIZED_ARTIFACT_MS: ${DAEMON_E2E_SERVER_NOTARIZATION_PAUSE_MS:-0}
+      CAPTURE_SERVER_METADATA_DATABASE_URL: postgresql://daemon_e2e:synthetic-daemon-e2e-password@postgres:5432/daemon_e2e
+      CAPTURE_SERVER_ARTIFACT_S3_ACCESS_KEY_ID: daemon-e2e-access-key
+      CAPTURE_SERVER_ARTIFACT_S3_SECRET_ACCESS_KEY: synthetic-daemon-e2e-secret-key
       XDG_CONFIG_HOME: /state/xdg-config
       XDG_DATA_HOME: /state/xdg-data
     volumes:
@@ -247,7 +247,7 @@ services:
       start_period: 2s
 
   daemon-b:
-    image: ${DAEMON_E2E_IMAGE:-captured-e2e:local}
+    image: ${DAEMON_E2E_IMAGE:-capture-server-e2e:local}
     depends_on:
       setup:
         condition: service_completed_successfully
@@ -263,15 +263,15 @@ services:
         condition: service_healthy
     command: ["--config", "/state/config-cluster-b.toml"]
     environment:
-      CAPTURED_CLUSTER_INSTANCE_ID: daemon-b
-      CAPTURED_CLUSTER_VAULT_KEY_FILE: /state/secrets/cluster-vault.key
-      CAPTURED_PLATFORM_API_ORIGIN: http://127.0.0.1:9797
-      CAPTURED_PLATFORM_API_KEY: notary_key_11111111111111111111111111111111_2222222222222222222222222222222222222222222222222222222222222222
-      CAPTURED_E2E_ROOT_CA_DER: /fixtures/ca.der
-      CAPTURED_E2E_PAUSE_AFTER_NOTARIZED_ARTIFACT_MS: ${DAEMON_E2E_SERVER_NOTARIZATION_PAUSE_MS:-0}
-      CAPTURED_METADATA_DATABASE_URL: postgresql://daemon_e2e:synthetic-daemon-e2e-password@postgres:5432/daemon_e2e
-      CAPTURED_ARTIFACT_S3_ACCESS_KEY_ID: daemon-e2e-access-key
-      CAPTURED_ARTIFACT_S3_SECRET_ACCESS_KEY: synthetic-daemon-e2e-secret-key
+      CAPTURE_SERVER_CLUSTER_INSTANCE_ID: daemon-b
+      CAPTURE_SERVER_CLUSTER_VAULT_KEY_FILE: /state/secrets/cluster-vault.key
+      CAPTURE_PLATFORM_API_ORIGIN: http://127.0.0.1:9797
+      CAPTURE_PLATFORM_API_KEY: notary_key_11111111111111111111111111111111_2222222222222222222222222222222222222222222222222222222222222222
+      CAPTURE_SERVER_E2E_ROOT_CA_DER: /fixtures/ca.der
+      CAPTURE_SERVER_E2E_PAUSE_AFTER_NOTARIZED_ARTIFACT_MS: ${DAEMON_E2E_SERVER_NOTARIZATION_PAUSE_MS:-0}
+      CAPTURE_SERVER_METADATA_DATABASE_URL: postgresql://daemon_e2e:synthetic-daemon-e2e-password@postgres:5432/daemon_e2e
+      CAPTURE_SERVER_ARTIFACT_S3_ACCESS_KEY_ID: daemon-e2e-access-key
+      CAPTURE_SERVER_ARTIFACT_S3_SECRET_ACCESS_KEY: synthetic-daemon-e2e-secret-key
       XDG_CONFIG_HOME: /state/xdg-config
       XDG_DATA_HOME: /state/xdg-data
     volumes:
@@ -293,18 +293,18 @@ services:
       start_period: 2s
 
   server-migrator:
-    image: ${DAEMON_E2E_IMAGE:-captured-e2e:local}
+    image: ${DAEMON_E2E_IMAGE:-capture-server-e2e:local}
     depends_on:
       setup:
         condition: service_completed_successfully
       postgres:
         condition: service_healthy
-    entrypoint: ["captured"]
+    entrypoint: ["capture-server"]
     command: ["migrate", "--config", "/state/config-cluster-a.toml"]
     environment:
-      CAPTURED_PLATFORM_API_ORIGIN: http://127.0.0.1:9797
-      CAPTURED_METADATA_MIGRATION_URL: postgresql://daemon_e2e:synthetic-daemon-e2e-password@postgres:5432/daemon_e2e
-      CAPTURED_CLUSTER_VAULT_KEY_FILE: /state/secrets/cluster-vault.key
+      CAPTURE_PLATFORM_API_ORIGIN: http://127.0.0.1:9797
+      CAPTURE_SERVER_METADATA_MIGRATION_URL: postgresql://daemon_e2e:synthetic-daemon-e2e-password@postgres:5432/daemon_e2e
+      CAPTURE_SERVER_CLUSTER_VAULT_KEY_FILE: /state/secrets/cluster-vault.key
     volumes:
       - daemon-state:/state:ro
     read_only: true

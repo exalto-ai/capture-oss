@@ -11,5 +11,5 @@ fn main() -> anyhow::Result<()> {
         .enable_all()
         .thread_stack_size(WORKER_STACK_BYTES)
         .build()?
-        .block_on(captured::run_daemon())
+        .block_on(capture_server::run_daemon())
 }

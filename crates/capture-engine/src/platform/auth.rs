@@ -22,14 +22,14 @@ pub use crate::admission::{
 
 const KEYCHAIN_SERVICE: &str = "ai.exalto.capture";
 const KEYCHAIN_ACCOUNT: &str = "device-refresh-token";
-const API_KEY_ENV: &str = "CAPTURED_PLATFORM_API_KEY";
-const API_KEY_FILE_ENV: &str = "CAPTURED_PLATFORM_API_KEY_FILE";
-const API_ORIGIN_ENV: &str = "CAPTURED_PLATFORM_API_ORIGIN";
+const API_KEY_ENV: &str = "CAPTURE_PLATFORM_API_KEY";
+const API_KEY_FILE_ENV: &str = "CAPTURE_PLATFORM_API_KEY_FILE";
+const API_ORIGIN_ENV: &str = "CAPTURE_PLATFORM_API_ORIGIN";
 const API_KEY_VERSION_PREFIX: &str = "notary_key_";
 const ACCOUNT_REQUEST_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const ACCOUNT_REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
 const MAX_ADMISSION_RESPONSE_BYTES: usize = 16 * 1024;
-pub const DEFAULT_DEVICE_NAME: &str = "captured";
+pub const DEFAULT_DEVICE_NAME: &str = "Exalto Capture";
 static CREDENTIAL_REFRESH: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
 
 async fn credential_refresh_guard() -> tokio::sync::MutexGuard<'static, ()> {
@@ -686,15 +686,15 @@ fn credential_configuration() -> Result<CredentialConfiguration> {
     validate_source_combination(direct.is_some(), file.is_some(), stored)?;
 
     let origin = match env::var(API_ORIGIN_ENV) {
-        Ok(value) => ApiOrigin::parse(&value).context("validating CAPTURED_PLATFORM_API_ORIGIN")?,
+        Ok(value) => ApiOrigin::parse(&value).context("validating CAPTURE_PLATFORM_API_ORIGIN")?,
         Err(env::VarError::NotPresent) => ApiOrigin::default_public(),
-        Err(env::VarError::NotUnicode(_)) => bail!("CAPTURED_PLATFORM_API_ORIGIN must be UTF-8"),
+        Err(env::VarError::NotUnicode(_)) => bail!("CAPTURE_PLATFORM_API_ORIGIN must be UTF-8"),
     };
     let key = match (direct, file) {
         (Some(value), None) => Some(
             value
                 .into_string()
-                .map_err(|_| anyhow!("CAPTURED_PLATFORM_API_KEY must be UTF-8"))?,
+                .map_err(|_| anyhow!("CAPTURE_PLATFORM_API_KEY must be UTF-8"))?,
         ),
         (None, Some(path)) => Some(read_api_key_file(Path::new(&path))?),
         (None, None) => None,
@@ -726,7 +726,7 @@ fn load_stored_api_origin() -> Result<ApiOrigin> {
 
 fn validate_source_combination(direct: bool, file: bool, stored: bool) -> Result<()> {
     if direct && file {
-        bail!("CAPTURED_PLATFORM_API_KEY and CAPTURED_PLATFORM_API_KEY_FILE are mutually exclusive")
+        bail!("CAPTURE_PLATFORM_API_KEY and CAPTURE_PLATFORM_API_KEY_FILE are mutually exclusive")
     }
     if (direct || file) && stored {
         bail!(

@@ -13,7 +13,7 @@
     "format": "biome check --write .",
     "build": "npm run check:frontend && npm run check:api && npm run check:types && vite build",
     "test": "vitest run --config vitest.config.js",
-    "preview": "vite preview --outDir ../../crates/captured/dashboard --host 127.0.0.1"
+    "preview": "vite preview --outDir ../../crates/capture-server/dashboard --host 127.0.0.1"
   },
   "dependencies": {
     "@mantine/core": "^9.5.0",

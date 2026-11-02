@@ -97,7 +97,7 @@ use crate::{
 };
 
 #[cfg(feature = "daemon-e2e")]
-const DAEMON_E2E_ROOT_CA_DER_ENV: &str = "CAPTURED_E2E_ROOT_CA_DER";
+const DAEMON_E2E_ROOT_CA_DER_ENV: &str = "CAPTURE_SERVER_E2E_ROOT_CA_DER";
 #[cfg(feature = "daemon-e2e")]
 const MAX_DAEMON_E2E_ROOT_CA_BYTES: u64 = 64 << 10;
 

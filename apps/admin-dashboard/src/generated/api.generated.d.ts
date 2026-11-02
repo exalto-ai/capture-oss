@@ -680,7 +680,7 @@ export interface components {
             force?: boolean;
             /**
              * @description A new password, or an empty string to remove it. This value is never
-             *     logged, returned, or persisted by captured.
+             *     logged, returned, or persisted by the local service.
              */
             password?: string | null;
             /**

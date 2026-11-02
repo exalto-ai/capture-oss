@@ -213,7 +213,7 @@ impl NotaryTrust for DaemonNotaryTrust {
 pub(crate) fn require_server_configuration(config: &CapturedConfig) -> Result<()> {
     if config.cluster.is_none() {
         bail!(
-            "captured runs only as a server: configure [cluster] with PostgreSQL metadata and S3 storage. For local capture, use the Exalto Capture app"
+            "capture-server runs only as a server: configure [cluster] with PostgreSQL metadata and S3 storage. For local capture, use the Exalto Capture app"
         );
     }
     Ok(())
@@ -240,7 +240,7 @@ pub async fn run(args: ProxyArgs) -> Result<()> {
     let identity = ClusterRuntime::identity_from_environment()?;
     if hosted_admission_required(&config) && !auth::api_key_mode_active()? {
         bail!(
-            "hosted notary discovery requires CAPTURED_PLATFORM_API_KEY or CAPTURED_PLATFORM_API_KEY_FILE"
+            "hosted notary discovery requires CAPTURE_PLATFORM_API_KEY or CAPTURE_PLATFORM_API_KEY_FILE"
         );
     }
     let (persistence, cluster_runtime) = Persistence::open_cluster(&config, identity).await?;
@@ -625,7 +625,7 @@ async fn proxy(State(state): State<AppState>, request: Request) -> Response {
             Response::new(Body::empty())
         } else {
             Response::new(Body::from(format!(
-                r#"{{"service":"captured","status":"ok","build_id":"{}"}}"#,
+                r#"{{"service":"capture-server","status":"ok","build_id":"{}"}}"#,
                 crate::service::BUILD_ID
             )))
         };
@@ -648,7 +648,7 @@ mod tests {
         assert!(
             error
                 .to_string()
-                .starts_with("captured runs only as a server")
+                .starts_with("capture-server runs only as a server")
         );
     }
 

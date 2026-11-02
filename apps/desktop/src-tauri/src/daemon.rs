@@ -15,7 +15,7 @@ use tokio::sync::watch;
 use crate::service_client::daemon_is_healthy;
 use crate::vault::{VaultSession, local_vault_mode, vault_for_service};
 
-/// Matches the `captured` server binary. JSON transcript parsing is
+/// Matches the `capture-server` binary. JSON transcript parsing is
 /// bounded by the vendored spansy patch; the larger worker stack remains as
 /// containment, so an input-proportional stack consumer fails one request
 /// instead of aborting the app.

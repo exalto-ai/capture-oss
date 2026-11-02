@@ -3,7 +3,7 @@ members = [
     "crates/capture",
     "crates/capture-core",
     "crates/capture-engine",
-    "crates/captured",
+    "crates/capture-server",
     "crates/capture-notary",
     "crates/capture-updater",
 ]

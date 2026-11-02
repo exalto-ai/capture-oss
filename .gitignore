@@ -14,7 +14,7 @@
 /bundles/
 /captures/
 /traces/
-/.captured-cluster/
+/.capture-server-cluster/
 *.llmcapture
 *.llmbundle
 *.key

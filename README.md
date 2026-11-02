@@ -47,12 +47,12 @@ server require Rust 1.95.0 and a C toolchain:
 git clone https://github.com/exalto-ai/capture-runtime.git
 cd capture-runtime
 cargo install --locked --path crates/capture --bin capture
-cargo install --locked --path crates/captured --bin captured
+cargo install --locked --path crates/capture-server --bin capture-server
 ```
 
 With the desktop app running, route a supported provider client through
 `127.0.0.1:8787` and inspect private captures in the app or with the `capture`
-command. `captured` runs only as a replicated server on PostgreSQL and S3; see
+command. `capture-server` runs only as a replicated server on PostgreSQL and S3; see
 [cluster operations](docs/cluster-operations.md).
 
 Dashboard development additionally requires Node.js 24 and npm:

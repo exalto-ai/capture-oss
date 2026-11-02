@@ -23,9 +23,9 @@ const CHECKPOINT_ENVELOPE_MAGIC: &[u8] = b"NTRYV1";
 const KEY_CHECK_FILE_NAME: &str = "vault.key-check";
 const KEY_CHECK_PLAINTEXT: &[u8] = b"notary vault key check";
 const SERVICE: &str = "ai.exalto.capture";
-const PASSPHRASE_FILE_ENV: &str = "CAPTURED_VAULT_PASSPHRASE_FILE";
+const PASSPHRASE_FILE_ENV: &str = "CAPTURE_VAULT_PASSPHRASE_FILE";
 /// Private 32-byte key file shared by every replica in cluster mode.
-pub const CLUSTER_KEY_FILE_ENV: &str = "CAPTURED_CLUSTER_VAULT_KEY_FILE";
+pub const CLUSTER_KEY_FILE_ENV: &str = "CAPTURE_SERVER_CLUSTER_VAULT_KEY_FILE";
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -355,7 +355,7 @@ fn read_server_key_file(path: &Path) -> Result<[u8; 32]> {
 }
 
 fn config_path() -> Result<PathBuf> {
-    if let Some(directory) = env::var_os("CAPTURED_CONFIG_DIR") {
+    if let Some(directory) = env::var_os("CAPTURE_CONFIG_DIR") {
         return Ok(PathBuf::from(directory).join("vault.json"));
     }
     let dirs = ProjectDirs::from("ai", "Exalto", "Notary")
