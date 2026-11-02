@@ -32,15 +32,23 @@ serde-wasm-bindgen = { version = "0.6" }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 wasm-tracing = { version = "0.1" }
-tsify-next = { version = "0.5", default-features = false, features = ["js"] }
+tsify = { version = "0.5.8", default-features = false, features = ["js"] }
 wasm-bindgen = { version = "0.2" }
 wasm-bindgen-futures = { version = "0.4" }
 web-spawn = { workspace = true }
 # ws_stream_wasm removed - IO now injected from JavaScript
 
+[dev-dependencies]
+wasm-bindgen-test = "0.3"
+
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 getrandom = { version = "0.2", features = ["js"] }
 getrandom_03 = { package = "getrandom", version = "0.3", features = [
+    "wasm_js",
+] }
+# rand 0.10 (via mpz-1) pulls in getrandom 0.4, a third major version
+# alongside the two above; it needs the same wasm_js opt-in.
+getrandom_04 = { package = "getrandom", version = "0.4", features = [
     "wasm_js",
 ] }
 rustls-pki-types = { workspace = true, features = ["web"] }

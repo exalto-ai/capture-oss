@@ -27,7 +27,7 @@ cfg_select! {
         use mpz_garble::protocol::semihonest::Garbler;
         use mpz_ot::cot::DerandCOTSender;
         use mpz_zk::Prover;
-        use rand::Rng;
+        use rand::RngExt;
 
         pub(crate) type ProverMpc =
             Garbler<DerandCOTSender<SharedRCOTSender<kos::Sender<co::Receiver>, Block>>>;
@@ -100,16 +100,15 @@ impl ProverMpcDeps {
         let rcot_send = SharedRCOTSender::new(rcot_send);
         let rcot_recv = SharedRCOTReceiver::new(rcot_recv);
 
-        let mpc = cfg_select! {
-            tlsn_insecure => { mpz_ideal_vm::IdealVm::new() }
-            _ => {
-                ProverMpc::new(DerandCOTSender::new(rcot_send.clone()), rng.random(), delta)
-            }
-        };
+        let mpc =
+            cfg_select! {
+                tlsn_insecure => mpz_ideal_vm::IdealVm::new(),
+                _ => ProverMpc::new(DerandCOTSender::new(rcot_send.clone()), rng.random(), delta),
+            };
 
         let zk = cfg_select! {
-            tlsn_insecure => { mpz_ideal_vm::IdealVm::new() }
-            _ => { ProverZk::new(Default::default(), rcot_recv.clone()) }
+            tlsn_insecure => mpz_ideal_vm::IdealVm::new(),
+            _ => ProverZk::new(Default::default(), rcot_recv.clone()),
         };
 
         let vm = Arc::new(Mutex::new(Deap::new(tlsn_deap::Role::Leader, mpc, zk)));
@@ -164,6 +163,7 @@ impl std::fmt::Debug for ProverProxyDeps {
 }
 
 impl ProverProxyDeps {
+    #[rustfmt::skip]
     pub(crate) fn new(_config: &ProxyTlsConfig, ctx: Context) -> Self {
         let vm = new_prover_zk_vm();
 

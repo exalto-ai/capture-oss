@@ -80,6 +80,18 @@ pub(crate) async fn verify_ephemeral_chunks_from_binding(
     server_name: Option<ServerName>,
     chunk_bytes: usize,
 ) -> Result<VerifierOutput> {
+    let sent_plaintext = transcript.sent_unsafe(ciphertext_sent.len()).map_err(|e| {
+        Error::internal()
+            .with_msg("verification failed: sent transcript does not match the session")
+            .with_source(e)
+    })?;
+    let received_plaintext = transcript
+        .received_unsafe(ciphertext_recv.len())
+        .map_err(|e| {
+            Error::internal()
+                .with_msg("verification failed: received transcript does not match the session")
+                .with_source(e)
+        })?;
     if request
         .reveal()
         .is_some_and(|(sent, recv)| !sent.is_empty() || !recv.is_empty())
@@ -121,14 +133,14 @@ pub(crate) async fn verify_ephemeral_chunks_from_binding(
         }
         let (plain, cipher, records, key, iv) = match direction {
             Direction::Sent => (
-                transcript.sent_unsafe(),
+                &sent_plaintext,
                 ciphertext_sent,
                 sent_records,
                 child_keys[0],
                 child_ivs[0],
             ),
             Direction::Received => (
-                transcript.received_unsafe(),
+                &received_plaintext,
                 ciphertext_recv,
                 recv_records,
                 child_keys[1],
@@ -233,6 +245,17 @@ async fn verify_plaintext_batched<T: Vm<Binary> + Send + Sync>(
     commit: &RangeSet<usize>,
     batch_bytes: usize,
 ) -> Result<ReferenceMap> {
+    // `verify_plaintext` rejects ranges past the transcript, but it only sees
+    // the ranges clipped to each batch below. Reject them here instead, so a
+    // prover-declared range cannot reach hash verification without
+    // authenticated plaintext behind all of it.
+    let end = commit.end().unwrap_or(0).max(reveal.end().unwrap_or(0));
+    if end > plaintext.len() {
+        return Err(Error::user().with_msg(format!(
+            "transcript commitment range is out of bounds: {end} > {}",
+            plaintext.len()
+        )));
+    }
     let authenticated = commit.union(reveal).into_set();
     let mut parts = Vec::new();
     for start in (0..plaintext.len()).step_by(batch_bytes) {
@@ -385,6 +408,19 @@ pub(crate) async fn verify<T: Vm<Binary> + Send + Sync>(
         )
         .await;
     }
+    let sent_plaintext = transcript.sent_unsafe(ciphertext_sent.len()).map_err(|e| {
+        Error::internal()
+            .with_msg("verification failed: sent transcript does not match the session")
+            .with_source(e)
+    })?;
+    let received_plaintext = transcript
+        .received_unsafe(ciphertext_recv.len())
+        .map_err(|e| {
+            Error::internal()
+                .with_msg("verification failed: received transcript does not match the session")
+                .with_source(e)
+        })?;
+
     let batch_bytes = STANDARD_PLAINTEXT_AUTH_BATCH_BYTES;
 
     let (sent_refs, sent_proof) =
@@ -395,7 +431,7 @@ pub(crate) async fn verify<T: Vm<Binary> + Send + Sync>(
                     vm,
                     keys.client_write_key,
                     keys.client_write_iv,
-                    transcript.sent_unsafe(),
+                    &sent_plaintext,
                     &ciphertext_sent,
                     &sent_records,
                     transcript.sent_authed(),
@@ -410,7 +446,7 @@ pub(crate) async fn verify<T: Vm<Binary> + Send + Sync>(
                 vm,
                 keys.client_write_key,
                 keys.client_write_iv,
-                transcript.sent_unsafe(),
+                &sent_plaintext,
                 &ciphertext_sent,
                 sent_records.iter().copied(),
                 transcript.sent_authed(),
@@ -432,7 +468,7 @@ pub(crate) async fn verify<T: Vm<Binary> + Send + Sync>(
                 vm,
                 keys.server_write_key,
                 keys.server_write_iv,
-                transcript.received_unsafe(),
+                &received_plaintext,
                 &ciphertext_recv,
                 &recv_records,
                 transcript.received_authed(),
@@ -447,7 +483,7 @@ pub(crate) async fn verify<T: Vm<Binary> + Send + Sync>(
             vm,
             keys.server_write_key,
             keys.server_write_iv,
-            transcript.received_unsafe(),
+            &received_plaintext,
             &ciphertext_recv,
             recv_records.iter().copied(),
             transcript.received_authed(),
@@ -533,4 +569,49 @@ fn collect_ciphertext<'a>(records: impl IntoIterator<Item = &'a Record>) -> Vec<
             ciphertext.extend_from_slice(&record.ciphertext);
         });
     ciphertext
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mpz_common::context::test_st_context;
+    use mpz_ideal_vm::IdealVm;
+    use mpz_memory_core::{Array, binary::U8};
+    use mpz_vm_core::prelude::*;
+    use rstest::rstest;
+    use std::ops::Range;
+
+    #[rstest]
+    #[case::partially_past_end(4..12)]
+    #[case::wholly_past_end(16..24)]
+    #[case::huge(0..(1 << 40))]
+    #[tokio::test]
+    async fn batched_plaintext_rejects_out_of_bounds_commit(#[case] commit: Range<usize>) {
+        let expected = format!(
+            "transcript commitment range is out of bounds: {} > 8",
+            commit.end
+        );
+        let (mut ctx, _) = test_st_context(1024);
+        let mut vm = IdealVm::new();
+        let key = vm.alloc::<Array<U8, 16>>().unwrap();
+        let iv = vm.alloc::<Array<U8, 4>>().unwrap();
+        let plaintext = [0u8; 8];
+
+        let err = verify_plaintext_batched(
+            &mut ctx,
+            &mut vm,
+            key,
+            iv,
+            &plaintext,
+            &[],
+            &[],
+            &RangeSet::default(),
+            &RangeSet::from(commit),
+            EPHEMERAL_PLAINTEXT_AUTH_BATCH_BYTES,
+        )
+        .await
+        .unwrap_err();
+
+        assert!(err.to_string().contains(&expected), "{err}");
+    }
 }

@@ -36,6 +36,7 @@ stability, and the nesting boundary live in `spansy/src/json/span.rs`.
 End-to-end regression tests over HTTP transcripts live in
 `crates/notary-core/tests/json_stack_safety.rs`.
 
-Upstream does not have an equivalent fix as of 2026-07-31 (checked at upstream
-`f0d7215bfcad836b8769fdc768d703a20de04036`); if upstream lands one, drop this
+Upstream `spansy` is unchanged through `e2f31e6a30bc5d1641ed6407fb1a38a595e523ce`,
+the revision the vendored TLSNotary now pins, and has no equivalent fix as of
+2026-11-02 (checked at upstream `1d5e387`); if upstream lands one, drop this
 patch and restore the git dependency.

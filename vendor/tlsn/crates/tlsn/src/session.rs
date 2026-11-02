@@ -9,7 +9,7 @@ use std::{
 };
 
 use futures::{AsyncRead, AsyncWrite};
-use mpz_common::{Executor, io::Io, mux::Mux};
+use mpz_common::{Session as MpzSession, ThreadPool, ThreadPoolBuildError, io::Io, mux::Mux};
 use tlsn_core::config::{prover::ProverConfig, verifier::VerifierConfig};
 use tlsn_mux::{Connection, Handle};
 
@@ -18,6 +18,83 @@ use crate::{
     prover::{Prover, state as prover_state},
     verifier::{Verifier, state as verifier_state},
 };
+
+/// Configuration for a [`Session`].
+#[derive(Debug, Clone)]
+pub struct SessionConfig {
+    mux: tlsn_mux::Config,
+}
+
+impl SessionConfig {
+    /// Creates a new builder.
+    pub fn builder() -> SessionConfigBuilder {
+        SessionConfigBuilder::default()
+    }
+
+    /// Returns the underlying [`tlsn_mux::Config`].
+    fn to_mux_config(&self) -> tlsn_mux::Config {
+        self.mux.clone()
+    }
+}
+
+impl Default for SessionConfig {
+    fn default() -> Self {
+        Self {
+            mux: session_mux_config(None).expect("default mux config is valid"),
+        }
+    }
+}
+
+/// Builds a [`tlsn_mux::Config`] with the session's fixed settings applied.
+///
+/// All mux-specific invariants (e.g. the receive window / stream limit
+/// coupling) are validated by [`tlsn_mux::ConfigBuilder`].
+fn session_mux_config(
+    max_num_streams: Option<usize>,
+) -> Result<tlsn_mux::Config, tlsn_mux::ConfigError> {
+    let mut builder = tlsn_mux::Config::builder()
+        .keep_alive(true)
+        .close_sync(true);
+
+    if let Some(max_num_streams) = max_num_streams {
+        builder = builder.max_num_streams(max_num_streams);
+    }
+
+    builder.build()
+}
+
+/// Builder for [`SessionConfig`].
+#[derive(Debug, Default)]
+pub struct SessionConfigBuilder {
+    max_num_streams: Option<usize>,
+}
+
+impl SessionConfigBuilder {
+    /// Sets the maximum number of concurrent streams per session.
+    ///
+    /// Defaults to the mux default (512) when unset. The limit is bounded by
+    /// the session's receive window (1 GiB by default); higher values are
+    /// rejected by [`build`](Self::build).
+    pub fn max_num_streams(mut self, max_num_streams: usize) -> Self {
+        self.max_num_streams = Some(max_num_streams);
+        self
+    }
+
+    /// Builds the configuration.
+    ///
+    /// Returns an error if the requested stream limit exceeds what the
+    /// session's receive window supports.
+    pub fn build(self) -> Result<SessionConfig, SessionConfigError> {
+        Ok(SessionConfig {
+            mux: session_mux_config(self.max_num_streams)?,
+        })
+    }
+}
+
+/// Error for [`SessionConfig`].
+#[derive(Debug, thiserror::Error)]
+#[error(transparent)]
+pub struct SessionConfigError(#[from] tlsn_mux::ConfigError);
 
 /// A TLSNotary session over a communication channel.
 ///
@@ -37,7 +114,7 @@ use crate::{
 #[must_use = "session must be polled continuously to make progress, including during closing."]
 pub struct Session<Io> {
     conn: Option<Connection<Io>>,
-    executor: Executor,
+    executor: MpzSession,
     handle: Handle,
 }
 
@@ -50,10 +127,15 @@ where
     /// On TCP transports, disable Nagle's algorithm; see
     /// [Performance](crate#performance).
     pub fn new(io: Io) -> Self {
-        let mut mux_config = tlsn_mux::Config::default();
+        Self::new_with_config(io, SessionConfig::default())
+    }
 
-        mux_config.set_keep_alive(true);
-        mux_config.set_close_sync(true);
+    /// Creates a new session over `io` with the given configuration.
+    ///
+    /// On TCP transports, disable Nagle's algorithm; see
+    /// [Performance](crate#performance).
+    pub fn new_with_config(io: Io, config: SessionConfig) -> Self {
+        let mux_config = config.to_mux_config();
 
         let conn = tlsn_mux::Connection::new(io, mux_config);
         let handle = conn.handle().expect("handle should be available");
@@ -259,7 +341,7 @@ where
 ///
 /// Used to create provers/verifiers and control the session lifecycle.
 pub struct SessionHandle {
-    executor: Executor,
+    executor: MpzSession,
     should_close: Arc<AtomicBool>,
     waker: Arc<Mutex<Option<Waker>>>,
     handle: Handle,
@@ -325,15 +407,16 @@ impl Mux for MuxHandle {
     }
 }
 
-/// Builds a work-stealing executor with the given muxer.
-fn build_executor(mux: MuxHandle) -> Executor {
+/// Builds a session backed by the process-wide global thread pool, with the
+/// given muxer.
+fn build_executor(mux: MuxHandle) -> MpzSession {
     #[cfg(all(feature = "web", target_arch = "wasm32"))]
     let cores = web_spawn::available_parallelism().map(|n| n.get());
 
     #[cfg(not(all(feature = "web", target_arch = "wasm32")))]
     let cores = std::thread::available_parallelism().map(|n| n.get());
 
-    let builder = Executor::builder().num_threads(cores.unwrap_or(8));
+    let builder = ThreadPool::builder().num_threads(cores.unwrap_or(8));
 
     #[cfg(all(feature = "web", target_arch = "wasm32"))]
     let builder = builder.spawn(|f| {
@@ -341,5 +424,37 @@ fn build_executor(mux: MuxHandle) -> Executor {
         Ok(())
     });
 
-    builder.build(mux)
+    // Install our configured pool as the process-wide global pool on first
+    // use.
+    match builder.build_global() {
+        Ok(()) | Err(ThreadPoolBuildError::AlreadyInitialized) => {}
+        Err(e) => panic!("failed to build global thread pool: {e}"),
+    }
+
+    MpzSession::builder()
+        .pool(ThreadPool::global())
+        .build(mux)
+        .expect("session should build")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_config_is_valid() {
+        assert!(SessionConfig::builder().build().is_ok());
+    }
+
+    #[test]
+    fn oversized_max_num_streams_is_rejected() {
+        let err = SessionConfig::builder()
+            .max_num_streams(usize::MAX)
+            .build()
+            .unwrap_err();
+        assert!(matches!(
+            err.0,
+            tlsn_mux::ConfigError::ReceiveWindowTooSmall { .. }
+        ));
+    }
 }

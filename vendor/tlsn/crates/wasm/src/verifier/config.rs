@@ -1,8 +1,8 @@
+use crate::session::SessionOptions;
 use serde::Deserialize;
-use tsify_next::Tsify;
+use tsify::Tsify;
 
 #[derive(Debug, Tsify, Deserialize)]
-#[tsify(from_wasm_abi)]
 pub struct VerifierConfig {
     pub max_sent_data: usize,
     pub max_recv_data: usize,
@@ -12,4 +12,7 @@ pub struct VerifierConfig {
     ///
     /// If not provided, Mozilla root certificates are used.
     pub root_certs: Option<Vec<Vec<u8>>>,
+    /// Options for the mux session with the prover.
+    #[serde(default, deserialize_with = "crate::strict::deserialize_strict")]
+    pub session: SessionOptions,
 }

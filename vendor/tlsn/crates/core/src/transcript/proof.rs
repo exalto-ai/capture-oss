@@ -67,8 +67,8 @@ impl TranscriptProof {
             }
         }
 
-        if self.transcript.sent_unsafe().len() != length.sent as usize
-            || self.transcript.received_unsafe().len() != length.received as usize
+        if self.transcript.len_sent() != length.sent as usize
+            || self.transcript.len_received() != length.received as usize
         {
             return Err(TranscriptProofError::new(
                 ErrorKind::Proof,
@@ -94,12 +94,12 @@ impl TranscriptProof {
                 )
             })?;
 
-            let (plaintext, auth) = match direction {
-                Direction::Sent => (self.transcript.sent_unsafe(), &mut total_auth_sent),
-                Direction::Received => (self.transcript.received_unsafe(), &mut total_auth_recv),
+            let total = match direction {
+                Direction::Sent => self.transcript.len_sent(),
+                Direction::Received => self.transcript.len_received(),
             };
 
-            if idx.end().unwrap_or(0) > plaintext.len() {
+            if idx.end().unwrap_or(0) > total {
                 return Err(TranscriptProofError::new(
                     ErrorKind::Hash,
                     "hash opening index is out of bounds",
@@ -108,7 +108,11 @@ impl TranscriptProof {
 
             buffer.clear();
             for range in idx.iter() {
-                buffer.extend_from_slice(&plaintext[range]);
+                match self.transcript.locate(direction, &range) {
+                    Some(bytes) => buffer.extend_from_slice(bytes),
+                    None => buffer
+                        .extend_from_slice(&self.transcript.materialize_range(direction, &range)),
+                }
             }
 
             let expected = PlaintextHash {
@@ -124,7 +128,10 @@ impl TranscriptProof {
                 ));
             }
 
-            auth.union_mut(&expected.idx);
+            match direction {
+                Direction::Sent => total_auth_sent.union_mut(&expected.idx),
+                Direction::Received => total_auth_recv.union_mut(&expected.idx),
+            }
         }
 
         // Assert that all the authenticated data are covered by the proof.
@@ -368,8 +375,8 @@ impl<'a> TranscriptProofBuilder<'a> {
 
         // Tries to cover the query ranges with committed ranges.
         while !uncovered_query_idx.is_empty() {
-            // Committed ranges of different kinds are checked in order of preference set in
-            // self.commitment_kinds.
+            // Committed ranges of different kinds are checked in order of
+            // preference set in self.commitment_kinds.
             if let Some(kind) = commitment_kinds_iter.next() {
                 match kind {
                     TranscriptCommitmentKind::Hash { alg } => {
@@ -379,8 +386,9 @@ impl<'a> TranscriptProofBuilder<'a> {
                             }),
                             |hash| &hash.idx,
                         );
-                        // Uncovered ranges will be checked with ranges of the next
-                        // preferred commitment kind.
+                        // Uncovered ranges will be checked with ranges of the
+                        // next preferred commitment
+                        // kind.
                         uncovered_query_idx.sent = sent_uncovered;
 
                         let (recv_hashes, recv_uncovered) = uncovered_query_idx.recv.cover_by(
@@ -411,13 +419,14 @@ impl<'a> TranscriptProofBuilder<'a> {
                     }
                 }
             } else {
-                // Stops the set cover check if there are no more commitment kinds left.
+                // Stops the set cover check if there are no more commitment
+                // kinds left.
                 break;
             }
         }
 
-        // If there are still uncovered ranges, it means that query ranges cannot be
-        // covered by committed ranges of any kind.
+        // If there are still uncovered ranges, it means that query ranges
+        // cannot be covered by committed ranges of any kind.
         if !uncovered_query_idx.is_empty() {
             return Err(TranscriptProofBuilderError::cover(
                 uncovered_query_idx,
@@ -493,7 +502,7 @@ impl fmt::Display for TranscriptProofBuilderError {
 #[allow(clippy::single_range_in_vec_init)]
 #[cfg(test)]
 mod tests {
-    use rand::{Rng, SeedableRng};
+    use rand::{RngExt, SeedableRng};
     use rangeset::prelude::*;
     use rstest::rstest;
     use tlsn_data_fixtures::http::{request::GET_WITH_HEADER, response::OK_JSON};
@@ -574,10 +583,10 @@ mod tests {
             )
             .unwrap();
 
-        assert_eq!(
-            partial_transcript.sent_unsafe()[0..10],
-            transcript.sent()[0..10]
-        );
+        let sent = partial_transcript
+            .sent_unsafe(partial_transcript.len_sent())
+            .unwrap();
+        assert_eq!(sent[0..10], transcript.sent()[0..10]);
     }
 
     #[rstest]
@@ -692,7 +701,7 @@ mod tests {
         #[case] reveal_recv_rangeset: RangeSet<usize>,
         #[case] success: bool,
     ) {
-        use rand::{Rng, SeedableRng};
+        use rand::{RngExt, SeedableRng};
 
         let mut rng = rand::rngs::StdRng::seed_from_u64(0);
         let transcript = Transcript::new(GET_WITH_HEADER, OK_JSON);
@@ -763,7 +772,7 @@ mod tests {
         #[case] uncovered_sent_rangeset: RangeSet<usize>,
         #[case] uncovered_recv_rangeset: RangeSet<usize>,
     ) {
-        use rand::{Rng, SeedableRng};
+        use rand::{RngExt, SeedableRng};
 
         let mut rng = rand::rngs::StdRng::seed_from_u64(0);
         let transcript = Transcript::new(GET_WITH_HEADER, OK_JSON);

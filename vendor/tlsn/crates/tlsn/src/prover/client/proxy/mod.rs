@@ -38,6 +38,8 @@ pub(crate) struct ProxyTlsClient {
     ms_log: Arc<MasterSecretLog>,
     time: Option<u64>,
     traffic: TlsBytes,
+    /// Decrypted plaintext rustls has buffered for the application.
+    plaintext_pending: usize,
     client_closed: bool,
     server_closed: bool,
     state: State,
@@ -113,6 +115,7 @@ impl ProxyTlsClient {
             ms_log,
             time: None,
             traffic: TlsBytes::default(),
+            plaintext_pending: 0,
             client_closed: false,
             server_closed: false,
             state: State::Init { prover },
@@ -120,6 +123,18 @@ impl ProxyTlsClient {
         };
 
         Ok(tls_client)
+    }
+}
+
+impl ProxyTlsClient {
+    fn process_new_packets(&mut self) -> Result<(), TlsnError> {
+        let io_state = self.conn.process_new_packets().map_err(|err| {
+            TlsnError::internal()
+                .with_msg("rustls error")
+                .with_source(err)
+        })?;
+        self.plaintext_pending = io_state.plaintext_bytes_to_read();
+        Ok(())
     }
 }
 
@@ -154,8 +169,10 @@ impl TlsClient for ProxyTlsClient {
         Ok(n)
     }
 
+    // The prover treats a closed application as abandoned only while this is
+    // true, so it must mean buffered plaintext, not merely "connected".
     fn wants_read(&self) -> bool {
-        matches!(self.state, State::Connected { .. })
+        matches!(self.state, State::Connected { .. }) && self.plaintext_pending > 0
     }
 
     fn wants_write(&self) -> bool {
@@ -172,6 +189,7 @@ impl TlsClient for ProxyTlsClient {
             Err(e) => return Err(TlsnError::internal().with_source(e)),
         }?;
         self.traffic.app_recv.extend_from_slice(&buf[..n]);
+        self.plaintext_pending = self.plaintext_pending.saturating_sub(n);
 
         Ok(n)
     }
@@ -211,11 +229,7 @@ impl TlsClient for ProxyTlsClient {
             }
             State::Handshaking { prover } => {
                 debug!("inner client is handshaking");
-                self.conn.process_new_packets().map_err(|err| {
-                    TlsnError::internal()
-                        .with_msg("rustls error")
-                        .with_source(err)
-                })?;
+                self.process_new_packets()?;
                 if !self.conn.is_handshaking() {
                     let now = web_time::UNIX_EPOCH
                         .elapsed()
@@ -239,11 +253,7 @@ impl TlsClient for ProxyTlsClient {
                 prover,
             } => {
                 trace!("inner client is connected");
-                self.conn.process_new_packets().map_err(|err| {
-                    TlsnError::internal()
-                        .with_msg("rustls error")
-                        .with_source(err)
-                })?;
+                self.process_new_packets()?;
 
                 if self.server_closed {
                     let ms = self.ms_log.take();

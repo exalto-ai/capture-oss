@@ -7,6 +7,7 @@ on:
     tags:
       - "[v]?[0-9]+.[0-9]+.[0-9]+*"
   pull_request:
+  workflow_dispatch:
 
 permissions:
   id-token: write
@@ -21,7 +22,7 @@ env:
   #   - https://github.com/privacy-ethereum/mpz/issues/178
   # 32 seems to be big enough for the foreseeable future
   RAYON_NUM_THREADS: 32
-  RUST_VERSION: 1.96.0
+  RUST_VERSION: 1.95.0
   GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
 jobs:
@@ -51,18 +52,19 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v6
 
-        # We use nightly to support `imports_granularity` feature
+        # We use nightly to support `imports_granularity`, but pin it so a
+        # nightly rustfmt change cannot break formatting across the repo.
       - name: Install nightly rust toolchain with rustfmt
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: nightly
+          toolchain: nightly-2026-10-21
           components: rustfmt
 
       - name: Use caching
         uses: Swatinem/rust-cache@v2.9.1
 
       - name: Check formatting
-        run: cargo +nightly fmt --check --all
+        run: cargo +nightly-2026-10-21 fmt --check --all
 
   build-and-test:
     name: Build and test
@@ -134,6 +136,14 @@ jobs:
       - name: Run build
         working-directory: crates/wasm
         run: ./build.sh
+
+      - name: Run wasm unit tests
+        working-directory: crates/wasm
+        run: wasm-pack test --headless --chrome --release
+
+      - name: Check packaged artifact contract
+        working-directory: crates/wasm
+        run: ./test-package.sh --no-build
 
       - name: Dry Run NPM Publish
         working-directory: crates/wasm/pkg

@@ -1,10 +1,9 @@
-use crate::types::NetworkSetting;
+use crate::{session::SessionOptions, types::NetworkSetting};
 use serde::Deserialize;
-use tsify_next::Tsify;
+use tsify::Tsify;
 
 /// Protocol mode for the prover.
 #[derive(Debug, Clone, Copy, Tsify, Deserialize)]
-#[tsify(from_wasm_abi)]
 pub enum ProverMode {
     /// MPC (Multi-Party Computation) mode.
     Mpc,
@@ -13,7 +12,6 @@ pub enum ProverMode {
 }
 
 #[derive(Debug, Tsify, Deserialize)]
-#[tsify(from_wasm_abi)]
 pub struct ProverConfig {
     pub server_name: String,
     pub mode: ProverMode,
@@ -29,4 +27,7 @@ pub struct ProverConfig {
     ///
     /// If not provided, Mozilla root certificates are used.
     pub root_certs: Option<Vec<Vec<u8>>>,
+    /// Options for the mux session with the verifier.
+    #[serde(default, deserialize_with = "crate::strict::deserialize_strict")]
+    pub session: SessionOptions,
 }

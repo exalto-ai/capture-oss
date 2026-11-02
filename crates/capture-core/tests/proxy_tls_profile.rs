@@ -393,13 +393,13 @@ async fn run_proxy_tls_http_commitment_and_proof(profile: ProofProfile) -> Resul
             &output.transcript_commitments,
         )?;
         assert_eq!(
-            partial.received_unsafe(),
+            partial.received_unsafe(partial.len_received())?,
             prover_transcript.received(),
             "the chunked layout must commit and disclose every response byte"
         );
         assert!(
             !partial
-                .sent_unsafe()
+                .sent_unsafe(partial.len_sent())?
                 .windows(b"Bearer profile-secret".len())
                 .any(|window| window == b"Bearer profile-secret"),
             "selective proof must not disclose the Authorization value"

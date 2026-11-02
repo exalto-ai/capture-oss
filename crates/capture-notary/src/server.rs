@@ -799,8 +799,8 @@ pub async fn exercise_admission_policy_contract(
         client.write_all(b"NTRY\0\0\0\x01").await?;
         client
             .write_all(&[match mode {
-                NotarySessionMode::Capture => 2,
-                NotarySessionMode::Notarization => 3,
+                NotarySessionMode::Capture => 5,
+                NotarySessionMode::Notarization => 6,
                 NotarySessionMode::Witness => 4,
             }])
             .await?;
@@ -1314,7 +1314,7 @@ mod tests {
     ) {
         let admission_value = admission_value.unwrap_or_default().as_bytes();
         client.write_all(b"NTRY\0\0\0\x01").await.unwrap();
-        client.write_all(&[2]).await.unwrap();
+        client.write_all(&[5]).await.unwrap();
         client
             .write_all(&(admission_value.len() as u16).to_be_bytes())
             .await

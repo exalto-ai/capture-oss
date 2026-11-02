@@ -53,11 +53,15 @@ async fn main() {
     println!("Successfully verified {}", uri);
     println!(
         "Verified sent data:\n{}",
-        bytes_to_redacted_string(transcript.sent_unsafe())
+        bytes_to_redacted_string(&transcript.sent_unsafe(transcript.len_sent()).unwrap())
     );
     println!(
         "Verified received data:\n{}",
-        bytes_to_redacted_string(transcript.received_unsafe())
+        bytes_to_redacted_string(
+            &transcript
+                .received_unsafe(transcript.len_received())
+                .unwrap()
+        )
     );
 }
 
@@ -196,22 +200,23 @@ async fn verifier<T: AsyncWrite + AsyncRead + Send + Unpin + 'static>(
 
     // Validate the proposed configuration and then accept it.
     //
-    // We match here explicitly (although we know that in this example the prover
-    // sent a protocol config for proxy mode) to demonstrate dynamic protocol
-    // execution.
+    // We match here explicitly (although we know that in this example the
+    // prover sent a protocol config for proxy mode) to demonstrate dynamic
+    // protocol execution.
     //
-    // The verifier can inspect the protocol configuration requested by the prover
-    // and decide what he wants to do. Here we decide to support both, requests
-    // for mpc mode and proxy mode.
+    // The verifier can inspect the protocol configuration requested by the
+    // prover and decide what he wants to do. Here we decide to support
+    // both, requests for mpc mode and proxy mode.
     let verifier = match verifier.commit().await? {
         VerifierCommitStart::Mpc(verifier) => verifier.accept().await?.run().await?,
         VerifierCommitStart::Proxy(verifier) => {
-            // In proxy mode, the verifier needs to connect to the server and set up
-            // sockets to forward traffic between the prover and the server.
+            // In proxy mode, the verifier needs to connect to the server and
+            // set up sockets to forward traffic between the prover
+            // and the server.
             //
-            // In a real-world scenario, the verifier would resolve the server name
-            // to obtain the server address, but since this is an example we use the
-            // fixed `server_addr`.
+            // In a real-world scenario, the verifier would resolve the server
+            // name to obtain the server address, but since this is
+            // an example we use the fixed `server_addr`.
             let client_socket = tokio::net::TcpStream::connect(server_addr).await.unwrap();
             // Disable Nagle's algorithm to reduce protocol latency. See the
             // `tlsn` crate's performance notes for details.
@@ -250,14 +255,16 @@ async fn verifier<T: AsyncWrite + AsyncRead + Send + Unpin + 'static>(
     let transcript = transcript.expect("prover should have revealed transcript data");
 
     // Check sent data.
-    let sent = transcript.sent_unsafe().to_vec();
+    let sent = transcript.sent_unsafe(transcript.len_sent()).unwrap();
     let sent_data = String::from_utf8(sent.clone()).expect("Verifier expected sent data");
     sent_data
         .find(SERVER_DOMAIN)
         .unwrap_or_else(|| panic!("Verification failed: Expected host {SERVER_DOMAIN}"));
 
     // Check received data.
-    let received = transcript.received_unsafe().to_vec();
+    let received = transcript
+        .received_unsafe(transcript.len_received())
+        .unwrap();
     let response = String::from_utf8(received.clone()).expect("Verifier expected received data");
     response
         .find("Herman Melville")

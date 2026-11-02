@@ -173,8 +173,13 @@ pub const CAPTURE_CHECKPOINT_FORMAT: &str = "ecp/capture-checkpoint/v1";
 pub const CAPTURE_RECEIPT_FORMAT: &str = "ecp/capture-receipt/v1";
 const NOTARY_CONTROL_MAGIC: &[u8; 8] = b"NTRY\0\0\0\x01";
 pub const MAX_NOTARY_ADMISSION_VALUE_BYTES: usize = 512;
-const NOTARY_MODE_CAPTURE: u8 = 2;
-const NOTARY_MODE_NOTARIZATION: u8 = 3;
+// A TLSNotary upgrade that breaks its wire protocol takes new capture and
+// notarization mode numbers, so mismatched client and notary builds fail at
+// the prelude instead of stalling mid-session. Modes 2 and 3 are retired with
+// the TLSNotary rebase onto upstream 24b10ba2; witness mode does not use
+// TLSNotary and keeps its number.
+const NOTARY_MODE_CAPTURE: u8 = 5;
+const NOTARY_MODE_NOTARIZATION: u8 = 6;
 const NOTARY_MODE_WITNESS: u8 = 4;
 const NOTARY_ADMISSION_ACCEPTED: u8 = 1;
 const NOTARY_ADMISSION_REJECTED: u8 = 2;
@@ -2171,8 +2176,8 @@ fn make_disclosed_presentation_with_provider(
         .ok_or_else(|| anyhow!("locally built presentation omitted transcript"))?;
     Ok(DisclosedPresentation {
         presentation,
-        request_disclosed: partial.sent_unsafe().to_vec(),
-        response: partial.received_unsafe().to_vec(),
+        request_disclosed: partial.sent_unsafe(partial.len_sent())?,
+        response: partial.received_unsafe(partial.len_received())?,
         connection_time_unix_seconds,
     })
 }
@@ -2285,8 +2290,8 @@ fn verify_capture_value_with_provider(
         bail!("capture timestamp does not match the authenticated TLS connection");
     }
     let transcript = transcript.ok_or_else(|| anyhow!("presentation omitted transcript"))?;
-    if transcript.sent_unsafe() != capture.request_disclosed
-        || transcript.received_unsafe() != capture.response
+    if transcript.sent_unsafe(transcript.len_sent())? != capture.request_disclosed
+        || transcript.received_unsafe(transcript.len_received())? != capture.response
     {
         bail!("capture HTTP artifacts do not match the authenticated presentation");
     }
@@ -3042,6 +3047,36 @@ mod tests {
         server.await.unwrap();
     }
 
+    /// Clients built against the previous TLSNotary protocol send capture mode
+    /// 2 and notarization mode 3. The notary must refuse them at the prelude,
+    /// before any session work, while their witness mode still works.
+    #[tokio::test]
+    async fn retired_tlsnotary_modes_are_rejected_at_the_prelude() {
+        for (mode, accepted) in [(2, false), (3, false), (NOTARY_MODE_WITNESS, true)] {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let server = tokio::spawn(async move {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                read_notary_session_prelude(&mut socket).await
+            });
+
+            let mut client = TcpStream::connect(address).await.unwrap();
+            client.write_all(NOTARY_CONTROL_MAGIC).await.unwrap();
+            client.write_all(&[mode, 0, 0]).await.unwrap();
+            client.flush().await.unwrap();
+            let result = server.await.unwrap();
+            if accepted {
+                assert_eq!(result.unwrap().mode(), NotarySessionMode::Witness);
+            } else {
+                assert_eq!(
+                    result.unwrap_err().to_string(),
+                    "unsupported notary control mode",
+                    "mode {mode} must be rejected"
+                );
+            }
+        }
+    }
+
     fn test_capture() -> TraceEvidence {
         let evidence = b"presentation".to_vec();
         let request_disclosed = b"POST /v1/messages HTTP/1.1\r\n\r\n{}".to_vec();
@@ -3448,6 +3483,109 @@ mod tests {
         let error = capture_transcript_commit(&upgrade, DEFAULT_MAX_ATTESTABLE_HTTP_BYTES)
             .expect_err("protocol upgrades must remain unsupported");
         assert!(error.to_string().contains("101 Switching Protocols"));
+    }
+
+    /// Providers keep HTTP/1.1 connections alive, so a capture can end with the
+    /// client dropping its side of the TLS connection before the provider
+    /// closes. With no plaintext left to deliver, the Proxy-TLS prover must
+    /// treat that as an ordinary close, not as an abandoned application.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn proxy_tls_prover_accepts_a_dropped_kept_alive_connection() {
+        use tls_server_fixture::{CA_CERT_DER, SERVER_DOMAIN, bind_test_server_hyper};
+        use tlsn::{
+            Session,
+            config::{
+                prover::ProverConfig, tls::TlsClientConfig, tls_commit::proxy::ProxyTlsConfig,
+                verifier::VerifierConfig,
+            },
+            connection::{DnsName, ServerName},
+            verifier::VerifierCommitStart,
+            webpki::{CertificateDer, RootCertStore},
+        };
+
+        fn fixture_roots() -> RootCertStore {
+            RootCertStore {
+                roots: vec![CertificateDer(CA_CERT_DER.to_vec())],
+            }
+        }
+
+        let (prover_socket, verifier_socket) = tokio::io::duplex(2 << 23);
+        let mut prover_session = Session::new(prover_socket.compat());
+        let mut verifier_session = Session::new(verifier_socket.compat());
+        let prover = prover_session
+            .new_prover(ProverConfig::builder().build().unwrap())
+            .unwrap();
+        let verifier = verifier_session
+            .new_verifier(
+                VerifierConfig::builder()
+                    .root_store(fixture_roots())
+                    .build()
+                    .unwrap(),
+            )
+            .unwrap();
+        let (prover_driver, prover_handle) = prover_session.split();
+        let (verifier_driver, verifier_handle) = verifier_session.split();
+        tokio::spawn(prover_driver);
+        tokio::spawn(verifier_driver);
+
+        let (notary_upstream, fixture_socket) = tokio::io::duplex(2 << 16);
+        tokio::spawn(bind_test_server_hyper(fixture_socket.compat()));
+        let prover_task = async {
+            let prover = prover
+                .commit(
+                    ProxyTlsConfig::builder()
+                        .server_name(DnsName::try_from(SERVER_DOMAIN).unwrap())
+                        .build()
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            let (mut connection, prover) = prover
+                .connect(
+                    TlsClientConfig::builder()
+                        .server_name(ServerName::Dns(SERVER_DOMAIN.try_into().unwrap()))
+                        .root_store(fixture_roots())
+                        .build()
+                        .unwrap(),
+                )
+                .unwrap();
+            let prover_task = tokio::spawn(prover.into_future());
+            connection
+                .write_all(b"GET / HTTP/1.1\r\nhost: test-server.io\r\n\r\n")
+                .await
+                .unwrap();
+            // The fixture's fixed, length-delimited reply to `GET /` ends here.
+            let mut response = Vec::new();
+            let mut buf = [0u8; 1024];
+            while !response.ends_with(b"'hello world'`") {
+                let read = connection.read(&mut buf).await.unwrap();
+                assert_ne!(read, 0, "the fixture closed a kept-alive connection");
+                response.extend_from_slice(&buf[..read]);
+            }
+            // Drop both halves without a TLS close, as an HTTP client does when
+            // it discards a kept-alive connection.
+            drop(connection);
+            prover_task.await.unwrap()
+        };
+        let verifier_task = async {
+            let VerifierCommitStart::Proxy(verifier) = verifier.commit().await.unwrap() else {
+                unreachable!("the test always uses Proxy-TLS");
+            };
+            verifier
+                .accept()
+                .await
+                .unwrap()
+                .run(notary_upstream.compat())
+                .await
+        };
+        let (prover, verifier) = within("the kept-alive capture", async {
+            tokio::join!(prover_task, verifier_task)
+        })
+        .await;
+        prover.expect("the prover must accept a dropped kept-alive connection");
+        verifier.expect("the verifier must complete the TLS commitment");
+        prover_handle.close();
+        verifier_handle.close();
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

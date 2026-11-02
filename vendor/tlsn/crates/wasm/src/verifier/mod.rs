@@ -4,11 +4,14 @@ mod config;
 
 pub use config::VerifierConfig;
 
-use tlsn_sdk_core::{SdkVerifier, VerifierConfig as CoreVerifierConfig};
-use wasm_bindgen::prelude::*;
+use tlsn_sdk_core::{
+    SdkVerifier, SessionOptions as CoreSessionOptions, VerifierConfig as CoreVerifierConfig,
+};
+use tsify::{Ts, Tsify};
+use wasm_bindgen::{JsCast, prelude::*};
 
 use crate::{
-    io::{JsIo, JsIoAdapter},
+    io::{AdapterStateHandle, JsIo, JsIoAdapter},
     types::VerifierOutput,
 };
 
@@ -22,16 +25,26 @@ type Result<T> = std::result::Result<T, JsError>;
 #[wasm_bindgen(js_name = Verifier)]
 pub struct JsVerifier {
     inner: SdkVerifier,
+    /// The injected prover channel, retained to return over-read bytes.
+    channel: Option<JsValue>,
+    /// Handle to the adapter's buffered (over-read) bytes.
+    remainder: Option<AdapterStateHandle>,
 }
 
 #[wasm_bindgen(js_class = Verifier)]
 impl JsVerifier {
     /// Creates a new Verifier with the given configuration.
     #[wasm_bindgen(constructor)]
-    pub fn new(config: VerifierConfig) -> Result<JsVerifier> {
+    pub fn new(config: Ts<VerifierConfig>) -> Result<JsVerifier> {
+        let config = crate::strict::from_wasm_strict(config.js_value())
+            .map_err(|e| JsError::new(&e.to_string()))?;
         let core_config = convert_verifier_config(config)?;
         let inner = SdkVerifier::new(core_config);
-        Ok(JsVerifier { inner })
+        Ok(JsVerifier {
+            inner,
+            channel: None,
+            remainder: None,
+        })
     }
 
     /// Connects to the prover.
@@ -41,7 +54,10 @@ impl JsVerifier {
     /// * `prover_io` - A JavaScript object implementing the IoChannel
     ///   interface, connected to the prover.
     pub async fn connect(&mut self, prover_io: JsIo) -> Result<()> {
-        let adapter = JsIoAdapter::new(prover_io);
+        let channel = JsValue::from(prover_io);
+        let adapter = JsIoAdapter::new(channel.clone().unchecked_into());
+        self.remainder = Some(adapter.state_handle());
+        self.channel = Some(channel);
         self.inner
             .connect(adapter)
             .await
@@ -86,13 +102,30 @@ impl JsVerifier {
     }
 
     /// Verifies the connection and finalizes the protocol.
-    pub async fn verify(&mut self) -> Result<VerifierOutput> {
+    pub async fn verify(&mut self) -> Result<Ts<VerifierOutput>> {
         let core_output = self
             .inner
             .verify()
             .await
             .map_err(|e| JsError::new(&e.to_string()))?;
-        Ok(convert_verifier_output(core_output))
+        convert_verifier_output(core_output)
+            .into_ts()
+            .map_err(|e| JsError::new(&e.to_string()))
+    }
+
+    /// Waits until TLSNotary has released the injected prover IO.
+    ///
+    /// After this resolves, JavaScript may safely reuse the original
+    /// `IoChannel` for an application-level protocol.
+    pub async fn finish(&mut self) -> Result<()> {
+        self.inner
+            .finish()
+            .await
+            .map_err(|e| JsError::new(&e.to_string()))?;
+
+        // Any bytes the protocol over-read are pushed back via
+        // `IoChannel.unread`, so they remain available to the next `read()`.
+        crate::io::return_over_read_bytes(&mut self.channel, &mut self.remainder)
     }
 }
 
@@ -114,6 +147,10 @@ fn convert_verifier_config(config: VerifierConfig) -> Result<CoreVerifierConfig>
     if let Some(root_certs) = config.root_certs {
         builder = builder.root_certs(root_certs);
     }
+
+    builder = builder.session(CoreSessionOptions {
+        max_num_streams: config.session.max_num_streams,
+    });
 
     builder.build().map_err(|e| JsError::new(&e.to_string()))
 }

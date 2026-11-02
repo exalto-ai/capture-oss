@@ -6,11 +6,13 @@ pub use config::ProverConfig;
 
 use tlsn_sdk_core::{
     NetworkSetting as CoreNetworkSetting, ProverConfig as CoreProverConfig, ProverMode, SdkProver,
+    SessionOptions as CoreSessionOptions,
 };
-use wasm_bindgen::{JsError, prelude::*};
+use tsify::{Ts, Tsify};
+use wasm_bindgen::{JsCast, JsError, prelude::*};
 
 use crate::{
-    io::{JsIo, JsIoAdapter},
+    io::{AdapterStateHandle, JsIo, JsIoAdapter},
     types::*,
 };
 
@@ -24,18 +26,26 @@ type Result<T> = std::result::Result<T, JsError>;
 pub struct JsProver {
     inner: SdkProver,
     progress_callback: Option<js_sys::Function>,
+    /// The injected verifier channel, retained to return over-read bytes.
+    channel: Option<JsValue>,
+    /// Handle to the adapter's buffered (over-read) bytes.
+    remainder: Option<AdapterStateHandle>,
 }
 
 #[wasm_bindgen(js_class = Prover)]
 impl JsProver {
     /// Creates a new Prover with the given configuration.
     #[wasm_bindgen(constructor)]
-    pub fn new(config: ProverConfig) -> Result<JsProver> {
+    pub fn new(config: Ts<ProverConfig>) -> Result<JsProver> {
+        let config = crate::strict::from_wasm_strict(config.js_value())
+            .map_err(|e| JsError::new(&e.to_string()))?;
         let core_config = convert_prover_config(config)?;
         let inner = SdkProver::new(core_config).map_err(|e| JsError::new(&e.to_string()))?;
         Ok(JsProver {
             inner,
             progress_callback: None,
+            channel: None,
+            remainder: None,
         })
     }
 
@@ -62,7 +72,10 @@ impl JsProver {
     pub async fn setup(&mut self, verifier_io: JsIo) -> Result<()> {
         self.emit_progress("MPC_SETUP", 0.1, "Connecting to verifier...");
 
-        let adapter = JsIoAdapter::new(verifier_io);
+        let channel = JsValue::from(verifier_io);
+        let adapter = JsIoAdapter::new(channel.clone().unchecked_into());
+        self.remainder = Some(adapter.state_handle());
+        self.channel = Some(channel);
         self.inner
             .setup(adapter)
             .await
@@ -84,14 +97,17 @@ impl JsProver {
     pub async fn send_request(
         &mut self,
         server_io: Option<JsIo>,
-        request: HttpRequest,
-    ) -> Result<HttpResponse> {
+        request: Ts<HttpRequest>,
+    ) -> Result<Ts<HttpResponse>> {
         self.emit_progress(
             "CONNECTING_TO_SERVER",
             0.3,
             "Connecting to application server...",
         );
 
+        let request = request
+            .to_rust()
+            .map_err(|e| JsError::new(&e.to_string()))?;
         let core_request = convert_http_request(request);
 
         self.emit_progress("SENDING_REQUEST", 0.4, "Sending request...");
@@ -114,16 +130,20 @@ impl JsProver {
 
         self.emit_progress("REQUEST_COMPLETE", 0.5, "Response received");
 
-        Ok(convert_http_response(core_response))
+        convert_http_response(core_response)
+            .into_ts()
+            .map_err(|e| JsError::new(&e.to_string()))
     }
 
     /// Returns the transcript of the TLS session.
-    pub fn transcript(&self) -> Result<Transcript> {
+    pub fn transcript(&self) -> Result<Ts<Transcript>> {
         let core_transcript = self
             .inner
             .transcript()
             .map_err(|e| JsError::new(&e.to_string()))?;
-        Ok(convert_transcript(core_transcript))
+        convert_transcript(core_transcript)
+            .into_ts()
+            .map_err(|e| JsError::new(&e.to_string()))
     }
 
     /// Reveals data to the verifier and finalizes the protocol.
@@ -135,8 +155,17 @@ impl JsProver {
     /// hash-committed range (`{ direction, ranges, algorithm, hash, blinder
     /// }`), in the same order as the input `Commit`. The `commitments`
     /// array is empty when no commit was supplied.
-    pub async fn reveal(&mut self, reveal: Reveal, commit: Option<Commit>) -> Result<RevealOutput> {
+    pub async fn reveal(
+        &mut self,
+        reveal: Ts<Reveal>,
+        commit: Option<Ts<Commit>>,
+    ) -> Result<Ts<RevealOutput>> {
         self.emit_progress("REVEAL", 0.7, "Proving and revealing data...");
+
+        let reveal = reveal.to_rust().map_err(|e| JsError::new(&e.to_string()))?;
+        let commit = commit
+            .map(|commit| commit.to_rust().map_err(|e| JsError::new(&e.to_string())))
+            .transpose()?;
 
         let core_reveal = convert_reveal(reveal);
         let core_commit = commit.map(convert_commit);
@@ -149,7 +178,24 @@ impl JsProver {
 
         self.emit_progress("FINALIZED", 0.95, "Protocol finalized");
 
-        Ok(convert_reveal_output(output))
+        convert_reveal_output(output)
+            .into_ts()
+            .map_err(|e| JsError::new(&e.to_string()))
+    }
+
+    /// Waits until TLSNotary has released the injected verifier IO.
+    ///
+    /// After this resolves, JavaScript may safely reuse the original
+    /// `IoChannel` for an application-level protocol.
+    pub async fn finish(&mut self) -> Result<()> {
+        self.inner
+            .finish()
+            .await
+            .map_err(|e| JsError::new(&e.to_string()))?;
+
+        // Any bytes the protocol over-read are pushed back via
+        // `IoChannel.unread`, so they remain available to the next `read()`.
+        crate::io::return_over_read_bytes(&mut self.channel, &mut self.remainder)
     }
 }
 
@@ -206,6 +252,10 @@ fn convert_prover_config(config: ProverConfig) -> Result<CoreProverConfig> {
     if let Some(root_certs) = config.root_certs {
         builder = builder.root_certs(root_certs);
     }
+
+    builder = builder.session(CoreSessionOptions {
+        max_num_streams: config.session.max_num_streams,
+    });
 
     builder.build().map_err(|e| JsError::new(&e.to_string()))
 }
