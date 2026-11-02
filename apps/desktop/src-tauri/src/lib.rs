@@ -257,7 +257,8 @@ async fn get_desktop_state(
 
 /// The sidebar column is drawn by the system as a translucent sidebar
 /// material, so the window is transparent and the content area paints its
-/// own opaque background.
+/// own opaque background. Other platforms keep the opaque window.
+#[cfg_attr(not(target_os = "macos"), allow(unused_variables))]
 fn apply_sidebar_material(app: &tauri::App) {
     #[cfg(target_os = "macos")]
     if let Some(window) = app.get_webview_window("main")

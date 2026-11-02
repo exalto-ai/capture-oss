@@ -40,8 +40,8 @@ base64 = "0.22"
 capture-core = { path = "../../../crates/capture-core", features = ["test-utils"] }
 tempfile = "3"
 
-# The desktop app is its own workspace: Tauri needs macOS (or WebKitGTK) to
-# build, so it stays out of the runtime workspace that CI builds on Linux.
+# The desktop app is its own workspace: on Linux, Tauri needs WebKitGTK, and
+# building the runtime workspace's CLI and services should not.
 # Patches and profiles apply only at a workspace root, so these mirror
 # the runtime workspace's Cargo.toml.
 [workspace]

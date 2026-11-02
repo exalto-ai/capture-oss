@@ -59,13 +59,22 @@ npm --prefix apps/admin-dashboard ci
 npm --prefix apps/admin-dashboard run build
 ```
 
-The desktop app is its own Cargo workspace, because Tauri needs macOS (or
-WebKitGTK) to build. On macOS, install the
-[Tauri prerequisites](https://v2.tauri.app/start/prerequisites/), then run:
+The desktop app builds on macOS and Linux. It is its own Cargo workspace, so
+building the CLI and daemon never requires WebKitGTK. Install the
+[Tauri prerequisites](https://v2.tauri.app/start/prerequisites/), then build a
+macOS `.app` bundle with:
 
 ```bash
 npm --prefix apps/desktop ci
 npm --prefix apps/desktop run tauri:build:debug
+```
+
+On Linux, build the application without a bundle:
+
+```bash
+npm --prefix apps/desktop ci
+npm --prefix apps/desktop run prepare:sidecar:debug
+npm --prefix apps/desktop exec -- tauri build --debug --no-bundle
 ```
 
 [Public CI](https://github.com/exalto-ai/capture-runtime/actions/workflows/ci.yml)

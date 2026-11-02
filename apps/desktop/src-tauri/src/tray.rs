@@ -1,11 +1,11 @@
 use std::time::Duration;
 
 use capture::client::CaptureMode;
+#[cfg(target_os = "macos")]
+use tauri::menu::AboutMetadata;
 use tauri::{
     Emitter, Manager,
-    menu::{
-        AboutMetadata, CheckMenuItem, HELP_SUBMENU_ID, Menu, MenuItem, PredefinedMenuItem, Submenu,
-    },
+    menu::{CheckMenuItem, HELP_SUBMENU_ID, Menu, MenuItem, PredefinedMenuItem, Submenu},
     tray::TrayIconBuilder,
 };
 
