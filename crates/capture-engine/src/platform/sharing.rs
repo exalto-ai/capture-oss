@@ -2,9 +2,8 @@
 
 use std::collections::BTreeMap;
 
-use crate::{
+use capture_core::{
     archive::{ARCHIVE_CONTENT_TYPE, TRACE_PACKAGE_FORMAT},
-    metadata::RegistrySnapshot,
     notarization::{
         trace_package_created_at_unix_ms_bytes, trace_package_notary_key_bytes,
         verify_trace_package_bytes,
@@ -12,12 +11,14 @@ use crate::{
     public_safety::{
         PublicPackageSafetyContext, validate_public_trace_package_with_context_and_force,
     },
-    service::{
-        api_origin::ApiOrigin, auth, http_client_builder, proxy::refresh_registry_from,
-        registry as registry_service,
-    },
     sha256_hex,
 };
+
+use super::{
+    api_origin::ApiOrigin, auth, http_client_builder, registry as registry_service,
+    registry::refresh_registry_from,
+};
+use crate::metadata::RegistrySnapshot;
 use anyhow::{Context, Result, bail};
 use clap::ValueEnum;
 use reqwest::{Method, Response, StatusCode, header};
@@ -25,13 +26,13 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, ValueEnum, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
-pub(crate) enum ShareVisibility {
+pub enum ShareVisibility {
     Unlisted,
     Listed,
 }
 
 impl ShareVisibility {
-    pub(crate) fn as_str(self) -> &'static str {
+    pub fn as_str(self) -> &'static str {
         match self {
             Self::Unlisted => "unlisted",
             Self::Listed => "listed",
@@ -66,7 +67,7 @@ struct CompleteHostedTraceUpload<'a> {
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum HostedTraceStatus {
+pub enum HostedTraceStatus {
     Verifying,
     Shared,
     Stopped,
@@ -111,20 +112,20 @@ struct ApiErrorResponse {
 
 #[derive(Debug, thiserror::Error)]
 #[error("{action} failed with HTTP {status}: {code}")]
-pub(crate) struct HostedApiError {
+pub struct HostedApiError {
     action: &'static str,
     status: StatusCode,
     code: String,
 }
 
 impl HostedApiError {
-    pub(crate) fn classified(&self) -> Option<HostedShareError> {
+    pub fn classified(&self) -> Option<HostedShareError> {
         HostedShareError::classify(self.status, &self.code)
     }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum HostedShareError {
+pub enum HostedShareError {
     BillingReview,
     PasswordCapacity,
     PasswordRateLimited,
@@ -167,49 +168,49 @@ fn validate_hosted_trace_identity(trace: &HostedTrace, expected: Option<&str>) -
 }
 
 #[derive(Debug, Serialize)]
-pub(crate) struct ShareOutput {
-    pub(crate) hosted_trace_id: String,
-    pub(crate) state: HostedTraceStatus,
-    pub(crate) status_url: String,
-    pub(crate) visibility: ShareVisibility,
-    pub(crate) share_url: Option<String>,
-    pub(crate) package_url: Option<String>,
-    pub(crate) access_enabled: bool,
-    pub(crate) password_protected: bool,
-    pub(crate) expires_at: Option<i64>,
+pub struct ShareOutput {
+    pub hosted_trace_id: String,
+    pub state: HostedTraceStatus,
+    pub status_url: String,
+    pub visibility: ShareVisibility,
+    pub share_url: Option<String>,
+    pub package_url: Option<String>,
+    pub access_enabled: bool,
+    pub password_protected: bool,
+    pub expires_at: Option<i64>,
 }
 
 #[derive(Debug, Serialize)]
-pub(crate) struct ShareStatus {
-    pub(crate) hosted_trace_id: String,
-    pub(crate) state: HostedTraceStatus,
-    pub(crate) failure_code: Option<String>,
-    pub(crate) share_url: Option<String>,
-    pub(crate) package_url: Option<String>,
-    pub(crate) visibility: ShareVisibility,
-    pub(crate) access_enabled: bool,
-    pub(crate) password_protected: bool,
-    pub(crate) expires_at: Option<i64>,
+pub struct ShareStatus {
+    pub hosted_trace_id: String,
+    pub state: HostedTraceStatus,
+    pub failure_code: Option<String>,
+    pub share_url: Option<String>,
+    pub package_url: Option<String>,
+    pub visibility: ShareVisibility,
+    pub access_enabled: bool,
+    pub password_protected: bool,
+    pub expires_at: Option<i64>,
 }
 
 #[derive(Debug)]
-pub(crate) enum ShareStatusError {
+pub enum ShareStatusError {
     Authentication,
     Hosted(HostedShareError),
     NotFound,
     Unavailable,
 }
 
-pub(crate) struct SharePackageOptions<'a> {
-    pub(crate) visibility: ShareVisibility,
-    pub(crate) password: Option<&'a str>,
-    pub(crate) expires_in_days: Option<u32>,
-    pub(crate) force: bool,
-    pub(crate) reactivate: bool,
+pub struct SharePackageOptions<'a> {
+    pub visibility: ShareVisibility,
+    pub password: Option<&'a str>,
+    pub expires_in_days: Option<u32>,
+    pub force: bool,
+    pub reactivate: bool,
 }
 
 /// Verifies and shares exact already-snapshotted package bytes.
-pub(crate) async fn share_package_bytes(
+pub async fn share_package_bytes(
     archive: &[u8],
     trusted_key: Option<&str>,
     shared_trust: Option<&RegistrySnapshot>,
@@ -301,7 +302,7 @@ pub(crate) async fn share_package_bytes(
     Ok((output, verified.manifest.trace_id().to_owned(), key_id))
 }
 
-pub(crate) async fn share_status(
+pub async fn share_status(
     hosted_trace_id: &str,
 ) -> std::result::Result<ShareStatus, ShareStatusError> {
     let authenticated =
@@ -351,7 +352,7 @@ struct UpdateShareSettings<'a> {
 
 /// Changes only public access settings; the caller retains ownership of all
 /// secret input and this function never returns it.
-pub(crate) async fn update_share_settings(
+pub async fn update_share_settings(
     hosted_trace_id: &str,
     visibility: Option<ShareVisibility>,
     password: Option<&str>,
@@ -374,9 +375,7 @@ pub(crate) async fn update_share_settings(
     .await
 }
 
-pub(crate) async fn stop_sharing(
-    hosted_trace_id: &str,
-) -> std::result::Result<(), ShareStatusError> {
+pub async fn stop_sharing(hosted_trace_id: &str) -> std::result::Result<(), ShareStatusError> {
     let authenticated =
         auth::authenticate_for_sharing_status()
             .await

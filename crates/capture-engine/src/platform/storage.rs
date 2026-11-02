@@ -4,7 +4,7 @@ use std::{
 };
 
 use anyhow::{Result, bail};
-pub(crate) use capture_updater::write_private_file_atomically;
+pub use capture_updater::write_private_file_atomically;
 
 pub(super) fn config_file(name: &str) -> Result<PathBuf> {
     let mut components = Path::new(name).components();

@@ -48,7 +48,7 @@ use crate::{
     metadata::{CaptureMode, RegistrySnapshot, TraceShareRecord},
     persistence::Persistence,
     registry::{NotaryKeyStatus, RegistryRecord, key_id},
-    service::{DEFAULT_API_ORIGIN, auth, proxy, registry as registry_service, sharing},
+    service::{DEFAULT_API_ORIGIN, auth, registry as registry_service, sharing},
     vault::Vault,
 };
 
@@ -1134,15 +1134,6 @@ async fn end_account_connection(State(state): State<AdminState>) -> Result<Statu
     Ok(StatusCode::NO_CONTENT)
 }
 
-impl From<ShareVisibility> for sharing::ShareVisibility {
-    fn from(value: ShareVisibility) -> Self {
-        match value {
-            ShareVisibility::Unlisted => Self::Unlisted,
-            ShareVisibility::Listed => Self::Listed,
-        }
-    }
-}
-
 #[derive(Deserialize)]
 #[serde(transparent)]
 struct SecretInput(String);
@@ -1400,7 +1391,7 @@ async fn load_share_registry(state: &AdminState) -> Result<Option<RegistrySnapsh
     if state.config.notary.endpoint.is_some() {
         return Ok(None);
     }
-    let (registry, source) = proxy::fetch_registry_from(
+    let (registry, source) = registry_service::fetch_registry_from(
         &auth::configured_api_origin()
             .map_err(|_| ApiError::internal("share_configuration_invalid"))?,
     )

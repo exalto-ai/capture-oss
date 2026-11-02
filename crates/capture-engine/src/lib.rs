@@ -9,6 +9,7 @@ pub mod capture_ledger;
 pub mod metadata;
 pub mod metadata_store;
 pub mod notarization;
+pub mod platform;
 pub mod providers;
 pub mod proxy;
 pub mod sqlite_metadata;

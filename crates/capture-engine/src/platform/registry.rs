@@ -10,15 +10,17 @@ use anyhow::{Context, Result, anyhow, bail};
 use k256::ecdsa::VerifyingKey;
 use serde::{Deserialize, Serialize};
 
-use crate::{
+use capture_core::{
     CaptureCheckpoint,
-    metadata::RegistrySnapshot,
-    registry::{NotaryKeyStatus, REGISTRY_FORMAT, Registry, RegistryRecord, key_id},
+    registry::{
+        NotaryEndpoint, NotaryKeyStatus, REGISTRY_FORMAT, Registry, RegistryRecord, key_id,
+    },
 };
 
-use super::storage;
+use super::{api_origin::ApiOrigin, http_client_builder, storage};
+use crate::metadata::RegistrySnapshot;
 
-pub use crate::registry::parse_registry;
+pub use capture_core::registry::parse_registry;
 
 #[derive(Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -32,7 +34,7 @@ struct RegistryStore {
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct PinnedRegistryState {
+pub struct PinnedRegistryState {
     pub registry_source: Option<String>,
     pub generation: u64,
     pub active_key_id: String,
@@ -78,7 +80,7 @@ fn pin_at_path(path: &Path, registry: Registry, registry_source: &str) -> Result
 }
 
 fn merge_store(mut store: RegistryStore, registry: Registry) -> Result<RegistryStore> {
-    let registry_sha256 = crate::sha256_hex(
+    let registry_sha256 = capture_core::sha256_hex(
         &serde_json::to_vec(&registry).context("encode notary registry revision")?,
     );
     if registry.generation < store.generation {
@@ -133,7 +135,7 @@ fn merge_store(mut store: RegistryStore, registry: Registry) -> Result<RegistryS
     Ok(store)
 }
 
-pub(crate) fn merge_registry_snapshot(
+pub fn merge_registry_snapshot(
     current: Option<RegistrySnapshot>,
     registry: Registry,
     registry_source: &str,
@@ -170,7 +172,7 @@ pub(crate) fn merge_registry_snapshot(
     Ok(shared_from_store(store))
 }
 
-pub(crate) fn validate_registry_snapshot(snapshot: &RegistrySnapshot) -> Result<()> {
+pub fn validate_registry_snapshot(snapshot: &RegistrySnapshot) -> Result<()> {
     validate_registry_store(&RegistryStore {
         format: REGISTRY_FORMAT.to_owned(),
         generation: snapshot.generation,
@@ -181,7 +183,7 @@ pub(crate) fn validate_registry_snapshot(snapshot: &RegistrySnapshot) -> Result<
     })
 }
 
-pub(crate) fn registry_key_at(
+pub fn registry_key_at(
     snapshot: &RegistrySnapshot,
     public_key: &[u8],
     authenticated_unix_ms: u64,
@@ -206,7 +208,7 @@ pub(crate) fn registry_key_at(
     Ok((record.key_id.clone(), "registry".to_owned()))
 }
 
-pub(crate) fn registry_record_for_checkpoint(
+pub fn registry_record_for_checkpoint(
     snapshot: &RegistrySnapshot,
     checkpoint: &CaptureCheckpoint,
 ) -> Result<(Vec<u8>, RegistryRecord)> {
@@ -289,15 +291,15 @@ pub fn cached_registry_record_for_checkpoint(
 }
 
 /// Returns the records of the locally pinned Registry.
-pub(crate) fn cached_registry_records() -> Result<Vec<RegistryRecord>> {
+pub fn cached_registry_records() -> Result<Vec<RegistryRecord>> {
     Ok(validated_store()?.records)
 }
 
 /// Finds the Registry key that signed a witness receipt and was trusted when
 /// the notary opened the provider connection.
-pub(crate) fn witness_key_from_records(
+pub fn witness_key_from_records(
     records: &[RegistryRecord],
-    exchange: &crate::witness::WitnessedExchange,
+    exchange: &capture_core::witness::WitnessedExchange,
 ) -> Result<Vec<u8>> {
     let connected_at = exchange.receipt().connected_at_unix_ms();
     for record in records {
@@ -316,7 +318,7 @@ pub fn explicit_key(value: &str) -> Result<(Vec<u8>, String)> {
     Ok((key.clone(), key_id(&key)))
 }
 
-pub(crate) fn pinned_state() -> Result<Option<PinnedRegistryState>> {
+pub fn pinned_state() -> Result<Option<PinnedRegistryState>> {
     let path = registry_store_path()?;
     if !path.exists() {
         return Ok(None);
@@ -428,11 +430,85 @@ fn unix_time_ms() -> Result<u64> {
         .context("current time does not fit in u64 milliseconds")
 }
 
+pub async fn discover_notary() -> Result<NotaryEndpoint> {
+    let registry = refresh_registry().await?;
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .context("system clock is before the Unix epoch")?
+        .as_millis()
+        .try_into()
+        .context("current time does not fit in u64 milliseconds")?;
+    resolve_notary(registry.active_at(now)?).await
+}
+
+pub async fn refresh_registry() -> Result<Registry> {
+    refresh_registry_from(&super::auth::configured_api_origin()?).await
+}
+
+pub async fn refresh_registry_from(api_origin: &ApiOrigin) -> Result<Registry> {
+    let (registry, registry_source_url) = fetch_registry_from(api_origin).await?;
+    pin(registry.clone(), registry_source_url.as_str())?;
+    tracing::info!(
+        key_id = %registry.active_key_id,
+        key_count = registry.notaries.len(),
+        "pinned trusted notary registry"
+    );
+    Ok(registry)
+}
+
+pub async fn fetch_registry_from(api_origin: &ApiOrigin) -> Result<(Registry, url::Url)> {
+    let registry_source_url = registry_url(api_origin);
+    let bytes = http_client_builder()
+        .build()?
+        .get(registry_source_url.clone())
+        .send()
+        .await
+        .with_context(|| format!("fetching notary endpoint from {registry_source_url}"))?
+        .error_for_status()
+        .with_context(|| format!("fetching notary endpoint from {registry_source_url}"))?
+        .bytes()
+        .await
+        .context("reading notary registry from Notary API")?;
+    let registry = parse_hosted_registry(&bytes)?;
+    Ok((registry, registry_source_url))
+}
+
+fn parse_hosted_registry(bytes: &[u8]) -> Result<Registry> {
+    let mut document: serde_json::Value =
+        serde_json::from_slice(bytes).context("decoding hosted Notary Registry")?;
+    let notaries = document
+        .get_mut("notaries")
+        .and_then(serde_json::Value::as_array_mut)
+        .context("hosted Notary Registry is missing its notaries")?;
+    for notary in notaries {
+        let notary = notary
+            .as_object_mut()
+            .context("hosted Notary Registry contains an invalid notary")?;
+        if notary.contains_key("public_key") {
+            bail!("hosted Notary Registry uses a retired public_key field");
+        }
+        let verification_key = notary
+            .remove("verification_key")
+            .context("hosted Notary Registry is missing a verification_key")?;
+        notary.insert("public_key".to_owned(), verification_key);
+    }
+    let internal = serde_json::to_vec(&document).context("adapting hosted Notary Registry")?;
+    parse_registry(&internal)
+}
+
+fn registry_url(api_origin: &ApiOrigin) -> url::Url {
+    api_origin.api_url("/api/registry")
+}
+
+pub async fn resolve_notary(record: &RegistryRecord) -> Result<NotaryEndpoint> {
+    record.endpoint()
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::{Arc, Barrier};
 
-    use crate::registry::NotaryTransport;
+    use capture_core::registry::NotaryTransport;
 
     use super::*;
 
@@ -707,5 +783,47 @@ mod tests {
             assert!(load_store(&path).is_err());
         }
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn registry_discovery_stays_on_the_configured_api_origin() {
+        assert_eq!(
+            registry_url(&ApiOrigin::parse("https://self-hosted.example").unwrap()).as_str(),
+            "https://self-hosted.example/api/registry"
+        );
+        assert!(ApiOrigin::parse("file:///tmp/notary").is_err());
+    }
+
+    #[test]
+    fn hosted_registry_uses_the_canonical_verification_key_field() {
+        let document = serde_json::json!({
+            "format": "ecp/registry/v1",
+            "generation": 1,
+            "active_key_id": "sha256:0f715baf5d4c2ed329785cef29e562f73488c8a2bb9dbc5700b361d54b9b0554",
+            "notaries": [{
+                "name": "Test Notary",
+                "operator": "Exalto",
+                "host": "notary.example.com",
+                "port": 7047,
+                "transport": "tcp",
+                "key_id": "sha256:0f715baf5d4c2ed329785cef29e562f73488c8a2bb9dbc5700b361d54b9b0554",
+                "verification_key": "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
+                "status": "active",
+                "valid_from_unix_ms": 0,
+                "valid_until_unix_ms": null,
+                "notarize_until_unix_ms": null
+            }]
+        });
+        let registry = parse_hosted_registry(&serde_json::to_vec(&document).unwrap()).unwrap();
+        assert_eq!(
+            registry.notaries[0].public_key,
+            "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"
+        );
+
+        let mut retired = document;
+        let record = retired["notaries"][0].as_object_mut().unwrap();
+        let key = record.remove("verification_key").unwrap();
+        record.insert("public_key".to_owned(), key);
+        assert!(parse_hosted_registry(&serde_json::to_vec(&retired).unwrap()).is_err());
     }
 }

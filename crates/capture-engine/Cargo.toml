@@ -19,12 +19,14 @@ async-trait = { workspace = true }
 base64 = { workspace = true }
 bytes = { workspace = true }
 capture-core = { workspace = true, features = ["cli", "openapi"] }
+capture-updater = { workspace = true }
+clap = { workspace = true, features = ["derive"] }
 hex = { workspace = true }
 http = { workspace = true }
 http-body-util = { workspace = true }
 k256 = { workspace = true, features = ["ecdsa"] }
 libc = { workspace = true }
-reqwest = { workspace = true, features = ["rustls-tls", "stream"] }
+reqwest = { workspace = true, features = ["json", "rustls-tls", "stream"] }
 rusqlite = { version = "0.32", features = ["bundled"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
@@ -35,7 +37,9 @@ tokio = { workspace = true, features = ["full"] }
 tokio-stream = "0.1"
 tracing = { workspace = true }
 utoipa = { workspace = true, features = ["axum_extras", "uuid"] }
+url = { workspace = true }
 uuid = { workspace = true, features = ["v4"] }
+zeroize = { workspace = true }
 
 [dev-dependencies]
 capture-core = { workspace = true, features = ["test-utils"] }

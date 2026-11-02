@@ -932,6 +932,15 @@ pub enum ShareVisibility {
     Listed,
 }
 
+impl From<ShareVisibility> for crate::platform::sharing::ShareVisibility {
+    fn from(value: ShareVisibility) -> Self {
+        match value {
+            ShareVisibility::Unlisted => Self::Unlisted,
+            ShareVisibility::Listed => Self::Listed,
+        }
+    }
+}
+
 pub async fn artifact_record(
     persistence: &Storage,
     trace_id: &str,

@@ -9,10 +9,10 @@ use url::{Host, Url};
 /// API requests use HTTPS unless they target a loopback address for local
 /// development. The origin has no path, credentials, query, or fragment.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct ApiOrigin(Url);
+pub struct ApiOrigin(Url);
 
 impl ApiOrigin {
-    pub(crate) fn parse(value: &str) -> Result<Self> {
+    pub fn parse(value: &str) -> Result<Self> {
         let mut url = Url::parse(value).context("API origin must be an absolute URL")?;
         if !matches!(url.scheme(), "https" | "http")
             || url.host_str().is_none()
@@ -37,13 +37,13 @@ impl ApiOrigin {
         Ok(Self(url))
     }
 
-    pub(crate) fn default_public() -> Self {
+    pub fn default_public() -> Self {
         Self::parse(super::DEFAULT_API_ORIGIN)
             .expect("CAPTURE_API_PUBLIC_ORIGIN must be a secure API origin")
     }
 
     /// Builds an absolute URL for an API path rooted at `/api/`.
-    pub(crate) fn api_url(&self, path: &str) -> Url {
+    pub fn api_url(&self, path: &str) -> Url {
         assert!(
             path.starts_with("/api/"),
             "API paths must be rooted at /api/"
@@ -57,7 +57,7 @@ impl ApiOrigin {
     /// origin. Account links must stay on the configured hosted origin so a
     /// self-hosted daemon never sends a user to the public service by
     /// accident.
-    pub(crate) fn web_url(&self, route: &str) -> Url {
+    pub fn web_url(&self, route: &str) -> Url {
         let mut url = if self == &Self::default_public() {
             Url::parse(capture_updater::DEFAULT_CAPTURE_ORIGIN).expect("validated Capture origin")
         } else {
@@ -70,11 +70,11 @@ impl ApiOrigin {
         url
     }
 
-    pub(crate) fn url(&self) -> &Url {
+    pub fn url(&self) -> &Url {
         &self.0
     }
 
-    pub(crate) fn is_loopback(&self) -> bool {
+    pub fn is_loopback(&self) -> bool {
         is_loopback_url(&self.0)
     }
 }

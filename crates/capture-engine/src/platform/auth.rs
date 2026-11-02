@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
 use super::{api_origin::ApiOrigin, http_client_builder, storage};
-pub(crate) use capture_engine::admission::{
+pub use crate::admission::{
     AdmissionTicket, HostedAdmissionError, hosted_admission_denial, hosted_admission_unavailable,
 };
 
@@ -29,7 +29,7 @@ const API_KEY_VERSION_PREFIX: &str = "notary_key_";
 const ACCOUNT_REQUEST_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const ACCOUNT_REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
 const MAX_ADMISSION_RESPONSE_BYTES: usize = 16 * 1024;
-pub(crate) const DEFAULT_DEVICE_NAME: &str = "captured";
+pub const DEFAULT_DEVICE_NAME: &str = "captured";
 static CREDENTIAL_REFRESH: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
 
 async fn credential_refresh_guard() -> tokio::sync::MutexGuard<'static, ()> {
@@ -56,38 +56,38 @@ struct AuthorizationStarted {
 }
 
 #[derive(Clone)]
-pub(crate) struct PendingAuthorization {
-    pub(crate) request_id: String,
-    pub(crate) user_code: String,
-    pub(crate) verification_uri_complete: String,
-    pub(crate) expires_in: u64,
-    pub(crate) interval: u64,
+pub struct PendingAuthorization {
+    pub request_id: String,
+    pub user_code: String,
+    pub verification_uri_complete: String,
+    pub expires_in: u64,
+    pub interval: u64,
     poll_secret: String,
-    pub(crate) api_origin: ApiOrigin,
+    pub api_origin: ApiOrigin,
 }
 
-pub(crate) enum AuthorizationPoll {
+pub enum AuthorizationPoll {
     Pending,
     Complete,
 }
 
-pub(crate) struct AccountConnectionStatus {
-    pub(crate) signed_in: bool,
-    pub(crate) connection_state: AccountConnectionState,
-    pub(crate) provider_display_name: Option<String>,
-    pub(crate) display_name: Option<String>,
-    pub(crate) auth_provider: Option<String>,
-    pub(crate) device_name: Option<String>,
-    pub(crate) credential_kind: Option<String>,
-    pub(crate) credential_name: Option<String>,
-    pub(crate) billing: Option<BillingState>,
-    pub(crate) credits: Option<CreditSummary>,
-    pub(crate) links: AccountActionLinks,
+pub struct AccountConnectionStatus {
+    pub signed_in: bool,
+    pub connection_state: AccountConnectionState,
+    pub provider_display_name: Option<String>,
+    pub display_name: Option<String>,
+    pub auth_provider: Option<String>,
+    pub device_name: Option<String>,
+    pub credential_kind: Option<String>,
+    pub credential_name: Option<String>,
+    pub billing: Option<BillingState>,
+    pub credits: Option<CreditSummary>,
+    pub links: AccountActionLinks,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum AccountConnectionState {
+pub enum AccountConnectionState {
     Disconnected,
     Connected,
     ReauthorizationRequired,
@@ -95,43 +95,43 @@ pub(crate) enum AccountConnectionState {
 }
 
 #[derive(Clone, Debug, Serialize, ToSchema)]
-pub(crate) struct AccountActionLinks {
-    pub(crate) account: String,
-    pub(crate) usage: String,
-    pub(crate) plans: String,
-    pub(crate) settings: String,
+pub struct AccountActionLinks {
+    pub account: String,
+    pub usage: String,
+    pub plans: String,
+    pub settings: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, ToSchema)]
-pub(crate) struct BillingState {
-    pub(crate) plan: String,
-    pub(crate) billing_status: String,
+pub struct BillingState {
+    pub plan: String,
+    pub billing_status: String,
     #[serde(default)]
-    pub(crate) purchase_mode: Option<String>,
+    pub purchase_mode: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, ToSchema)]
-pub(crate) struct CreditSummary {
-    pub(crate) capture: CreditBalanceSummary,
-    pub(crate) notarization: CreditBalanceSummary,
+pub struct CreditSummary {
+    pub capture: CreditBalanceSummary,
+    pub notarization: CreditBalanceSummary,
     #[serde(default)]
-    pub(crate) reset_at: i64,
+    pub reset_at: i64,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, ToSchema)]
-pub(crate) struct CreditBalanceSummary {
+pub struct CreditBalanceSummary {
     #[serde(default)]
-    pub(crate) total_granted_bytes: i64,
+    pub total_granted_bytes: i64,
     #[serde(default)]
-    pub(crate) total_used_bytes: i64,
+    pub total_used_bytes: i64,
     #[serde(default)]
-    pub(crate) total_remaining_bytes: i64,
+    pub total_remaining_bytes: i64,
     #[serde(default)]
-    pub(crate) included_monthly_remaining_bytes: i64,
+    pub included_monthly_remaining_bytes: i64,
     #[serde(default)]
-    pub(crate) supplemental_remaining_bytes: i64,
+    pub supplemental_remaining_bytes: i64,
     #[serde(default)]
-    pub(crate) next_grant_expiration: Option<i64>,
+    pub next_grant_expiration: Option<i64>,
 }
 
 #[derive(Deserialize)]
@@ -191,9 +191,9 @@ struct FileCredentials {
     refresh_token: String,
 }
 
-pub(crate) struct AuthenticatedApi {
-    pub(crate) origin: ApiOrigin,
-    pub(crate) access_token: String,
+pub struct AuthenticatedApi {
+    pub origin: ApiOrigin,
+    pub access_token: String,
 }
 
 enum CredentialConfiguration {
@@ -231,15 +231,12 @@ struct AdmissionLimits {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-pub(crate) enum SharingAuthenticationError {
+pub enum SharingAuthenticationError {
     Required,
     Unavailable,
 }
 
-pub(crate) async fn start_authorization(
-    api: &str,
-    device_name: &str,
-) -> Result<PendingAuthorization> {
+pub async fn start_authorization(api: &str, device_name: &str) -> Result<PendingAuthorization> {
     ensure_browser_auth_available()?;
     let api_origin = ApiOrigin::parse(api)?;
     let client = http_client_builder()
@@ -274,9 +271,7 @@ pub(crate) async fn start_authorization(
     })
 }
 
-pub(crate) async fn poll_authorization(
-    pending: &PendingAuthorization,
-) -> Result<AuthorizationPoll> {
+pub async fn poll_authorization(pending: &PendingAuthorization) -> Result<AuthorizationPoll> {
     let response = http_client_builder()
         .build()
         .context("building API client")?
@@ -309,7 +304,7 @@ pub(crate) async fn poll_authorization(
     Ok(AuthorizationPoll::Complete)
 }
 
-pub(crate) async fn logout_for_service() -> Result<()> {
+pub async fn logout_for_service() -> Result<()> {
     let _refresh = credential_refresh_guard().await;
     match credential_configuration()? {
         CredentialConfiguration::ApiKey(_) => {
@@ -341,7 +336,7 @@ pub(crate) async fn logout_for_service() -> Result<()> {
     Ok(())
 }
 
-pub(crate) async fn account_connection_status() -> Result<AccountConnectionStatus> {
+pub async fn account_connection_status() -> Result<AccountConnectionStatus> {
     match credential_configuration()? {
         CredentialConfiguration::Anonymous { origin } => Ok(disconnected_status(&origin)),
         CredentialConfiguration::ApiKey(authenticated) => {
@@ -357,7 +352,7 @@ pub(crate) async fn account_connection_status() -> Result<AccountConnectionStatu
     }
 }
 
-pub(crate) fn account_action_links(origin: &ApiOrigin) -> AccountActionLinks {
+pub fn account_action_links(origin: &ApiOrigin) -> AccountActionLinks {
     AccountActionLinks {
         account: origin.web_url("/app/overview").to_string(),
         usage: origin.web_url("/app/usage").to_string(),
@@ -505,7 +500,7 @@ fn account_http_client_builder() -> reqwest::ClientBuilder {
         .timeout(ACCOUNT_REQUEST_TIMEOUT)
 }
 
-pub(crate) async fn authenticate() -> Result<AuthenticatedApi> {
+pub async fn authenticate() -> Result<AuthenticatedApi> {
     authenticate_configuration(credential_configuration()?).await
 }
 
@@ -533,17 +528,17 @@ async fn authenticate_device_session() -> Result<AuthenticatedApi> {
     })
 }
 
-pub(crate) async fn issue_capture_admission() -> Result<AdmissionTicket> {
+pub async fn issue_capture_admission() -> Result<AdmissionTicket> {
     issue_admission(AdmissionRequest::Capture).await
 }
 
 /// Issues a one-operation ticket for a Witnessed session, billed against
 /// capture credits by relayed bytes.
-pub(crate) async fn issue_witness_admission() -> Result<AdmissionTicket> {
+pub async fn issue_witness_admission() -> Result<AdmissionTicket> {
     issue_admission(AdmissionRequest::Witness).await
 }
 
-pub(crate) async fn issue_notarization_admission(
+pub async fn issue_notarization_admission(
     record_digest: &str,
     requested_allowance_bytes: usize,
 ) -> Result<AdmissionTicket> {
@@ -617,7 +612,7 @@ fn parse_admission_response(
     let response = serde_json::from_slice::<AdmissionResponse>(body)
         .map_err(|_| hosted_admission_unavailable())?;
     if response.ticket.is_empty()
-        || response.ticket.len() > crate::MAX_NOTARY_ADMISSION_VALUE_BYTES
+        || response.ticket.len() > capture_core::MAX_NOTARY_ADMISSION_VALUE_BYTES
         || response.max_values_invalid()
     {
         return Err(hosted_admission_unavailable());
@@ -635,7 +630,7 @@ impl AdmissionResponse {
     }
 }
 
-pub(crate) async fn authenticate_for_sharing_status()
+pub async fn authenticate_for_sharing_status()
 -> std::result::Result<AuthenticatedApi, SharingAuthenticationError> {
     match credential_configuration().map_err(|_| SharingAuthenticationError::Unavailable)? {
         CredentialConfiguration::Anonymous { .. } => {
@@ -655,12 +650,12 @@ pub(crate) async fn authenticate_for_sharing_status()
     })
 }
 
-pub(crate) fn validate_credential_configuration() -> Result<()> {
+pub fn validate_credential_configuration() -> Result<()> {
     let _ = credential_configuration()?;
     Ok(())
 }
 
-pub(crate) fn configured_api_origin() -> Result<ApiOrigin> {
+pub fn configured_api_origin() -> Result<ApiOrigin> {
     match credential_configuration()? {
         CredentialConfiguration::Anonymous { origin }
         | CredentialConfiguration::DeviceSession { origin } => Ok(origin),
@@ -668,7 +663,7 @@ pub(crate) fn configured_api_origin() -> Result<ApiOrigin> {
     }
 }
 
-pub(crate) fn api_key_mode_active() -> Result<bool> {
+pub fn api_key_mode_active() -> Result<bool> {
     Ok(matches!(
         credential_configuration()?,
         CredentialConfiguration::ApiKey(_)
@@ -1317,7 +1312,7 @@ mod tests {
         assert!(!malformed.to_string().contains("upstream-secret"));
 
         let oversized_ticket = serde_json::to_vec(&serde_json::json!({
-            "ticket": "x".repeat(crate::MAX_NOTARY_ADMISSION_VALUE_BYTES + 1),
+            "ticket": "x".repeat(capture_core::MAX_NOTARY_ADMISSION_VALUE_BYTES + 1),
             "limits": {"max_attestable_http_bytes": 1, "max_frame_bytes": 1},
         }))
         .unwrap();
