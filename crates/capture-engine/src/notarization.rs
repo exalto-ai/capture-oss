@@ -71,6 +71,12 @@ pub trait ClaimedNotarization: Send + Sync {
     /// its capture checkpoint and receive its trace package.
     fn storage(&self) -> Storage;
 
+    /// The vault of the organization the operation belongs to, when it is
+    /// not the host's own vault.
+    fn vault(&self) -> Option<Arc<Vault>> {
+        None
+    }
+
     /// Records the operation's current phase. `Ok(false)` means the operation
     /// was no longer running.
     async fn record_phase(
@@ -457,7 +463,7 @@ async fn notarize_operation(
         .await?
         .into_bytes()
         .await?;
-    let checkpoint_vault = ctx.vault.clone();
+    let checkpoint_vault = notarization.vault().unwrap_or_else(|| ctx.vault.clone());
     let checkpoint = tokio::task::spawn_blocking(move || {
         CaptureCheckpoint::from_encrypted_bytes(&checkpoint_bytes, &checkpoint_vault)
     })

@@ -42,6 +42,7 @@ keyring = { version = "3.6", optional = true, features = [
     "crypto-rust",
     "vendored",
 ] }
+hkdf = "0.12"
 metrics = { workspace = true }
 metrics-exporter-prometheus = { version = "0.18.3", default-features = false }
 opentelemetry = "0.32.0"

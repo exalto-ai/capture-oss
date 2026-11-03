@@ -300,7 +300,8 @@ pub async fn run(args: ProxyArgs) -> Result<()> {
         captures.clone(),
         admission.clone(),
         trust.clone(),
-        vault.clone(),
+        // Captures are encrypted with their organization's vault key.
+        Arc::new(vault.for_organization(crate::persistence::default_organization().as_str())?),
         Arc::new(ReqwestDirectUpstreamConnector::new(
             http_client_builder()
                 .redirect(reqwest::redirect::Policy::none())
@@ -346,6 +347,7 @@ pub async fn run(args: ProxyArgs) -> Result<()> {
     let notarizations: Arc<dyn NotarizationQueue> = Arc::new(ClusterNotarizationQueue::new(
         cluster_runtime.clone(),
         state.persistence.artifacts.clone(),
+        state.vault.clone(),
     ));
     let mut worker = spawn_notarization_worker(
         NotarizationContext::new(

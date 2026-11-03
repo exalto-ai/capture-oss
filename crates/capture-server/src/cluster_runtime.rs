@@ -29,6 +29,7 @@ use crate::{
     },
     organization::OrganizationId,
     s3_artifact_store::S3ArtifactStore,
+    vault::Vault,
 };
 
 #[cfg(not(feature = "daemon-e2e"))]
@@ -386,11 +387,22 @@ impl CaptureEntry for ClusterCaptureEntry {
 pub(crate) struct ClusterNotarizationQueue {
     runtime: Arc<ClusterRuntime>,
     artifacts: Arc<S3ArtifactStore>,
+    /// The cluster vault, from which each claimed operation's organization
+    /// vault is derived.
+    vault: Arc<Vault>,
 }
 
 impl ClusterNotarizationQueue {
-    pub(crate) fn new(runtime: Arc<ClusterRuntime>, artifacts: Arc<S3ArtifactStore>) -> Self {
-        Self { runtime, artifacts }
+    pub(crate) fn new(
+        runtime: Arc<ClusterRuntime>,
+        artifacts: Arc<S3ArtifactStore>,
+        vault: Arc<Vault>,
+    ) -> Self {
+        Self {
+            runtime,
+            artifacts,
+            vault,
+        }
     }
 }
 
@@ -421,13 +433,16 @@ impl NotarizationQueue for ClusterNotarizationQueue {
                 self.runtime.lease_seconds(),
             )
             .await?;
-        Ok(claim.map(|claim| {
-            Arc::new(ClusterNotarization {
-                runtime: self.runtime.clone(),
-                artifacts: self.artifacts.clone(),
-                claim,
-            }) as Arc<dyn ClaimedNotarization>
-        }))
+        let Some(claim) = claim else {
+            return Ok(None);
+        };
+        let vault = Arc::new(self.vault.for_organization(claim.organization.as_str())?);
+        Ok(Some(Arc::new(ClusterNotarization {
+            runtime: self.runtime.clone(),
+            artifacts: self.artifacts.clone(),
+            vault,
+            claim,
+        }) as Arc<dyn ClaimedNotarization>))
     }
 }
 
@@ -435,6 +450,8 @@ impl NotarizationQueue for ClusterNotarizationQueue {
 struct ClusterNotarization {
     runtime: Arc<ClusterRuntime>,
     artifacts: Arc<S3ArtifactStore>,
+    /// The claimed operation's organization vault.
+    vault: Arc<Vault>,
     claim: NotarizationClaim,
 }
 
@@ -489,6 +506,10 @@ impl ClaimedNotarization for ClusterNotarization {
                 self.runtime.lease_seconds(),
             )
             .await
+    }
+
+    fn vault(&self) -> Option<Arc<Vault>> {
+        Some(self.vault.clone())
     }
 
     fn storage(&self) -> Storage {

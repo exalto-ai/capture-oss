@@ -23,6 +23,8 @@ const CHECKPOINT_ENVELOPE_MAGIC: &[u8] = b"NTRYV1";
 const KEY_CHECK_FILE_NAME: &str = "vault.key-check";
 const KEY_CHECK_PLAINTEXT: &[u8] = b"notary vault key check";
 const SERVICE: &str = "ai.exalto.capture";
+/// Separates organization vault keys from every other use of the cluster key.
+const ORGANIZATION_VAULT_LABEL: &[u8] = b"ecp/organization-vault/v1\0";
 const PASSPHRASE_FILE_ENV: &str = "CAPTURE_VAULT_PASSPHRASE_FILE";
 /// Private 32-byte key file shared by every replica in cluster mode.
 pub const CLUSTER_KEY_FILE_ENV: &str = "CAPTURE_SERVER_CLUSTER_VAULT_KEY_FILE";
@@ -128,6 +130,29 @@ impl Vault {
             key,
             config_path: path.to_owned(),
             server_key: true,
+        })
+    }
+
+    /// The checkpoint key of one organization on a multi-customer server:
+    /// HKDF-SHA256 of the cluster key with an organization-specific label.
+    /// An organization's key reveals neither the cluster key nor another
+    /// organization's key, and every replica derives the same key.
+    pub fn for_organization(&self, organization: &str) -> Result<Self> {
+        if !self.server_key {
+            bail!("organization vaults derive only from the shared cluster key");
+        }
+        if organization.is_empty() {
+            bail!("organization vaults need an organization");
+        }
+        let info = [ORGANIZATION_VAULT_LABEL, organization.as_bytes()].concat();
+        let mut key = [0; 32];
+        hkdf::Hkdf::<Sha256>::new(None, &self.key)
+            .expand(&info, &mut key)
+            .map_err(|_| anyhow::anyhow!("deriving the organization vault key failed"))?;
+        Ok(Self {
+            key,
+            config_path: self.config_path.clone(),
+            server_key: false,
         })
     }
 
@@ -559,6 +584,39 @@ mod tests {
             reopened.decrypt(&encrypted).unwrap(),
             b"private server checkpoint"
         );
+    }
+
+    #[test]
+    fn organization_vaults_are_separate_and_stable() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("cluster-vault.key");
+        let cluster = Vault::init_cluster_key(&path).unwrap();
+        let first = cluster.for_organization("acct-first").unwrap();
+        let second = cluster.for_organization("acct-second").unwrap();
+        let encrypted = first.encrypt(b"first organization checkpoint").unwrap();
+        assert_eq!(
+            first.decrypt(&encrypted).unwrap(),
+            b"first organization checkpoint"
+        );
+        assert!(second.decrypt(&encrypted).is_err());
+        assert!(cluster.decrypt(&encrypted).is_err());
+        // Another replica with the same cluster key derives the same key.
+        let reopened = Vault {
+            key: read_server_key_file(&path).unwrap(),
+            config_path: path,
+            server_key: true,
+        };
+        assert_eq!(
+            reopened
+                .for_organization("acct-first")
+                .unwrap()
+                .decrypt(&encrypted)
+                .unwrap(),
+            b"first organization checkpoint"
+        );
+        assert!(first.for_organization("acct-first").is_err());
+        assert!(cluster.for_organization("").is_err());
+        assert!(Vault::test_only().for_organization("acct-first").is_err());
     }
 
     #[test]

@@ -1155,6 +1155,7 @@ dependencies = [
  "directories",
  "futures",
  "hex",
+ "hkdf",
  "http",
  "http-body",
  "http-body-util",
