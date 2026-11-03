@@ -18,7 +18,7 @@ seams, but those implementations are not part of this workspace.
 | --- | --- | --- | --- |
 | Provider client | yes | provider credential | Sends an ordinary provider request to a fixed local route |
 | Desktop local service | yes | vault, SQLite metadata, operations, filesystem artifacts, trust cache | Proxies requests, captures private state, notarizes, and verifies, inside the desktop app |
-| `capture-server` | yes | shared vault key, PostgreSQL metadata, S3 artifacts, pinned Registry | The same for replicated deployments, behind authenticated administration |
+| `capture-server` | yes | shared vault key, PostgreSQL metadata, S3 artifacts, pinned Registry | The same for replicated deployments, with provider requests authenticated as organizations and authenticated administration |
 | `capture` | only API responses requested by the user | none | Calls a capture service's versioned administration API |
 | Local dashboard | only safe metadata store fields and deliberately opened notarized disclosures | browser session preference | Uses the same administration API as the CLI |
 | `capture-notary` | no in Notarized sessions; yes, in memory only, in Witnessed sessions | signing key | Resolves the provider, relays encrypted TLS records or Witnessed plaintext, witnesses sessions, and completes proof work |

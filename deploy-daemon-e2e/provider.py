@@ -44,6 +44,11 @@ class Handler(BaseHTTPRequestHandler):
         if self.path != "/v1/chat/completions":
             self.send_error(404)
             return
+        # The capture server must strip its organization credential before a
+        # request reaches the provider, in every capture mode.
+        if self.headers.get("Capture-Authorization") is not None:
+            self.send_error(400)
+            return
         body = read_request_body(self)
         request = json.loads(body)
         if request.get("model") != "fixture-model":

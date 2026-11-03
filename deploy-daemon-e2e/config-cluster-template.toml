@@ -47,6 +47,12 @@ operation_timeout_seconds = 10
 proxy_origin = "https://proxy.e2e.invalid"
 admin_origin = "https://admin.e2e.invalid"
 
+[cluster.authentication]
+# Setup writes this private file of token digests; the script sends the
+# matching tokens as Capture-Authorization.
+kind = "token_file"
+path = "/state/secrets/capture-tokens.toml"
+
 [admin.auth]
 username = "cluster-admin"
 password_hash = "$argon2id$v=19$m=19456,t=2,p=1$Y2x1c3Rlci1lMmUtc2FsdA$e5miUzfGBUsUELcxECEyngoD2trkyo28hZ794hQ9bO8"

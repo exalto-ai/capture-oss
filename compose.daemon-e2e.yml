@@ -32,9 +32,20 @@ services:
         fi
         printf '%064d' 1 > /fixtures/notary-signing-key
         chmod 600 /fixtures/ca.key /fixtures/server.key /fixtures/notary-signing-key
+        # Synthetic provider-request tokens, stored only as SHA-256 digests.
+        # The admin routes still serve the default organization, so the
+        # script's main token records for it.
+        token_entry() {
+          printf '[[tokens]]\nsha256 = "%s"\norganization = "%s"\n\n' \
+            "$$(printf '%s' "$$1" | sha256sum | cut -d ' ' -f 1)" "$$2"
+        }
+        {
+          token_entry e2e-capture-token default
+          token_entry e2e-other-capture-token e2e-other
+        } > /state/secrets/capture-tokens.toml
         cp /etc/capture/config-cluster-template.toml /state/config-cluster-a.toml
         cp /etc/capture/config-cluster-template.toml /state/config-cluster-b.toml
-        chmod 600 /state/secrets/cluster-vault.key
+        chmod 600 /state/secrets/cluster-vault.key /state/secrets/capture-tokens.toml
         chmod 600 /state/config-cluster-a.toml /state/config-cluster-b.toml
     volumes:
       - daemon-state:/state

@@ -74,6 +74,23 @@ pub struct ClusterConfig {
     pub proxy_origin: String,
     /// Public HTTPS endpoint operators use for the dashboard and admin API.
     pub admin_origin: String,
+    /// How provider requests are authenticated as organizations. Every
+    /// provider request carries `Capture-Authorization: Bearer <token>`;
+    /// there is no unauthenticated mode.
+    pub authentication: AuthenticationConfig,
+}
+
+/// How a capture server resolves a request's bearer token to an
+/// organization.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum AuthenticationConfig {
+    /// Exalto credentials with the `capture:request` scope, checked against
+    /// the configured Exalto API origin.
+    Hosted {},
+    /// A private TOML file mapping SHA-256 digests of tokens to
+    /// organizations, for self-hosted servers.
+    TokenFile { path: PathBuf },
 }
 
 /// Local administration listener. It is deliberately separate from the
@@ -760,6 +777,12 @@ impl CapturedConfig {
             proxy != admin,
             "cluster proxy and admin origins must be different"
         );
+        if let AuthenticationConfig::TokenFile { path } = &cluster.authentication {
+            ensure!(
+                path.is_absolute(),
+                "cluster.authentication.path must be an absolute path"
+            );
+        }
         Ok(())
     }
 
@@ -1249,6 +1272,9 @@ mod tests {
             cluster: Some(ClusterConfig {
                 proxy_origin: "https://proxy.notary.example".into(),
                 admin_origin: "https://admin.notary.example".into(),
+                authentication: AuthenticationConfig::TokenFile {
+                    path: "/run/secrets/capture-tokens.toml".into(),
+                },
             }),
             ..CapturedConfig::default()
         };
@@ -1308,6 +1334,20 @@ mod tests {
         config.cluster.as_mut().unwrap().admin_origin = String::new();
         assert!(config.validate().is_err());
         config = valid.clone();
+        config.cluster.as_mut().unwrap().authentication = AuthenticationConfig::TokenFile {
+            path: "capture-tokens.toml".into(),
+        };
+        assert!(config.validate().is_err());
+        config.cluster.as_mut().unwrap().authentication = AuthenticationConfig::Hosted {};
+        config.validate().unwrap();
+        assert_ne!(
+            config
+                .cluster_compatibility_sha256(&vault_identity)
+                .unwrap(),
+            compatibility,
+            "every replica must authenticate requests the same way"
+        );
+        config = valid.clone();
         config.notary.endpoint = None;
         config.notary.public_key = None;
         config.validate().unwrap();
@@ -1316,6 +1356,55 @@ mod tests {
                 .cluster_compatibility_sha256(&vault_identity)
                 .unwrap(),
             valid.cluster_compatibility_sha256(&vault_identity).unwrap()
+        );
+    }
+
+    #[test]
+    fn cluster_authentication_is_required_and_explicit() {
+        let cluster = |authentication: &str| {
+            format!(
+                "proxy_origin = \"https://proxy.notary.example\"\nadmin_origin = \"https://admin.notary.example\"\n{authentication}"
+            )
+        };
+        let parse = |source: String| toml::from_str::<ClusterConfig>(&source);
+
+        assert!(parse(cluster("")).is_err(), "authentication is required");
+        assert_eq!(
+            parse(cluster("\n[authentication]\nkind = \"hosted\"\n"))
+                .map(|config| config.authentication)
+                .unwrap_or_else(|error| panic!("{error}")),
+            AuthenticationConfig::Hosted {}
+        );
+        assert_eq!(
+            parse(cluster(
+                "\n[authentication]\nkind = \"token_file\"\npath = \"/run/secrets/capture-tokens.toml\"\n"
+            ))
+            .unwrap()
+            .authentication,
+            AuthenticationConfig::TokenFile {
+                path: "/run/secrets/capture-tokens.toml".into()
+            }
+        );
+        for invalid in [
+            "\n[authentication]\nkind = \"none\"\n",
+            "\n[authentication]\nkind = \"token_file\"\n",
+            "\n[authentication]\nkind = \"hosted\"\npath = \"/run/secrets/capture-tokens.toml\"\n",
+        ] {
+            assert!(parse(cluster(invalid)).is_err(), "{invalid}");
+        }
+        let config = CapturedConfig {
+            cluster: Some(parse(cluster("\n[authentication]\nkind = \"hosted\"\n")).unwrap()),
+            ..CapturedConfig::default()
+        };
+        let encoded = toml::to_string_pretty(&config).unwrap();
+        assert!(encoded.contains("[cluster.authentication]\nkind = \"hosted\""));
+        assert_eq!(
+            toml::from_str::<CapturedConfig>(&encoded)
+                .unwrap()
+                .cluster
+                .unwrap()
+                .authentication,
+            AuthenticationConfig::Hosted {}
         );
     }
 

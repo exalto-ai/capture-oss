@@ -4,6 +4,10 @@ format = "ecp/captured-config/v1"
 proxy_origin = "https://__PROXY_DOMAIN__"
 admin_origin = "https://__ADMIN_DOMAIN__"
 
+[cluster.authentication]
+kind = "token_file"
+path = "/run/secrets/capture_tokens"
+
 [proxy]
 listen = "0.0.0.0:8787"
 

@@ -136,6 +136,29 @@ impl CaptureContext {
         }
     }
 
+    /// The same host serving one organization: its capture mode, capture
+    /// ledger and vault replace this context's, while the settings,
+    /// admission, notary trust, direct upstream, detached capture tasks and
+    /// capture serial stay shared.
+    pub fn for_organization(
+        &self,
+        mode: Arc<dyn CaptureModeSource>,
+        captures: Arc<dyn CaptureLedger>,
+        vault: Arc<Vault>,
+    ) -> Self {
+        Self {
+            settings: self.settings.clone(),
+            mode,
+            captures,
+            admission: self.admission.clone(),
+            trust: self.trust.clone(),
+            vault,
+            direct_upstream: self.direct_upstream.clone(),
+            tasks: self.tasks.clone(),
+            serial: self.serial.clone(),
+        }
+    }
+
     /// Detached capture tasks still writing their Traces.
     pub fn tasks(&self) -> &CaptureTasks {
         &self.tasks
@@ -1761,6 +1784,51 @@ mod tests {
             .await
             .unwrap_err();
         assert!(error.to_string().contains("maximum attestable HTTP budget"));
+    }
+
+    #[tokio::test]
+    async fn an_organization_context_uses_its_own_mode_and_ledger_and_shares_the_host() {
+        let host = state();
+        let organization_storage = Storage::new(
+            Arc::new(SqliteMetadataStore::from_sqlite(
+                SqliteMetadata::open(std::path::Path::new(":memory:"), true).unwrap(),
+                true,
+            )),
+            Arc::new(FileSystemArtifactStore::new("checkpoints", "traces")),
+        );
+        let organization = host.ctx.for_organization(
+            Arc::new(TestMode(StdMutex::new(CaptureMode::Off))),
+            Arc::new(LocalCaptureLedger::new(organization_storage)),
+            Arc::new(Vault::test_only()),
+        );
+        let required = || {
+            Request::post("/openai/v1/responses")
+                .header("x-exalto-require-capture", "1")
+                .body(Body::from("{}"))
+                .unwrap()
+        };
+        // The organization's capture mode, not the host's Notarized mode,
+        // decides the request.
+        let response = handle_inner(organization.clone(), required())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        assert!(Arc::ptr_eq(&host.ctx.settings, &organization.settings));
+        assert!(Arc::ptr_eq(&host.ctx.serial, &organization.serial));
+
+        // Host shutdown still waits for the organization's detached captures.
+        let capture = organization.tasks().track();
+        let waiting = tokio::spawn({
+            let tasks = host.ctx.tasks().clone();
+            async move { tasks.wait_idle().await }
+        });
+        tokio::task::yield_now().await;
+        assert!(!waiting.is_finished());
+        drop(capture);
+        tokio::time::timeout(std::time::Duration::from_secs(1), waiting)
+            .await
+            .expect("host shutdown did not see the organization capture finish")
+            .unwrap();
     }
 
     #[tokio::test]

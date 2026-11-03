@@ -129,6 +129,11 @@ done
 wait_load_balancer_ready
 
 basic=cluster-admin:cluster-password
+# Provider-request tokens whose digests Compose setup writes to the token
+# file: the first records for the default organization the admin routes
+# serve, the second for another organization.
+capture_token=e2e-capture-token
+other_capture_token=e2e-other-capture-token
 admin_json() {
   local service=$1
   local path=$2
@@ -185,6 +190,22 @@ if session_request daemon-a /v1/status >/dev/null 2>&1; then
   exit 1
 fi
 
+# Provider requests must authenticate as an organization, and a refused one
+# never reaches the provider.
+unauthenticated_provider_status() {
+  "${compose[@]}" exec -T daemon-a curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
+    --header 'authorization: Bearer offline-server-secret' \
+    --header 'content-type: application/json' \
+    "$@" \
+    --data '{"model":"fixture-model","messages":[{"role":"user","content":"unauthenticated prompt"}]}' \
+    http://test-load-balancer:8787/openai/v1/chat/completions
+}
+refused_before=$("${compose[@]}" logs --no-color provider | grep -c 'POST /v1/chat/completions' || true)
+[[ $(unauthenticated_provider_status) == 401 ]] || { echo "provider request without Capture-Authorization was not refused" >&2; exit 1; }
+[[ $(unauthenticated_provider_status --header 'capture-authorization: Bearer unknown-token') == 401 ]] || { echo "unknown capture token was not refused" >&2; exit 1; }
+refused_after=$("${compose[@]}" logs --no-color provider | grep -c 'POST /v1/chat/completions' || true)
+[[ $refused_after == "$refused_before" ]] || { echo "an unauthenticated provider request reached the provider" >&2; exit 1; }
+
 if [[ $profile == full ]]; then
   echo "checking fail-closed server startup profiles"
   if "${compose[@]}" run --rm --no-deps -e CAPTURE_PLATFORM_API_KEY= daemon-a \
@@ -222,6 +243,7 @@ if [[ $profile == full ]]; then
   "${compose[@]}" exec -T daemon-a curl --fail --silent --show-error \
     --dump-header /tmp/server-capture.headers \
     --header 'authorization: Bearer offline-server-secret' \
+    --header "capture-authorization: Bearer $capture_token" \
     --header 'content-type: application/json' \
     --data '{"model":"fixture-model","messages":[{"role":"user","content":"server cross replica prompt"}]}' \
     http://test-load-balancer:8787/openai/v1/chat/completions >/tmp/server-provider-response.json
@@ -232,6 +254,21 @@ if [[ $profile == full ]]; then
   trace_b=$(admin_json daemon-b "/v1/traces/$trace_id")
   printf '%s' "$trace_b" | "${compose[@]}" exec -T daemon-b jq -e --arg id "$trace_id" \
     '.trace_id==$id and .state=="captured" and .status==null and any(.artifacts[]; .kind=="capture_checkpoint")' >/dev/null
+
+  echo "checking that another organization's capture stays its own"
+  "${compose[@]}" exec -T daemon-a curl --fail --silent --show-error \
+    --dump-header /tmp/other-capture.headers \
+    --header 'authorization: Bearer offline-server-secret' \
+    --header "capture-authorization: Bearer $other_capture_token" \
+    --header 'content-type: application/json' \
+    --data '{"model":"fixture-model","messages":[{"role":"user","content":"other organization prompt"}]}' \
+    http://test-load-balancer:8787/openai/v1/chat/completions >/dev/null
+  other_trace_id=$("${compose[@]}" exec -T daemon-a awk 'tolower($1)=="x-notary-trace-id:" {gsub("\r","",$2); print $2}' /tmp/other-capture.headers)
+  [[ $other_trace_id == trc-* ]] || { echo "other organization trace ID missing" >&2; exit 1; }
+  other_trace=$(psql_value "select organization_id || ':' || capture_status from captured.traces where trace_id='$other_trace_id'")
+  [[ $other_trace == e2e-other:captured ]] || { echo "other organization capture was stored as $other_trace" >&2; exit 1; }
+  other_admin_status=$("${compose[@]}" exec -T daemon-b curl --silent --user "$basic" --output /dev/null --write-out '%{http_code}' "http://127.0.0.1:8788/v1/traces/$other_trace_id" || true)
+  [[ $other_admin_status == 404 ]] || { echo "the default organization's admin routes saw another organization's trace" >&2; exit 1; }
 
   echo "queueing notarization through the test load balancer"
   queued=$(load_balancer_admin_json "/v1/traces/$trace_id/notarizations" --request POST)
@@ -280,6 +317,7 @@ if [[ $profile == full ]]; then
   "${compose[@]}" exec -T daemon-a curl --fail --silent --show-error \
     --dump-header /tmp/stale-capture.headers \
     --header 'authorization: Bearer offline-server-secret' \
+    --header "capture-authorization: Bearer $capture_token" \
     --header 'content-type: application/json' \
     --data '{"model":"fixture-model","messages":[{"role":"user","content":"server stale owner prompt"}]}' \
     http://127.0.0.1:8787/openai/v1/chat/completions >/dev/null
@@ -351,6 +389,7 @@ if [[ $profile == full ]]; then
   "${compose[@]}" exec -T daemon-a curl --fail --silent --show-error \
     --dump-header /tmp/drain-notarization.headers \
     --header 'authorization: Bearer offline-server-secret' \
+    --header "capture-authorization: Bearer $capture_token" \
     --header 'content-type: application/json' \
     --data '{"model":"fixture-model","messages":[{"role":"user","content":"server running drain prompt"}]}' \
     http://127.0.0.1:8787/openai/v1/chat/completions >/dev/null
@@ -392,6 +431,7 @@ if [[ $profile == full ]]; then
   "${compose[@]}" exec -T daemon-a curl --fail --silent --show-error \
     --dump-header /tmp/queued-drain.headers \
     --header 'authorization: Bearer offline-server-secret' \
+    --header "capture-authorization: Bearer $capture_token" \
     --header 'content-type: application/json' \
     --data '{"model":"fixture-model","messages":[{"role":"user","content":"server queued drain prompt"}]}' \
     http://127.0.0.1:8787/openai/v1/chat/completions >/dev/null
@@ -400,6 +440,7 @@ if [[ $profile == full ]]; then
   "${compose[@]}" exec -T daemon-a curl --fail --silent --show-error \
     --dump-header /tmp/rolling-stream.headers \
     --header 'authorization: Bearer offline-server-secret' \
+    --header "capture-authorization: Bearer $capture_token" \
     --header 'content-type: application/json' \
     --data '{"model":"fixture-model","stream":true,"messages":[{"role":"user","content":"server rolling drain stream"}]}' \
     http://127.0.0.1:8787/openai/v1/chat/completions >"$slow_output" 2>&1 &

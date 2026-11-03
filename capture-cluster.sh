@@ -60,16 +60,22 @@ init() {
   umask 077
   mkdir -p "$state_dir/secrets"
 
-  local admin_password postgres_password s3_secret
+  local admin_password postgres_password s3_secret capture_token capture_token_sha256
   admin_password=$(openssl rand -hex 18)
   postgres_password=$(openssl rand -hex 24)
   s3_secret=$(openssl rand -hex 24)
+  # Provider requests authenticate with this token. The replicas store only
+  # its digest, for the default organization the admin routes serve.
+  capture_token=$(openssl rand -hex 32)
+  capture_token_sha256=$(printf '%s' "$capture_token" | openssl dgst -sha256 -r | cut -d ' ' -f 1)
   printf '%s' "$admin_password" > "$state_dir/secrets/admin-password"
   printf '%s' "$postgres_password" > "$state_dir/secrets/postgres-password"
   printf '%s' "postgresql://notary:${postgres_password}@postgres:5432/notary" > "$state_dir/secrets/postgres-url"
   printf '%s' 'notary' > "$state_dir/secrets/s3-access-key"
   printf '%s' "$s3_secret" > "$state_dir/secrets/s3-secret-key"
   openssl rand 32 > "$state_dir/secrets/cluster-vault.key"
+  printf '[[tokens]]\nsha256 = "%s"\norganization = "default"\n' "$capture_token_sha256" \
+    > "$state_dir/secrets/capture-tokens.toml"
 
   sed -e "s/__PROXY_DOMAIN__/$proxy_domain/g" \
       -e "s/__ADMIN_DOMAIN__/$admin_domain/g" \
@@ -89,7 +95,8 @@ EOF
   echo "Public admin origin: https://$admin_domain"
   echo "Username: admin"
   echo "Generated password: $admin_password"
-  echo "Save that password now, then run: $0 up"
+  echo "Provider requests send: Capture-Authorization: Bearer $capture_token"
+  echo "Save that password and token now, then run: $0 up"
   echo "This is a reference Compose deployment; your platform owns ingress and TLS."
 }
 

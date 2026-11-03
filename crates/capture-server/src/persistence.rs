@@ -15,8 +15,9 @@ use crate::{
     service::proxy::require_server_configuration,
 };
 
-/// The organization every request is served as until requests are
-/// authenticated as a specific organization.
+/// The operator's organization: the admin routes and artifact reconciliation
+/// serve it until operator and customer routes are split. Provider requests
+/// are captured for the organization their credential authenticates.
 pub(crate) fn default_organization() -> OrganizationId {
     OrganizationId::parse("default").expect("the default organization identifier is valid")
 }

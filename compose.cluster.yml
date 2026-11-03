@@ -20,6 +20,7 @@ x-daemon: &daemon
     - s3_access_key
     - s3_secret_key
     - cluster_vault_key
+    - capture_tokens
   volumes:
     - ${CLUSTER_STATE_DIR:?run ./capture-cluster.sh init first}/config.toml:/etc/capture/config.toml:ro
   read_only: true
@@ -160,6 +161,8 @@ secrets:
     file: ${CLUSTER_STATE_DIR}/secrets/s3-secret-key
   cluster_vault_key:
     file: ${CLUSTER_STATE_DIR}/secrets/cluster-vault.key
+  capture_tokens:
+    file: ${CLUSTER_STATE_DIR}/secrets/capture-tokens.toml
 
 volumes:
   postgres-data:

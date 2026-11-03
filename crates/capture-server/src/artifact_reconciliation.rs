@@ -55,9 +55,8 @@ pub(crate) async fn reconcile_artifacts(
     persistence: &Persistence,
     orphan_grace_seconds: u64,
 ) -> Result<ArtifactReconciliationReport> {
-    // Only the default organization can hold data until requests are
-    // authenticated as organizations, so its metadata and objects are the
-    // whole inventory.
+    // Only the default organization's metadata and objects are inventoried;
+    // other organizations' artifacts are not yet reconciled.
     let artifacts = persistence
         .artifacts
         .for_organization(&crate::persistence::default_organization());
