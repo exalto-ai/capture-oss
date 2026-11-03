@@ -13,7 +13,7 @@ use async_trait::async_trait;
 use capture_engine::{
     capture_ledger::{CaptureEntry, CaptureLedger},
     notarization::{ClaimedNotarization, NotarizationQueue},
-    storage::RecoverySummary,
+    storage::{RecoverySummary, Storage},
 };
 use tokio::sync::watch;
 
@@ -27,6 +27,7 @@ use crate::{
         CaptureClaim, MetadataResult, MetadataStoreError, NotarizationClaim, ReplicaIdentity,
         ServerMetadataStore,
     },
+    organization::OrganizationId,
     s3_artifact_store::S3ArtifactStore,
 };
 
@@ -210,18 +211,33 @@ impl Drop for ClaimLeaseGuard {
 pub(crate) struct ClusterCaptureLedger {
     runtime: Arc<ClusterRuntime>,
     artifacts: Arc<S3ArtifactStore>,
+    /// The organization new captures belong to. Recovery adopts captures of
+    /// any organization and follows each claim's organization.
+    organization: OrganizationId,
 }
 
 impl ClusterCaptureLedger {
-    pub(crate) fn new(runtime: Arc<ClusterRuntime>, artifacts: Arc<S3ArtifactStore>) -> Self {
-        Self { runtime, artifacts }
+    pub(crate) fn new(
+        runtime: Arc<ClusterRuntime>,
+        artifacts: Arc<S3ArtifactStore>,
+        organization: OrganizationId,
+    ) -> Self {
+        Self {
+            runtime,
+            artifacts,
+            organization,
+        }
     }
 }
 
 #[async_trait]
 impl CaptureLedger for ClusterCaptureLedger {
     async fn begin(&self, capture: NewTrace) -> Result<Box<dyn CaptureEntry>> {
-        let claim = CaptureClaim::new(capture.trace_id.clone(), self.runtime.identity.clone());
+        let claim = CaptureClaim::new(
+            self.organization.clone(),
+            capture.trace_id.clone(),
+            self.runtime.identity.clone(),
+        );
         self.runtime
             .metadata()
             .begin_capture_claimed(capture, &claim, self.runtime.lease_seconds())
@@ -229,7 +245,7 @@ impl CaptureLedger for ClusterCaptureLedger {
         let lease = self.runtime.keep_capture_claim_alive(claim.clone());
         Ok(Box::new(ClusterCaptureEntry {
             runtime: self.runtime.clone(),
-            artifacts: self.artifacts.clone(),
+            artifacts: Arc::new(self.artifacts.for_organization(&self.organization)),
             claim,
             _lease: lease,
         }))
@@ -263,6 +279,7 @@ impl CaptureLedger for ClusterCaptureLedger {
         let key = ArtifactKey::new(&recovery.claim.trace_id, completion.artifact_kind())?;
         match self
             .artifacts
+            .for_organization(&recovery.claim.organization)
             .find_scoped(&key, &recovery.claim.commit_id, MAX_ARCHIVE_WIRE_BYTES)
             .await
         {
@@ -474,9 +491,19 @@ impl ClaimedNotarization for ClusterNotarization {
             .await
     }
 
+    fn storage(&self) -> Storage {
+        Storage::new(
+            self.runtime
+                .metadata()
+                .organization(&self.claim.organization),
+            Arc::new(self.artifacts.for_organization(&self.claim.organization)),
+        )
+    }
+
     async fn store_package(&self, key: ArtifactKey, package: Vec<u8>) -> Result<ArtifactRecord> {
         Ok(self
             .artifacts
+            .for_organization(&self.claim.organization)
             .put_scoped(
                 &key,
                 &self.claim.commit_id,

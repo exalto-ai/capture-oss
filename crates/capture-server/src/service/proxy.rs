@@ -258,6 +258,7 @@ pub async fn run(args: ProxyArgs) -> Result<()> {
     let captures: Arc<dyn CaptureLedger> = Arc::new(ClusterCaptureLedger::new(
         cluster_runtime.clone(),
         persistence.artifacts.clone(),
+        crate::persistence::default_organization(),
     ));
     let hosted_admission = hosted_admission_required(&config);
     let stored_mode = persistence.metadata.capture_mode().await?;
@@ -348,7 +349,6 @@ pub async fn run(args: ProxyArgs) -> Result<()> {
     ));
     let mut worker = spawn_notarization_worker(
         NotarizationContext::new(
-            state.persistence.storage(),
             notarizations,
             admission,
             trust,

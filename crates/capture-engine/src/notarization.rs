@@ -67,6 +67,10 @@ pub trait ClaimedNotarization: Send + Sync {
     /// Keeps the operation's claim alive while the returned guard lives.
     fn keep_alive(&self) -> Box<dyn Send>;
 
+    /// The stores of the organization the operation belongs to, which hold
+    /// its capture checkpoint and receive its trace package.
+    fn storage(&self) -> Storage;
+
     /// Records the operation's current phase. `Ok(false)` means the operation
     /// was no longer running.
     async fn record_phase(
@@ -97,7 +101,6 @@ pub trait ClaimedNotarization: Send + Sync {
 /// Everything the notarization worker needs from its host.
 #[derive(Clone)]
 pub struct NotarizationContext {
-    storage: Storage,
     queue: Arc<dyn NotarizationQueue>,
     admission: Arc<dyn Admission>,
     trust: Arc<dyn NotaryTrust>,
@@ -108,7 +111,6 @@ pub struct NotarizationContext {
 
 impl NotarizationContext {
     pub fn new(
-        storage: Storage,
         queue: Arc<dyn NotarizationQueue>,
         admission: Arc<dyn Admission>,
         trust: Arc<dyn NotaryTrust>,
@@ -117,7 +119,6 @@ impl NotarizationContext {
         max_frame_bytes: usize,
     ) -> Self {
         Self {
-            storage,
             queue,
             admission,
             trust,
@@ -186,6 +187,10 @@ impl ClaimedNotarization for LocalNotarization {
 
     fn keep_alive(&self) -> Box<dyn Send> {
         Box::new(())
+    }
+
+    fn storage(&self) -> Storage {
+        self.storage.clone()
     }
 
     async fn record_phase(
@@ -436,16 +441,17 @@ async fn notarize_operation(
         }
     };
     let trace_id = &operation.trace_id;
-    let checkpoint_record = ctx
-        .storage
+    // The operation's own organization's stores: a server claims work from
+    // every organization.
+    let organization_storage = notarization.storage();
+    let checkpoint_record = organization_storage
         .metadata
         .artifacts(trace_id)
         .await?
         .into_iter()
         .find(|artifact| artifact.key.kind() == ArtifactKind::CaptureCheckpoint)
         .context("capture has no encrypted capture checkpoint")?;
-    let checkpoint_bytes = ctx
-        .storage
+    let checkpoint_bytes = organization_storage
         .artifacts
         .read_verified(&checkpoint_record, MAX_ARCHIVE_WIRE_BYTES)
         .await?
@@ -463,14 +469,12 @@ async fn notarize_operation(
     );
     let package_key = ArtifactKey::new(trace_id, ArtifactKind::TracePackage)?;
     if notarization.reuses_existing_package()
-        && let Some(existing) = ctx
-            .storage
+        && let Some(existing) = organization_storage
             .artifacts
             .find(&package_key, MAX_ARCHIVE_WIRE_BYTES)
             .await?
     {
-        let bytes = ctx
-            .storage
+        let bytes = organization_storage
             .artifacts
             .read_verified(&existing, MAX_ARCHIVE_WIRE_BYTES)
             .await?

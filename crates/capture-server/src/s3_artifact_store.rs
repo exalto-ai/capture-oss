@@ -23,6 +23,7 @@ use crate::artifact_store::{
     is_lowercase_sha256_hex, not_found,
 };
 use crate::config::S3ArtifactStoreConfig;
+use crate::organization::OrganizationId;
 
 const SHA256_METADATA: &str = "artifact-sha256";
 const SIZE_METADATA: &str = "artifact-size";
@@ -129,6 +130,21 @@ impl S3ArtifactStore {
             prefix: config.prefix().to_owned(),
             operation_timeout: config.operation_timeout(),
         })
+    }
+
+    /// The same bucket limited to one organization's objects, under
+    /// `<prefix>/organizations/<organization>/`. A locator stored by another
+    /// organization does not match this store's keys, so it is refused.
+    pub(crate) fn for_organization(&self, organization: &OrganizationId) -> Self {
+        let scope = format!("organizations/{organization}");
+        Self {
+            prefix: if self.prefix.is_empty() {
+                scope
+            } else {
+                format!("{}/{scope}", self.prefix)
+            },
+            ..self.clone()
+        }
     }
 
     pub(crate) const fn backend_name(&self) -> &'static str {
@@ -1335,6 +1351,39 @@ mod tests {
         store.readiness().await.unwrap();
         store.readiness().await.unwrap();
         conformance::run(Arc::new(store.clone())).await;
+
+        // Each organization's objects live under its own prefix, and its
+        // store refuses another organization's locators.
+        let first = store.for_organization(&OrganizationId::parse("acct-first").unwrap());
+        let second = store.for_organization(&OrganizationId::parse("acct-second").unwrap());
+        conformance::run(Arc::new(first.clone())).await;
+        let org_key = ArtifactKey::new("trc-org-isolation", ArtifactKind::TracePackage).unwrap();
+        let first_record = first
+            .put(
+                &org_key,
+                ArtifactSource::from_bytes(b"first org".to_vec()),
+                9,
+            )
+            .await
+            .unwrap();
+        assert!(
+            first
+                .object_key(&org_key)
+                .contains("organizations/acct-first/trace-packages/")
+        );
+        assert!(second.find(&org_key, 9).await.unwrap().is_none());
+        assert!(second.read_verified(&first_record, 9).await.is_err());
+        second.delete(&org_key).await.unwrap();
+        assert_eq!(
+            first
+                .read_verified(&first_record, 9)
+                .await
+                .unwrap()
+                .into_bytes()
+                .await
+                .unwrap(),
+            b"first org"
+        );
 
         let scoped_key =
             ArtifactKey::new("trc-s3-commit", ArtifactKind::CaptureCheckpoint).unwrap();

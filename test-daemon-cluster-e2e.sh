@@ -286,7 +286,7 @@ if [[ $profile == full ]]; then
   stale_trace_id=$("${compose[@]}" exec -T daemon-a awk 'tolower($1)=="x-notary-trace-id:" {gsub("\r","",$2); print $2}' /tmp/stale-capture.headers)
   stale_queued=$(admin_json daemon-a "/v1/traces/$stale_trace_id/notarizations" --request POST)
   stale_operation_id=$(printf '%s' "$stale_queued" | "${compose[@]}" exec -T daemon-a jq -er '.operation.operation_id')
-  stale_object_path="s3://captured-e2e/captured/trace-packages/$stale_trace_id/"
+  stale_object_path="s3://captured-e2e/captured/organizations/default/trace-packages/$stale_trace_id/"
   stale_object_ready=0
   for _ in $(seq 1 120); do
     stale_objects=$("${compose[@]}" run --rm --no-deps -T object-store-client s3 ls --recursive "$stale_object_path" 2>/dev/null || true)
@@ -357,7 +357,7 @@ if [[ $profile == full ]]; then
   drain_notarization_trace=$("${compose[@]}" exec -T daemon-a awk 'tolower($1)=="x-notary-trace-id:" {gsub("\r","",$2); print $2}' /tmp/drain-notarization.headers)
   drain_queued=$(admin_json daemon-a "/v1/traces/$drain_notarization_trace/notarizations" --request POST)
   drain_operation_id=$(printf '%s' "$drain_queued" | "${compose[@]}" exec -T daemon-a jq -er '.operation.operation_id')
-  drain_object_path="s3://captured-e2e/captured/trace-packages/$drain_notarization_trace/"
+  drain_object_path="s3://captured-e2e/captured/organizations/default/trace-packages/$drain_notarization_trace/"
   for _ in $(seq 1 120); do
     drain_objects=$("${compose[@]}" run --rm --no-deps -T object-store-client s3 ls --recursive "$drain_object_path" 2>/dev/null || true)
     [[ -n $drain_objects ]] && break

@@ -3,6 +3,8 @@
 //! Every backend supplies an asynchronous factory for isolated stores and runs
 //! [`run`] unchanged. Keeping the scenarios backend-neutral prevents a new
 //! backend from weakening lifecycle, pagination, or concurrency guarantees.
+//! A backend shared by several organizations also runs
+//! [`organizations_are_isolated`].
 
 use std::{
     collections::HashSet,
@@ -19,9 +21,10 @@ use capture_core::{NotarizationPhase, NotarizationProofProgress};
 use crate::{
     artifact_store::{ArtifactKey, ArtifactKind, ArtifactLocator, ArtifactRecord},
     metadata::{
-        CaptureCompletion, CaptureMode, EventFilters, NewTrace, OperationAttempt, OperationFilters,
+        CaptureCompletion, CaptureMode, EventFilters, EventSnapshot, IncompleteCapture,
+        MetadataCounts, NewTrace, Operation, OperationAttempt, OperationFilters,
         OperationPagePosition, TerminalOperationResult, TraceFilters, TracePagePosition,
-        TraceShareRecord,
+        TraceShareRecord, TraceSummary,
     },
 };
 
@@ -52,6 +55,477 @@ where
     concurrent_retry_is_deduplicated(make_store().await).await;
     event_page_and_high_water_are_atomic(make_store().await).await;
     invalid_limits_and_ranges(make_store().await).await;
+}
+
+/// Everything one organization can read back from its metadata view.
+#[derive(Debug, PartialEq)]
+struct OrganizationSnapshot {
+    traces: Vec<TraceSummary>,
+    artifacts: Vec<Vec<ArtifactRecord>>,
+    shares: Vec<Option<TraceShareRecord>>,
+    operations: Vec<Operation>,
+    attempts: Vec<Vec<OperationAttempt>>,
+    events: EventSnapshot,
+    counts: MetadataCounts,
+    incomplete: Vec<IncompleteCapture>,
+    capture_mode: CaptureMode,
+    auto_seal_enabled: bool,
+}
+
+impl OrganizationSnapshot {
+    async fn read(store: &Arc<dyn MetadataStore>) -> Self {
+        let traces = store
+            .traces(TraceFilters {
+                limit: 201,
+                ..TraceFilters::default()
+            })
+            .await
+            .unwrap();
+        let operations = store
+            .operations(OperationFilters {
+                limit: 201,
+                ..OperationFilters::default()
+            })
+            .await
+            .unwrap();
+        let mut artifacts = Vec::new();
+        let mut shares = Vec::new();
+        for trace in &traces {
+            artifacts.push(store.artifacts(&trace.trace_id).await.unwrap());
+            shares.push(store.trace_share(&trace.trace_id).await.unwrap());
+        }
+        let mut attempts = Vec::new();
+        for operation in &operations {
+            attempts.push(
+                store
+                    .operation_attempts(&operation.operation_id)
+                    .await
+                    .unwrap(),
+            );
+        }
+        Self {
+            traces,
+            artifacts,
+            shares,
+            operations,
+            attempts,
+            events: store
+                .events_snapshot(EventFilters {
+                    limit: 201,
+                    ..EventFilters::default()
+                })
+                .await
+                .unwrap(),
+            counts: store.counts().await.unwrap(),
+            incomplete: store.incomplete_captures().await.unwrap(),
+            capture_mode: store.capture_mode().await.unwrap(),
+            auto_seal_enabled: store.auto_seal_enabled().await.unwrap(),
+        }
+    }
+}
+
+/// Proves that one organization can neither see nor change another's
+/// metadata. `first` and `second` are views of two different organizations
+/// over one shared, otherwise empty backend.
+pub async fn organizations_are_isolated(
+    first: Arc<dyn MetadataStore>,
+    second: Arc<dyn MetadataStore>,
+    full_text_search: bool,
+) {
+    // The first organization has a failed, a running and a queued
+    // notarization, an active capture, a live share and its own settings.
+    let failed = "trc-org-first-failed";
+    let running = "trc-org-first-running";
+    let queued = "trc-org-first-queued";
+    let active = "trc-org-first-active";
+    for (index, id) in [failed, running, queued].into_iter().enumerate() {
+        insert_completed(&first, new_capture(id, index as u64 + 1), 200).await;
+    }
+    first.begin_capture(new_capture(active, 4)).await.unwrap();
+    let failed_operation = first
+        .enqueue_notarization(failed, 5)
+        .await
+        .unwrap()
+        .unwrap()
+        .0;
+    assert_eq!(
+        first
+            .claim_next_notarization(6)
+            .await
+            .unwrap()
+            .unwrap()
+            .operation_id,
+        failed_operation.operation_id
+    );
+    first
+        .fail_operation(&failed_operation.operation_id, 7, "fixture_failure")
+        .await
+        .unwrap();
+    let running_operation = first
+        .enqueue_notarization(running, 8)
+        .await
+        .unwrap()
+        .unwrap()
+        .0;
+    assert_eq!(
+        first
+            .claim_next_notarization(9)
+            .await
+            .unwrap()
+            .unwrap()
+            .operation_id,
+        running_operation.operation_id
+    );
+    let queued_operation = first
+        .enqueue_notarization(queued, 10)
+        .await
+        .unwrap()
+        .unwrap()
+        .0;
+    let share = TraceShareRecord {
+        trace_id: failed.into(),
+        hosted_trace_id: "trc-org-first-hosted".into(),
+        progress: "shared".into(),
+        visibility: "unlisted".into(),
+        access_enabled: true,
+        password_protected: false,
+        expires_at_unix_ms: None,
+        failure_code: None,
+        share_url: None,
+        package_url: None,
+        updated_at_unix_ms: 11,
+    };
+    first.put_trace_share(share.clone()).await.unwrap();
+    first.set_capture_mode(CaptureMode::Off, 12).await.unwrap();
+    first.set_auto_seal_enabled(true, 13).await.unwrap();
+    let before = OrganizationSnapshot::read(&first).await;
+    assert_eq!(before.traces.len(), 4);
+    assert_eq!(before.operations.len(), 3);
+    assert!(before.shares.iter().any(Option::is_some));
+    assert_eq!(before.incomplete.len(), 1);
+    assert!(!before.events.events.is_empty());
+    let first_high_water = before.events.high_water.unwrap();
+    if full_text_search {
+        let found = first
+            .traces(TraceFilters {
+                query: Some("quarterly".to_owned()),
+                limit: 20,
+                ..TraceFilters::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(found.len(), 3, "completed captures are searchable");
+    }
+
+    // The second organization sees none of it, with default settings.
+    let empty = OrganizationSnapshot::read(&second).await;
+    assert_eq!(
+        empty,
+        OrganizationSnapshot {
+            traces: Vec::new(),
+            artifacts: Vec::new(),
+            shares: Vec::new(),
+            operations: Vec::new(),
+            attempts: Vec::new(),
+            events: EventSnapshot {
+                events: Vec::new(),
+                high_water: None,
+            },
+            counts: MetadataCounts::default(),
+            incomplete: Vec::new(),
+            capture_mode: CaptureMode::Notarized,
+            auto_seal_enabled: false,
+        }
+    );
+    for id in [failed, running, queued, active] {
+        assert!(second.trace(id).await.unwrap().is_none());
+        assert!(second.artifacts(id).await.unwrap().is_empty());
+        assert!(second.trace_share(id).await.unwrap().is_none());
+        assert!(
+            second
+                .operations(OperationFilters {
+                    trace_id: Some(id.to_owned()),
+                    limit: 20,
+                    ..OperationFilters::default()
+                })
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            second
+                .events_snapshot(EventFilters {
+                    trace_id: Some(id.to_owned()),
+                    limit: 20,
+                    ..EventFilters::default()
+                })
+                .await
+                .unwrap()
+                .events
+                .is_empty()
+        );
+    }
+    for operation in [&failed_operation, &running_operation, &queued_operation] {
+        assert!(
+            second
+                .operation(&operation.operation_id)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            second
+                .operation_attempts(&operation.operation_id)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            second
+                .events_snapshot(EventFilters {
+                    operation_id: Some(operation.operation_id.clone()),
+                    limit: 20,
+                    ..EventFilters::default()
+                })
+                .await
+                .unwrap()
+                .events
+                .is_empty()
+        );
+    }
+    for position in [
+        EventFilters {
+            before: Some(first_high_water + 1),
+            limit: 201,
+            ..EventFilters::default()
+        },
+        EventFilters {
+            after: Some(0),
+            limit: 201,
+            ..EventFilters::default()
+        },
+    ] {
+        assert_eq!(
+            second.events_snapshot(position).await.unwrap(),
+            EventSnapshot {
+                events: Vec::new(),
+                high_water: None,
+            }
+        );
+    }
+    if full_text_search {
+        assert!(
+            second
+                .traces(TraceFilters {
+                    query: Some("quarterly".to_owned()),
+                    limit: 20,
+                    ..TraceFilters::default()
+                })
+                .await
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    // Nor can the second organization change any of it.
+    assert_eq!(
+        second.prepare_trace_deletion(failed).await.unwrap(),
+        TraceDeletionPreparation::NotFound
+    );
+    assert_eq!(
+        second.delete_trace(failed).await.unwrap(),
+        TraceDeletionOutcome::NotFound
+    );
+    assert!(!second.delete_trace_share(failed).await.unwrap());
+    assert!(
+        second
+            .put_trace_share(TraceShareRecord {
+                progress: "stopped".into(),
+                access_enabled: false,
+                updated_at_unix_ms: 14,
+                ..share
+            })
+            .await
+            .is_err()
+    );
+    for id in [failed, queued] {
+        assert!(second.enqueue_notarization(id, 15).await.unwrap().is_none());
+    }
+    assert!(
+        second
+            .retry_operation(&failed_operation.operation_id, 16)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(second.claim_next_notarization(17).await.unwrap().is_none());
+    assert!(
+        !second
+            .update_operation_progress(
+                &running_operation.operation_id,
+                NotarizationPhase::Signing,
+                18
+            )
+            .await
+            .unwrap()
+    );
+    assert!(
+        !second
+            .update_operation_proof_progress(
+                &running_operation.operation_id,
+                NotarizationProofProgress {
+                    bytes_completed: 1,
+                    bytes_total: 2,
+                    commitments_completed: 1,
+                    commitments_total: 2,
+                },
+                18,
+            )
+            .await
+            .unwrap()
+    );
+    assert_eq!(
+        second
+            .complete_notarization(
+                &running_operation.operation_id,
+                artifact(running, ArtifactKind::TracePackage, 2),
+                19,
+            )
+            .await
+            .unwrap(),
+        TerminalOperationResult::NotFound
+    );
+    assert_eq!(
+        second
+            .fail_operation(&running_operation.operation_id, 19, "foreign_failure")
+            .await
+            .unwrap(),
+        TerminalOperationResult::NotFound
+    );
+    assert_eq!(second.interrupt_running_operations(20).await.unwrap(), 0);
+    assert!(
+        second
+            .mark_capture_failed(active, "foreign_failure")
+            .await
+            .is_err()
+    );
+    let active_completion = completion(active, 21, 200);
+    assert!(
+        second
+            .prepare_capture_completion(active_completion.clone())
+            .await
+            .is_err()
+    );
+    let mut active_artifact = artifact(active, ArtifactKind::CaptureCheckpoint, 1);
+    active_artifact.size_bytes = active_completion.expected_artifact_size_bytes;
+    active_artifact.sha256 = active_completion.expected_artifact_sha256.clone();
+    assert!(
+        second
+            .complete_capture(active_completion, active_artifact)
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        second
+            .set_capture_mode(CaptureMode::Witnessed, 22)
+            .await
+            .unwrap(),
+        CaptureMode::Witnessed
+    );
+    assert!(!second.set_auto_seal_enabled(false, 23).await.unwrap());
+    assert_eq!(OrganizationSnapshot::read(&first).await, before);
+
+    // The second organization's own work stays its own, and deleting it
+    // leaves the first organization's events alone.
+    let own = "trc-org-second";
+    insert_completed(&second, new_capture(own, 30), 200).await;
+    let own_operation = second
+        .enqueue_notarization(own, 31)
+        .await
+        .unwrap()
+        .unwrap()
+        .0;
+    assert_eq!(own_operation.trace_id, own);
+    let second_view = OrganizationSnapshot::read(&second).await;
+    assert_eq!(ids(&second_view.traces, |trace| &trace.trace_id), [own]);
+    assert_eq!(second_view.operations, vec![own_operation.clone()]);
+    assert_eq!(second_view.capture_mode, CaptureMode::Witnessed);
+    assert!(!second_view.auto_seal_enabled);
+    assert_eq!(second_view.counts.captured, 1);
+    assert_eq!(second_view.counts.notarizing, 1);
+    assert!(
+        second_view
+            .events
+            .events
+            .iter()
+            .all(|event| event.trace_id.as_deref().is_none_or(|trace| trace == own))
+    );
+    assert!(
+        second_view
+            .events
+            .events
+            .iter()
+            .any(|event| event.event_type == "capture_witnessed")
+    );
+    let first_event_ids = before
+        .events
+        .events
+        .iter()
+        .map(|event| event.event_id)
+        .collect::<HashSet<_>>();
+    assert!(
+        second_view
+            .events
+            .events
+            .iter()
+            .all(|event| !first_event_ids.contains(&event.event_id))
+    );
+    assert!(first.trace(own).await.unwrap().is_none());
+    assert!(
+        first
+            .operation(&own_operation.operation_id)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        first
+            .retry_operation(&own_operation.operation_id, 32)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    // The first organization's worker never claims the second's queue.
+    let claimed = first.claim_next_notarization(33).await.unwrap().unwrap();
+    assert_eq!(claimed.operation_id, queued_operation.operation_id);
+    assert!(first.claim_next_notarization(34).await.unwrap().is_none());
+    assert_eq!(
+        second
+            .operation(&own_operation.operation_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .state,
+        "queued"
+    );
+    first
+        .fail_operation(&claimed.operation_id, 35, "fixture_failure")
+        .await
+        .unwrap();
+    let first_after_claim = OrganizationSnapshot::read(&first).await;
+
+    let second_claim = second.claim_next_notarization(36).await.unwrap().unwrap();
+    assert_eq!(second_claim.operation_id, own_operation.operation_id);
+    second
+        .fail_operation(&own_operation.operation_id, 37, "fixture_failure")
+        .await
+        .unwrap();
+    assert_eq!(
+        second.delete_trace(own).await.unwrap(),
+        TraceDeletionOutcome::Deleted
+    );
+    assert!(second.trace(own).await.unwrap().is_none());
+    assert_eq!(OrganizationSnapshot::read(&first).await, first_after_claim);
 }
 
 async fn terminal_trace_deletion_is_atomic_and_safe(store: Arc<dyn MetadataStore>) {

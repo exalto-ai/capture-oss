@@ -357,7 +357,6 @@ pub(crate) async fn run(
     );
     let mut worker = spawn_notarization_worker(
         NotarizationContext::new(
-            persistence.storage(),
             Arc::new(LocalNotarizationQueue::new(persistence.storage())),
             admission,
             trust,

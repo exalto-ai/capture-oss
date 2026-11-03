@@ -11,6 +11,7 @@ pub mod config;
 pub mod metadata;
 pub mod metadata_store;
 pub mod notarization;
+pub mod organization;
 pub mod platform;
 pub mod providers;
 pub mod proxy;

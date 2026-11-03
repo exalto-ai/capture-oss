@@ -9,15 +9,25 @@ use crate::{
     cluster_runtime::ClusterRuntime,
     config::CapturedConfig,
     metadata_store::{MetadataStore, ReplicaIdentity, ServerMetadataStore},
+    organization::OrganizationId,
     postgres_metadata_store::PostgresMetadataStore,
     s3_artifact_store::{S3ArtifactStore, S3ArtifactStoreCredentials},
     service::proxy::require_server_configuration,
 };
 
+/// The organization every request is served as until requests are
+/// authenticated as a specific organization.
+pub(crate) fn default_organization() -> OrganizationId {
+    OrganizationId::parse("default").expect("the default organization identifier is valid")
+}
+
 /// The metadata and byte stores shared by every replica.
 #[derive(Clone)]
 pub(crate) struct Persistence {
+    /// The [`default_organization`]'s view of the shared metadata.
     pub(crate) metadata: Arc<dyn MetadataStore>,
+    /// The whole managed bucket prefix. Artifacts are read and written only
+    /// through [`S3ArtifactStore::for_organization`].
     pub(crate) artifacts: Arc<S3ArtifactStore>,
 }
 
@@ -74,18 +84,21 @@ impl Persistence {
             ),
         )
         .map_err(|_| anyhow::anyhow!("S3 artifact storage configuration is invalid"))?;
-        let server_metadata: Arc<dyn ServerMetadataStore> = store.clone();
+        let server_metadata: Arc<dyn ServerMetadataStore> = store;
         Ok((
             Self {
-                metadata: store,
+                metadata: server_metadata.organization(&default_organization()),
                 artifacts: Arc::new(artifacts),
             },
             server_metadata,
         ))
     }
 
-    /// The stores as the engine's storage handle.
+    /// The [`default_organization`]'s stores as the engine's storage handle.
     pub(crate) fn storage(&self) -> Storage {
-        Storage::new(self.metadata.clone(), self.artifacts.clone())
+        Storage::new(
+            self.metadata.clone(),
+            Arc::new(self.artifacts.for_organization(&default_organization())),
+        )
     }
 }

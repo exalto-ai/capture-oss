@@ -14,7 +14,8 @@ use clap::{Parser, Subcommand};
 pub use capture_core::*;
 
 pub use capture_engine::{
-    artifact_store, config, metadata, metadata_store, sqlite_metadata, sqlite_metadata_store,
+    artifact_store, config, metadata, metadata_store, organization, sqlite_metadata,
+    sqlite_metadata_store,
 };
 
 pub mod admin;

@@ -1150,7 +1150,9 @@ mod tests {
         )
         .unwrap();
         let persistence = Persistence {
-            metadata: store,
+            metadata: Arc::new(
+                store.organization_store(&crate::persistence::default_organization()),
+            ),
             artifacts: Arc::new(artifacts),
         };
         let state = AdminState::new(persistence, Arc::new(config), cluster_runtime, None)

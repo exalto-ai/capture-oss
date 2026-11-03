@@ -17,6 +17,7 @@ use crate::{
         MetadataCounts, NewTrace, Operation, OperationAttempt, OperationFilters, RegistrySnapshot,
         TerminalOperationResult, TraceFilters, TraceShareRecord, TraceSummary,
     },
+    organization::OrganizationId,
 };
 
 pub type MetadataResult<T> = std::result::Result<T, MetadataStoreError>;
@@ -110,8 +111,12 @@ impl ReplicaIdentity {
     }
 }
 
+/// A replica's claim on one capture. The organization travels with the
+/// claim so a replica that adopts the capture stores its bytes under the
+/// right organization.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CaptureClaim {
+    pub organization: OrganizationId,
     pub trace_id: String,
     pub owner: ReplicaIdentity,
     pub claim_fence: String,
@@ -119,8 +124,13 @@ pub struct CaptureClaim {
 }
 
 impl CaptureClaim {
-    pub fn new(trace_id: impl Into<String>, owner: ReplicaIdentity) -> Self {
+    pub fn new(
+        organization: OrganizationId,
+        trace_id: impl Into<String>,
+        owner: ReplicaIdentity,
+    ) -> Self {
         Self {
+            organization,
             trace_id: trace_id.into(),
             owner,
             claim_fence: uuid::Uuid::new_v4().to_string(),
@@ -135,8 +145,10 @@ pub struct CaptureRecoveryClaim {
     pub completion: Option<CaptureCompletion>,
 }
 
+/// A replica's claim on one notarization operation, from any organization.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NotarizationClaim {
+    pub organization: OrganizationId,
     pub operation: Operation,
     pub owner: ReplicaIdentity,
     pub claim_fence: String,
@@ -290,8 +302,16 @@ pub trait MetadataStore: Send + Sync {
 /// This contract is intentionally separate from [`MetadataStore`]. Local
 /// backends cannot be selected for clustered work, and adding a clustered operation
 /// requires the PostgreSQL adapter to implement it at compile time.
+///
+/// The server's metadata is shared by every organization. This contract
+/// covers cluster coordination and claims, which span organizations and
+/// carry the organization of the work they claim; everything else goes
+/// through [`ServerMetadataStore::organization`], whose every read and write
+/// is limited to one organization.
 #[async_trait]
-pub trait ServerMetadataStore: MetadataStore {
+pub trait ServerMetadataStore: Send + Sync {
+    /// One organization's view of the shared metadata.
+    fn organization(&self, organization: &OrganizationId) -> std::sync::Arc<dyn MetadataStore>;
     async fn register_replica(
         &self,
         identity: &ReplicaIdentity,

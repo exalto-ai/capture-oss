@@ -55,18 +55,20 @@ pub(crate) async fn reconcile_artifacts(
     persistence: &Persistence,
     orphan_grace_seconds: u64,
 ) -> Result<ArtifactReconciliationReport> {
-    let (mut report, referenced) = verify_references(
-        persistence.metadata.as_ref(),
-        persistence.artifacts.as_ref(),
-    )
-    .await?;
+    // Only the default organization can hold data until requests are
+    // authenticated as organizations, so its metadata and objects are the
+    // whole inventory.
+    let artifacts = persistence
+        .artifacts
+        .for_organization(&crate::persistence::default_organization());
+    let (mut report, referenced) =
+        verify_references(persistence.metadata.as_ref(), &artifacts).await?;
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .context("system clock is before the Unix epoch")?
         .as_secs();
     let cutoff = i64::try_from(now.saturating_sub(orphan_grace_seconds)).unwrap_or(i64::MAX);
-    let inventory = persistence
-        .artifacts
+    let inventory = artifacts
         .reconciliation_inventory(&referenced, S3_PAGE_SIZE, cutoff)
         .await
         .map_err(|_| anyhow!("S3 artifact reconciliation inventory failed"))?;
