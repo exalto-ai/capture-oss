@@ -87,7 +87,15 @@ pub struct ClusterConfig {
 pub enum AuthenticationConfig {
     /// Exalto credentials with the `capture:request` scope, checked against
     /// the configured Exalto API origin.
-    Hosted {},
+    Hosted {
+        /// A private file holding this server's capture service credential,
+        /// with which capture-api charges each notary admission to the
+        /// request's organization. Required with the hosted notary (no
+        /// `notary.endpoint`), which admits every operation with a ticket,
+        /// and refused with a self-hosted notary, which needs none.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        capture_service_token_file: Option<PathBuf>,
+    },
     /// A private TOML file mapping SHA-256 digests of tokens to
     /// organizations, for self-hosted servers.
     TokenFile { path: PathBuf },
@@ -777,11 +785,29 @@ impl CapturedConfig {
             proxy != admin,
             "cluster proxy and admin origins must be different"
         );
-        if let AuthenticationConfig::TokenFile { path } = &cluster.authentication {
-            ensure!(
+        match &cluster.authentication {
+            AuthenticationConfig::TokenFile { path } => ensure!(
                 path.is_absolute(),
                 "cluster.authentication.path must be an absolute path"
-            );
+            ),
+            // Only the hosted notary (no explicit endpoint) admits operations
+            // with tickets, which hosted authentication charges to each
+            // request's organization.
+            AuthenticationConfig::Hosted {
+                capture_service_token_file,
+            } => match (self.notary.endpoint.is_none(), capture_service_token_file) {
+                (true, Some(path)) => ensure!(
+                    path.is_absolute(),
+                    "cluster.authentication.capture_service_token_file must be an absolute path"
+                ),
+                (true, None) => bail!(
+                    "cluster.authentication.capture_service_token_file is required for hosted authentication with the hosted notary"
+                ),
+                (false, Some(_)) => bail!(
+                    "cluster.authentication.capture_service_token_file is used only with the hosted notary; remove it when notary.endpoint is configured"
+                ),
+                (false, None) => {}
+            },
         }
         Ok(())
     }
@@ -1338,7 +1364,9 @@ mod tests {
             path: "capture-tokens.toml".into(),
         };
         assert!(config.validate().is_err());
-        config.cluster.as_mut().unwrap().authentication = AuthenticationConfig::Hosted {};
+        config.cluster.as_mut().unwrap().authentication = AuthenticationConfig::Hosted {
+            capture_service_token_file: None,
+        };
         config.validate().unwrap();
         assert_ne!(
             config
@@ -1347,6 +1375,38 @@ mod tests {
             compatibility,
             "every replica must authenticate requests the same way"
         );
+        // A self-hosted notary needs no admission, so nothing is charged and
+        // a capture service credential would be unused.
+        config.cluster.as_mut().unwrap().authentication = AuthenticationConfig::Hosted {
+            capture_service_token_file: Some("/run/secrets/capture_service_token".into()),
+        };
+        assert!(config.validate().is_err());
+        // The hosted notary admits every operation, which hosted
+        // authentication charges to each request's organization.
+        config.notary.endpoint = None;
+        config.notary.public_key = None;
+        config.validate().unwrap();
+        let charged = config
+            .cluster_compatibility_sha256(&vault_identity)
+            .unwrap();
+        config.cluster.as_mut().unwrap().authentication = AuthenticationConfig::Hosted {
+            capture_service_token_file: Some("/run/secrets/other_capture_service_token".into()),
+        };
+        assert_ne!(
+            config
+                .cluster_compatibility_sha256(&vault_identity)
+                .unwrap(),
+            charged,
+            "every replica must charge admission the same way"
+        );
+        config.cluster.as_mut().unwrap().authentication = AuthenticationConfig::Hosted {
+            capture_service_token_file: Some("capture_service_token".into()),
+        };
+        assert!(config.validate().is_err());
+        config.cluster.as_mut().unwrap().authentication = AuthenticationConfig::Hosted {
+            capture_service_token_file: None,
+        };
+        assert!(config.validate().is_err());
         config = valid.clone();
         config.notary.endpoint = None;
         config.notary.public_key = None;
@@ -1373,7 +1433,19 @@ mod tests {
             parse(cluster("\n[authentication]\nkind = \"hosted\"\n"))
                 .map(|config| config.authentication)
                 .unwrap_or_else(|error| panic!("{error}")),
-            AuthenticationConfig::Hosted {}
+            AuthenticationConfig::Hosted {
+                capture_service_token_file: None
+            }
+        );
+        assert_eq!(
+            parse(cluster(
+                "\n[authentication]\nkind = \"hosted\"\ncapture_service_token_file = \"/run/secrets/capture_service_token\"\n"
+            ))
+            .unwrap()
+            .authentication,
+            AuthenticationConfig::Hosted {
+                capture_service_token_file: Some("/run/secrets/capture_service_token".into())
+            }
         );
         assert_eq!(
             parse(cluster(
@@ -1389,23 +1461,35 @@ mod tests {
             "\n[authentication]\nkind = \"none\"\n",
             "\n[authentication]\nkind = \"token_file\"\n",
             "\n[authentication]\nkind = \"hosted\"\npath = \"/run/secrets/capture-tokens.toml\"\n",
+            "\n[authentication]\nkind = \"token_file\"\npath = \"/run/secrets/capture-tokens.toml\"\ncapture_service_token_file = \"/run/secrets/capture_service_token\"\n",
         ] {
             assert!(parse(cluster(invalid)).is_err(), "{invalid}");
         }
-        let config = CapturedConfig {
-            cluster: Some(parse(cluster("\n[authentication]\nkind = \"hosted\"\n")).unwrap()),
-            ..CapturedConfig::default()
-        };
-        let encoded = toml::to_string_pretty(&config).unwrap();
-        assert!(encoded.contains("[cluster.authentication]\nkind = \"hosted\""));
-        assert_eq!(
-            toml::from_str::<CapturedConfig>(&encoded)
-                .unwrap()
-                .cluster
-                .unwrap()
-                .authentication,
-            AuthenticationConfig::Hosted {}
-        );
+        for authentication in [
+            AuthenticationConfig::Hosted {
+                capture_service_token_file: None,
+            },
+            AuthenticationConfig::Hosted {
+                capture_service_token_file: Some("/run/secrets/capture_service_token".into()),
+            },
+        ] {
+            let mut profile = parse(cluster("\n[authentication]\nkind = \"hosted\"\n")).unwrap();
+            profile.authentication = authentication.clone();
+            let config = CapturedConfig {
+                cluster: Some(profile),
+                ..CapturedConfig::default()
+            };
+            let encoded = toml::to_string_pretty(&config).unwrap();
+            assert!(encoded.contains("[cluster.authentication]\nkind = \"hosted\""));
+            assert_eq!(
+                toml::from_str::<CapturedConfig>(&encoded)
+                    .unwrap()
+                    .cluster
+                    .unwrap()
+                    .authentication,
+                authentication
+            );
+        }
     }
 
     #[test]

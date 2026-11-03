@@ -1126,7 +1126,9 @@ mod tests {
         config.cluster = Some(crate::config::ClusterConfig {
             proxy_origin: "https://proxy.capture.example".to_owned(),
             admin_origin: "https://admin.capture.example".to_owned(),
-            authentication: crate::config::AuthenticationConfig::Hosted {},
+            authentication: crate::config::AuthenticationConfig::Hosted {
+                capture_service_token_file: None,
+            },
         });
         config.notary.endpoint = Some("tcp://127.0.0.1:9".to_owned());
         config.notary.public_key = Some(hex::encode(

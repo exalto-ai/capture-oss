@@ -77,6 +77,12 @@ pub trait ClaimedNotarization: Send + Sync {
         None
     }
 
+    /// The admission that pays for sealing the operation, when it is not the
+    /// host's own: a server charges each operation to its organization.
+    fn admission(&self) -> Option<Arc<dyn Admission>> {
+        None
+    }
+
     /// Records the operation's current phase. `Ok(false)` means the operation
     /// was no longer running.
     async fn record_phase(
@@ -511,8 +517,10 @@ async fn notarize_operation(
         return Ok(existing);
     }
     let (key, endpoint) = ctx.trust.sealing_notary(&checkpoint).await?;
-    let package_result = match ctx
-        .admission
+    let admission = notarization
+        .admission()
+        .unwrap_or_else(|| ctx.admission.clone());
+    let package_result = match admission
         .notarization(&checkpoint, ctx.max_attestable_http_bytes)
         .await?
     {

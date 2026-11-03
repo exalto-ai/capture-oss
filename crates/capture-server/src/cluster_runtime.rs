@@ -11,6 +11,7 @@ use std::{
 use anyhow::Result;
 use async_trait::async_trait;
 use capture_engine::{
+    admission::Admission,
     capture_ledger::{CaptureEntry, CaptureLedger},
     notarization::{ClaimedNotarization, NotarizationQueue},
     storage::{RecoverySummary, Storage},
@@ -29,6 +30,7 @@ use crate::{
     },
     organization::OrganizationId,
     s3_artifact_store::S3ArtifactStore,
+    service::admission::ServerAdmission,
     vault::Vault,
 };
 
@@ -390,6 +392,8 @@ pub(crate) struct ClusterNotarizationQueue {
     /// The cluster vault, from which each claimed operation's organization
     /// vault is derived.
     vault: Arc<Vault>,
+    /// Who pays for sealing each claimed operation.
+    admission: ServerAdmission,
 }
 
 impl ClusterNotarizationQueue {
@@ -397,11 +401,13 @@ impl ClusterNotarizationQueue {
         runtime: Arc<ClusterRuntime>,
         artifacts: Arc<S3ArtifactStore>,
         vault: Arc<Vault>,
+        admission: ServerAdmission,
     ) -> Self {
         Self {
             runtime,
             artifacts,
             vault,
+            admission,
         }
     }
 }
@@ -437,10 +443,12 @@ impl NotarizationQueue for ClusterNotarizationQueue {
             return Ok(None);
         };
         let vault = Arc::new(self.vault.for_organization(claim.organization.as_str())?);
+        let admission = self.admission.for_claim(&claim.organization);
         Ok(Some(Arc::new(ClusterNotarization {
             runtime: self.runtime.clone(),
             artifacts: self.artifacts.clone(),
             vault,
+            admission,
             claim,
         }) as Arc<dyn ClaimedNotarization>))
     }
@@ -452,6 +460,9 @@ struct ClusterNotarization {
     artifacts: Arc<S3ArtifactStore>,
     /// The claimed operation's organization vault.
     vault: Arc<Vault>,
+    /// The claimed operation's organization admission, when each
+    /// organization pays for its own operations.
+    admission: Option<Arc<dyn Admission>>,
     claim: NotarizationClaim,
 }
 
@@ -510,6 +521,10 @@ impl ClaimedNotarization for ClusterNotarization {
 
     fn vault(&self) -> Option<Arc<Vault>> {
         Some(self.vault.clone())
+    }
+
+    fn admission(&self) -> Option<Arc<dyn Admission>> {
+        self.admission.clone()
     }
 
     fn storage(&self) -> Storage {

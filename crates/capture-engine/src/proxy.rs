@@ -137,20 +137,22 @@ impl CaptureContext {
     }
 
     /// The same host serving one organization: its capture mode, capture
-    /// ledger and vault replace this context's, while the settings,
-    /// admission, notary trust, direct upstream, detached capture tasks and
-    /// capture serial stay shared.
+    /// ledger, admission and vault replace this context's, while the
+    /// settings, notary trust, direct upstream, detached capture tasks and
+    /// capture serial stay shared. The admission decides who pays for the
+    /// organization's notary operations.
     pub fn for_organization(
         &self,
         mode: Arc<dyn CaptureModeSource>,
         captures: Arc<dyn CaptureLedger>,
+        admission: Arc<dyn Admission>,
         vault: Arc<Vault>,
     ) -> Self {
         Self {
             settings: self.settings.clone(),
             mode,
             captures,
-            admission: self.admission.clone(),
+            admission,
             trust: self.trust.clone(),
             vault,
             direct_upstream: self.direct_upstream.clone(),
@@ -1786,8 +1788,30 @@ mod tests {
         assert!(error.to_string().contains("maximum attestable HTTP budget"));
     }
 
+    /// An organization whose hosted capture allowance is exhausted.
+    struct ExhaustedAdmission;
+
+    #[async_trait::async_trait]
+    impl Admission for ExhaustedAdmission {
+        async fn capture(&self) -> Result<Option<AdmissionTicket>> {
+            Err(crate::admission::hosted_admission_denial("capture_credits_exhausted").into())
+        }
+
+        async fn witness(&self) -> Result<Option<AdmissionTicket>> {
+            Err(crate::admission::hosted_admission_denial("capture_credits_exhausted").into())
+        }
+
+        async fn notarization(
+            &self,
+            _checkpoint: &CaptureCheckpoint,
+            _max_attestable_http_bytes: usize,
+        ) -> Result<Option<AdmissionTicket>> {
+            Err(crate::admission::hosted_admission_denial("notarization_credits_exhausted").into())
+        }
+    }
+
     #[tokio::test]
-    async fn an_organization_context_uses_its_own_mode_and_ledger_and_shares_the_host() {
+    async fn an_organization_context_uses_its_own_mode_ledger_and_admission_and_shares_the_host() {
         let host = state();
         let organization_storage = Storage::new(
             Arc::new(SqliteMetadataStore::from_sqlite(
@@ -1796,9 +1820,12 @@ mod tests {
             )),
             Arc::new(FileSystemArtifactStore::new("checkpoints", "traces")),
         );
+        let organization_mode = Arc::new(TestMode(StdMutex::new(CaptureMode::Off)));
+        let organization_admission: Arc<dyn Admission> = Arc::new(ExhaustedAdmission);
         let organization = host.ctx.for_organization(
-            Arc::new(TestMode(StdMutex::new(CaptureMode::Off))),
-            Arc::new(LocalCaptureLedger::new(organization_storage)),
+            organization_mode.clone(),
+            Arc::new(LocalCaptureLedger::new(organization_storage.clone())),
+            organization_admission.clone(),
             Arc::new(Vault::test_only()),
         );
         let required = || {
@@ -1815,6 +1842,38 @@ mod tests {
         assert_eq!(response.status(), StatusCode::CONFLICT);
         assert!(Arc::ptr_eq(&host.ctx.settings, &organization.settings));
         assert!(Arc::ptr_eq(&host.ctx.serial, &organization.serial));
+
+        // The organization's admission, not the host's, decides whether a
+        // capture may start, and a denial reaches the client before any
+        // Trace is recorded.
+        assert!(Arc::ptr_eq(
+            &organization.admission,
+            &organization_admission
+        ));
+        *organization_mode.0.lock().unwrap() = CaptureMode::Notarized;
+        let response = handle(
+            organization.clone(),
+            Request::post("/openai/v1/responses")
+                .body(Body::from(r#"{"model":"gpt-5","input":"hello"}"#))
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::PAYMENT_REQUIRED);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let body = serde_json::from_slice::<serde_json::Value>(&body).unwrap();
+        assert_eq!(body["error"]["type"], "hosted_admission");
+        assert_eq!(body["error"]["code"], "capture_credits_exhausted");
+        assert!(
+            organization_storage
+                .metadata
+                .traces(crate::metadata::TraceFilters {
+                    limit: 10,
+                    ..Default::default()
+                })
+                .await
+                .unwrap()
+                .is_empty()
+        );
 
         // Host shutdown still waits for the organization's detached captures.
         let capture = organization.tasks().track();

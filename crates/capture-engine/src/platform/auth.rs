@@ -202,9 +202,11 @@ enum CredentialConfiguration {
     DeviceSession { origin: ApiOrigin },
 }
 
+/// What a one-operation ticket is for: the body of capture-api's admission
+/// route, and the `admission` object of its capture service route.
 #[derive(Serialize)]
 #[serde(tag = "mode", rename_all = "snake_case")]
-enum AdmissionRequest<'a> {
+pub enum AdmissionRequest<'a> {
     Capture,
     Witness,
     Notarization {
@@ -575,9 +577,19 @@ async fn issue_admission(request_body: AdmissionRequest<'_>) -> Result<Admission
         .send()
         .await
         .map_err(|_| hosted_admission_unavailable())?;
+    admission_ticket_from_response(response)
+        .await
+        .map_err(Into::into)
+}
+
+/// Reads an admission route's response: the ticket, or the bounded,
+/// user-safe denial its error code names. Upstream values are never echoed.
+pub async fn admission_ticket_from_response(
+    response: reqwest::Response,
+) -> std::result::Result<AdmissionTicket, HostedAdmissionError> {
     let status = response.status();
     let body = read_bounded_admission_response(response).await?;
-    parse_admission_response(status, &body).map_err(Into::into)
+    parse_admission_response(status, &body)
 }
 
 async fn read_bounded_admission_response(

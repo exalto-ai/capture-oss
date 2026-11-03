@@ -35,7 +35,7 @@ backend = "postgres"
 backend = "s3"
 ```
 
-For another scheduler, run `capture-server migrate --config /etc/capture/config.toml` once, then start two or more identical replicas. Every replica receives the same config, token file, database, S3 namespace, admin password, and exact 32-byte `CAPTURE_SERVER_CLUSTER_VAULT_KEY_FILE`. `CAPTURE_SERVER_CLUSTER_INSTANCE_ID` is optional when the scheduler already provides a useful unique hostname.
+For another scheduler, run `capture-server migrate --config /etc/capture/config.toml` once, then start two or more identical replicas. Every replica receives the same config, token file or capture service token, database, S3 namespace, admin password, and exact 32-byte `CAPTURE_SERVER_CLUSTER_VAULT_KEY_FILE`. `CAPTURE_SERVER_CLUSTER_INSTANCE_ID` is optional when the scheduler already provides a useful unique hostname.
 
 Use `GET /healthz` for process liveness and `GET /readyz` for traffic routing. Readiness checks the replica lifecycle, PostgreSQL schema, S3 namespace, shared vault identity, and shared Registry snapshot. On SIGTERM a replica becomes unready, drains admitted streams for a bounded interval, then releases its lease.
 
@@ -58,3 +58,18 @@ Every provider request authenticates as an organization with `Capture-Authorizat
 - `kind = "hosted"`: tokens are Exalto API keys or Device access tokens with the `capture:request` scope, checked against the configured Exalto API origin (`CAPTURE_PLATFORM_API_ORIGIN`). Each replica caches a successful check for 60 seconds, so a revoked credential can keep working for up to a minute. Failed checks are not cached.
 
 The admin routes still serve only the `default` organization, so the reference setup's token records for `default`.
+
+## Notary admission
+
+A self-hosted notary (`notary.endpoint`) needs no admission. The hosted notary admits each capture, Witnessed session and seal with a one-operation ticket from capture-api, and the authentication kind decides who pays:
+
+- `token_file`: the server's own Exalto account, `CAPTURE_PLATFORM_API_KEY[_FILE]`, pays for every organization.
+- `hosted`: each operation's organization pays. The server presents its capture service token, which capture-api reads from `CAPTURE_API_CAPTURE_SERVICE_TOKEN_FILE`, and names the organization, so it never holds an organization's credential and the notarization worker charges each seal to its Trace's organization. No server account key is used.
+
+  ```toml
+  [cluster.authentication]
+  kind = "hosted"
+  capture_service_token_file = "/run/secrets/capture_service_token"
+  ```
+
+  The file must be private (mode `0600`) and hold only the token: 32 to 512 printable ASCII characters and at most a trailing newline. It is required with the hosted notary and refused with a self-hosted one. Billing denials such as exhausted credits reach clients as `402` exactly as for the server's own account; a refused service token is logged for the operator and answers `503` until it is fixed.

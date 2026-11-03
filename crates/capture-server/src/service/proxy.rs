@@ -10,7 +10,7 @@ use axum::{
     routing::any,
 };
 use capture_engine::{
-    admission::{Admission, AdmissionTicket, NoAdmission},
+    admission::NoAdmission,
     capture_ledger::CaptureLedger,
     capture_mode::NotaryDiscovery,
     notarization::{NotarizationContext, NotarizationQueue, spawn_notarization_worker},
@@ -24,6 +24,7 @@ use tokio::sync::watch;
 use tracing::Instrument as _;
 
 use super::{
+    admission::{AccountAdmission, CaptureService, ServerAdmission},
     auth,
     authentication::{self, AuthenticationError, Authenticator, HeaderError},
     http_client_builder,
@@ -62,14 +63,15 @@ pub(crate) use capture_engine::capture_mode::CaptureSetting;
 /// What every organization's provider requests share on one replica.
 pub(crate) struct SharedCapture {
     pub(crate) settings: CaptureSettings,
-    pub(crate) admission: Arc<dyn Admission>,
+    /// Who pays for each organization's notary operations.
+    pub(crate) admission: ServerAdmission,
     pub(crate) trust: Arc<dyn NotaryTrust>,
     pub(crate) direct_upstream: Arc<dyn DirectUpstreamConnector>,
 }
 
 /// Each organization's provider request handling on this replica: its own
-/// capture mode, capture ledger and vault on top of the shared settings,
-/// admission, trust and detached capture tasks. Contexts are created on an
+/// capture mode, capture ledger, admission and vault on top of the shared
+/// settings, trust and detached capture tasks. Contexts are created on an
 /// organization's first request and kept for the life of the replica; each
 /// is a few shared pointers and one derived vault key, and only
 /// authenticated organizations get one.
@@ -79,6 +81,8 @@ pub(crate) struct OrganizationCaptures {
     base: CaptureContext,
     cluster_runtime: Arc<ClusterRuntime>,
     artifacts: Arc<S3ArtifactStore>,
+    /// Who pays for each organization's notary operations.
+    admission: ServerAdmission,
     /// The cluster vault each organization's vault derives from.
     vault: Arc<Vault>,
     discovery: Arc<dyn NotaryDiscovery>,
@@ -105,7 +109,7 @@ impl OrganizationCaptures {
                 artifacts.clone(),
                 operator.clone(),
             )),
-            shared.admission,
+            shared.admission.for_organization(operator),
             shared.trust,
             Arc::new(vault.for_organization(operator.as_str())?),
             shared.direct_upstream,
@@ -115,6 +119,7 @@ impl OrganizationCaptures {
             base,
             cluster_runtime,
             artifacts,
+            admission: shared.admission,
             vault,
             discovery,
             contexts: std::sync::Mutex::new(contexts),
@@ -148,6 +153,7 @@ impl OrganizationCaptures {
                 self.artifacts.clone(),
                 organization.clone(),
             )),
+            self.admission.for_organization(organization),
             Arc::new(self.vault.for_organization(organization.as_str())?),
         );
         contexts.insert(organization.clone(), context.clone());
@@ -189,35 +195,6 @@ impl NotaryDiscovery for DaemonNotaryDiscovery {
         let notary = initialize_notary(&self.config, &self.cluster_runtime).await?;
         *discovered = Some(notary.clone());
         Ok(notary)
-    }
-}
-
-/// Admission through the connected Exalto account, which the hosted notary
-/// requires.
-struct HostedAdmission;
-
-#[async_trait::async_trait]
-impl Admission for HostedAdmission {
-    async fn capture(&self) -> Result<Option<AdmissionTicket>> {
-        auth::issue_capture_admission().await.map(Some)
-    }
-
-    async fn witness(&self) -> Result<Option<AdmissionTicket>> {
-        auth::issue_witness_admission().await.map(Some)
-    }
-
-    async fn notarization(
-        &self,
-        checkpoint: &CaptureCheckpoint,
-        max_attestable_http_bytes: usize,
-    ) -> Result<Option<AdmissionTicket>> {
-        let allowance = checkpoint.notarization_allowance_bytes()?;
-        if allowance > max_attestable_http_bytes {
-            anyhow::bail!("capture checkpoint exceeds the current local notarization byte limit");
-        }
-        auth::issue_notarization_admission(&checkpoint.record_digest_hex(), allowance)
-            .await
-            .map(Some)
     }
 }
 
@@ -348,7 +325,7 @@ pub async fn run(args: ProxyArgs) -> Result<()> {
         .context("server mode requires [cluster]")?
         .authentication;
     let authentication_kind = match authentication_config {
-        AuthenticationConfig::Hosted {} => "hosted",
+        AuthenticationConfig::Hosted { .. } => "hosted",
         AuthenticationConfig::TokenFile { .. } => "token_file",
     };
     let authenticator = authentication::from_config(authentication_config)?;
@@ -367,11 +344,8 @@ pub async fn run(args: ProxyArgs) -> Result<()> {
     // Open and validate persistence before notary discovery. A PostgreSQL
     // outage or unmigrated schema therefore fails startup directly.
     let identity = ClusterRuntime::identity_from_environment()?;
-    if hosted_admission_required(&config) && !auth::api_key_mode_active()? {
-        bail!(
-            "hosted notary discovery requires CAPTURE_PLATFORM_API_KEY or CAPTURE_PLATFORM_API_KEY_FILE"
-        );
-    }
+    let hosted_admission = hosted_admission_required(&config);
+    let admission = server_admission(authentication_config, hosted_admission)?;
     let (persistence, cluster_runtime) = Persistence::open_cluster(&config, identity).await?;
     let cluster_runtime = Arc::new(cluster_runtime);
     let vault = Arc::new(Vault::open_cluster().context("opening the shared cluster vault")?);
@@ -391,7 +365,6 @@ pub async fn run(args: ProxyArgs) -> Result<()> {
         persistence.artifacts.clone(),
         default_organization(),
     ));
-    let hosted_admission = hosted_admission_required(&config);
     let config = Arc::new(config);
     let discovery = Arc::new(DaemonNotaryDiscovery::new(
         config.clone(),
@@ -418,11 +391,6 @@ pub async fn run(args: ProxyArgs) -> Result<()> {
         true,
         discovery.clone(),
     ));
-    let admission: Arc<dyn Admission> = if hosted_admission {
-        Arc::new(HostedAdmission)
-    } else {
-        Arc::new(NoAdmission)
-    };
     let trust: Arc<dyn NotaryTrust> = Arc::new(DaemonNotaryTrust::new(
         config.clone(),
         cluster_runtime.clone(),
@@ -472,6 +440,7 @@ pub async fn run(args: ProxyArgs) -> Result<()> {
         notary = notary.as_ref().map(ToString::to_string).as_deref().unwrap_or("not yet discovered"),
         operator_capture_mode = operator_stored_mode.as_str(),
         authentication = authentication_kind,
+        admission = admission.kind(hosted_admission),
         config = %config_path.display(),
         providers = ?Provider::ALL,
         "Notary daemon proxy listening"
@@ -487,11 +456,12 @@ pub async fn run(args: ProxyArgs) -> Result<()> {
         cluster_runtime.clone(),
         persistence.artifacts.clone(),
         vault.clone(),
+        admission.clone(),
     ));
     let mut worker = spawn_notarization_worker(
         NotarizationContext::new(
             notarizations,
-            admission,
+            admission.host(),
             trust,
             vault.clone(),
             max_attestable_http_bytes,
@@ -620,6 +590,39 @@ pub async fn run(args: ProxyArgs) -> Result<()> {
 
 pub(crate) fn hosted_admission_required(config: &CapturedConfig) -> bool {
     config.notary.endpoint.is_none()
+}
+
+/// Who pays for notary admission. A self-hosted notary needs none. For the
+/// hosted notary, hosted authentication charges each operation to its
+/// organization with the capture service token, and a token file server's
+/// own connected Exalto account pays for every organization.
+fn server_admission(
+    authentication: &AuthenticationConfig,
+    hosted_admission: bool,
+) -> Result<ServerAdmission> {
+    if !hosted_admission {
+        return Ok(ServerAdmission::Shared(Arc::new(NoAdmission)));
+    }
+    match authentication {
+        AuthenticationConfig::Hosted {
+            capture_service_token_file,
+        } => {
+            let token_file = capture_service_token_file.as_deref().context(
+                "hosted authentication with the hosted notary requires cluster.authentication.capture_service_token_file",
+            )?;
+            Ok(ServerAdmission::PerOrganization(Arc::new(
+                CaptureService::load(auth::configured_api_origin()?, token_file)?,
+            )))
+        }
+        AuthenticationConfig::TokenFile { .. } => {
+            if !auth::api_key_mode_active()? {
+                bail!(
+                    "the hosted notary requires CAPTURE_PLATFORM_API_KEY or CAPTURE_PLATFORM_API_KEY_FILE, whose account pays for every organization's admission"
+                );
+            }
+            Ok(ServerAdmission::Shared(Arc::new(AccountAdmission)))
+        }
+    }
 }
 
 fn spawn_capture_recovery_worker(
@@ -877,8 +880,11 @@ mod tests {
 
         use axum::http::HeaderMap;
         use capture_engine::{
+            artifact_store::{ArtifactKind, ArtifactLocator},
             metadata::TraceFilters,
-            metadata_store::{ReplicaIdentity, ServerMetadataStore as _},
+            metadata_store::{
+                CaptureClaim, ReplicaIdentity, ServerMetadataStore as _, conformance,
+            },
             proxy::DirectUpstreamResponse,
         };
         use http_body_util::BodyExt as _;
@@ -893,6 +899,7 @@ mod tests {
                 test_postgres::{TestPostgres, server_store},
             },
             s3_artifact_store::S3ArtifactStoreCredentials,
+            service::admission::test_capture_api::{TestCaptureApi, per_organization},
         };
 
         /// Collects formatted log lines for assertions.
@@ -940,16 +947,60 @@ mod tests {
             }
         }
 
+        /// An artifact store that is never contacted.
+        fn unused_artifacts() -> Arc<S3ArtifactStore> {
+            Arc::new(
+                S3ArtifactStore::new(
+                    S3ArtifactStoreConfig::new(
+                        Some("http://127.0.0.1:9".parse().unwrap()),
+                        "us-east-1".to_owned(),
+                        "unused".to_owned(),
+                        String::new(),
+                        true,
+                        true,
+                        Duration::from_secs(1),
+                        Duration::from_secs(1),
+                    )
+                    .unwrap(),
+                    S3ArtifactStoreCredentials::new("unused", "unused", None),
+                )
+                .unwrap(),
+            )
+        }
+
+        /// A registered, ready replica on `store`.
+        async fn ready_replica(
+            store: &Arc<PostgresMetadataStore>,
+            name: &str,
+        ) -> Arc<ClusterRuntime> {
+            let cluster_runtime = Arc::new(ClusterRuntime::new(
+                ReplicaIdentity::new(name).unwrap(),
+                store.clone(),
+            ));
+            store
+                .register_replica(
+                    cluster_runtime.identity(),
+                    COMPATIBILITY,
+                    cluster_runtime.lease_seconds(),
+                )
+                .await
+                .unwrap();
+            cluster_runtime.mark_ready();
+            cluster_runtime
+        }
+
         /// A replica's provider listener on a disposable database, with a
-        /// token file mapping each token to its organization. Direct
-        /// requests reach `upstream`. Captures use a notary that refuses
-        /// connections, so each leaves one failed Trace in its
-        /// organization's metadata. S3 is never contacted.
+        /// token file mapping each token to its organization and
+        /// `admission` paying for captures. Direct requests reach
+        /// `upstream`. Captures use a notary that refuses connections, so
+        /// each admitted one leaves one failed Trace in its organization's
+        /// metadata. S3 is never contacted.
         async fn provider_listener(
             store: Arc<PostgresMetadataStore>,
             upstream: Arc<RecordingUpstream>,
             tokens: &[(&str, &str)],
             directory: &Path,
+            admission: ServerAdmission,
         ) -> Router {
             let tokens_path = directory.join("capture-tokens.toml");
             let mut file = String::new();
@@ -970,19 +1021,7 @@ mod tests {
                 authentication::from_config(&AuthenticationConfig::TokenFile { path: tokens_path })
                     .unwrap();
 
-            let cluster_runtime = Arc::new(ClusterRuntime::new(
-                ReplicaIdentity::new("proxy-route-test").unwrap(),
-                store.clone(),
-            ));
-            store
-                .register_replica(
-                    cluster_runtime.identity(),
-                    COMPATIBILITY,
-                    cluster_runtime.lease_seconds(),
-                )
-                .await
-                .unwrap();
-            cluster_runtime.mark_ready();
+            let cluster_runtime = ready_replica(&store, "proxy-route-test").await;
             let refused = std::net::TcpListener::bind("127.0.0.1:0")
                 .unwrap()
                 .local_addr()
@@ -996,23 +1035,7 @@ mod tests {
                     .to_sec1_bytes(),
             ));
             let config = Arc::new(config);
-            let artifacts = Arc::new(
-                S3ArtifactStore::new(
-                    S3ArtifactStoreConfig::new(
-                        Some("http://127.0.0.1:9".parse().unwrap()),
-                        "us-east-1".to_owned(),
-                        "unused".to_owned(),
-                        String::new(),
-                        true,
-                        true,
-                        Duration::from_secs(1),
-                        Duration::from_secs(1),
-                    )
-                    .unwrap(),
-                    S3ArtifactStoreCredentials::new("unused", "unused", None),
-                )
-                .unwrap(),
-            );
+            let artifacts = unused_artifacts();
             let vault =
                 Arc::new(Vault::init_cluster_key(&directory.join("cluster-vault.key")).unwrap());
             let discovery = Arc::new(DaemonNotaryDiscovery::new(
@@ -1038,7 +1061,7 @@ mod tests {
                         max_frame_bytes: config.notary.max_frame_bytes,
                         config_fingerprint: "sha256:test".to_owned(),
                     },
-                    admission: Arc::new(NoAdmission),
+                    admission,
                     trust: Arc::new(DaemonNotaryTrust::new(
                         config.clone(),
                         cluster_runtime.clone(),
@@ -1107,6 +1130,7 @@ mod tests {
                     ("beta-token", "acct-beta"),
                 ],
                 directory.path(),
+                ServerAdmission::Shared(Arc::new(NoAdmission)),
             )
             .await;
             let organization = |name: &str| OrganizationId::parse(name).unwrap();
@@ -1215,6 +1239,142 @@ mod tests {
             ] {
                 assert!(!logs.contains(secret), "{secret} reached the logs");
             }
+        }
+
+        const CAPTURE_SERVICE_TOKEN: &str = "capture-service-token-0123456789abcdef";
+
+        #[tokio::test]
+        #[ignore = "requires Docker and a disposable PostgreSQL container"]
+        async fn each_organization_pays_for_its_own_captures_and_seals() {
+            let server = TestPostgres::start().await;
+            let store = Arc::new(server_store(&server, "proxy_admission", COMPATIBILITY).await);
+            let directory = tempfile::tempdir().unwrap();
+            let api = TestCaptureApi::start(
+                CAPTURE_SERVICE_TOKEN,
+                std::collections::HashMap::from([(
+                    "acct-beta",
+                    (
+                        StatusCode::PAYMENT_REQUIRED,
+                        r#"{"error":"capture_credits_exhausted","message":"capture_credits_exhausted"}"#,
+                    ),
+                )]),
+            )
+            .await;
+            let admission = per_organization(&api, CAPTURE_SERVICE_TOKEN);
+            let app = provider_listener(
+                store.clone(),
+                Arc::new(RecordingUpstream(StdMutex::new(Vec::new()))),
+                &[("alpha-token", "acct-alpha"), ("beta-token", "acct-beta")],
+                directory.path(),
+                admission.clone(),
+            )
+            .await;
+            let organization = |name: &str| OrganizationId::parse(name).unwrap();
+
+            // Each organization's capture is admitted on its own account:
+            // alpha's is admitted and then fails at the refusing notary,
+            // and beta's exhausted credits reach the client before any
+            // Trace is recorded.
+            let (status, _) = send(
+                &app,
+                provider_request(Some("Bearer alpha-token"), "alpha prompt"),
+            )
+            .await;
+            assert_eq!(status, StatusCode::BAD_GATEWAY, "the test notary refuses");
+            let (status, body) = send(
+                &app,
+                provider_request(Some("Bearer beta-token"), "beta prompt"),
+            )
+            .await;
+            assert_eq!(status, StatusCode::PAYMENT_REQUIRED, "{body}");
+            let body: serde_json::Value = serde_json::from_str(&body).unwrap();
+            assert_eq!(body["error"]["type"], "hosted_admission");
+            assert_eq!(body["error"]["code"], "capture_credits_exhausted");
+            assert_eq!(api.organizations(), ["acct-alpha", "acct-beta"]);
+            for received in api.received() {
+                assert_eq!(
+                    received.authorization,
+                    Some(format!("Bearer {CAPTURE_SERVICE_TOKEN}"))
+                );
+                assert_eq!(received.body["admission"]["mode"], "capture");
+            }
+            let traces = |name: &'static str| {
+                let store = store.organization(&organization(name));
+                async move {
+                    store
+                        .traces(TraceFilters {
+                            limit: 10,
+                            ..TraceFilters::default()
+                        })
+                        .await
+                        .unwrap()
+                }
+            };
+            assert_eq!(traces("acct-alpha").await.len(), 1);
+            assert!(traces("acct-beta").await.is_empty());
+
+            // A claimed notarization is charged to its claim's
+            // organization, whichever organization queued work first.
+            let replica = ready_replica(&store, "notarization-claim-test").await;
+            for (name, trace_id) in [
+                ("acct-sealer-b", "trc-sealer-b"),
+                ("acct-sealer-a", "trc-sealer-a"),
+            ] {
+                let claim =
+                    CaptureClaim::new(organization(name), trace_id, replica.identity().clone());
+                store
+                    .begin_capture_claimed(conformance::new_capture(trace_id, 1), &claim, 20)
+                    .await
+                    .unwrap();
+                let mut checkpoint =
+                    conformance::artifact(trace_id, ArtifactKind::CaptureCheckpoint, 1);
+                checkpoint.locator =
+                    ArtifactLocator::from_stored("artifact/v1/s3/Y2hlY2twb2ludA").unwrap();
+                let checkpoint = checkpoint.with_commit_id(&claim.commit_id).unwrap();
+                let mut completion = conformance::completion(trace_id, 2, 200);
+                completion.expected_artifact_size_bytes = checkpoint.size_bytes;
+                completion.expected_artifact_sha256 = checkpoint.sha256.clone();
+                store
+                    .prepare_capture_completion_claimed(completion.clone(), &claim, 20)
+                    .await
+                    .unwrap();
+                store
+                    .complete_capture_claimed(completion, checkpoint, &claim)
+                    .await
+                    .unwrap();
+                store
+                    .organization(&organization(name))
+                    .enqueue_notarization(trace_id, 3)
+                    .await
+                    .unwrap()
+                    .unwrap();
+            }
+            let vault = Arc::new(
+                Vault::init_cluster_key(&directory.path().join("worker-vault.key")).unwrap(),
+            );
+            let queue =
+                ClusterNotarizationQueue::new(replica, unused_artifacts(), vault, admission);
+            let mut charged = Vec::new();
+            while let Some(claim) = queue.claim_next(0).await.unwrap() {
+                claim
+                    .admission()
+                    .expect("each organization pays for its own seals")
+                    .capture()
+                    .await
+                    .unwrap();
+                charged.push((
+                    claim.operation().trace_id.clone(),
+                    api.organizations().pop().unwrap(),
+                ));
+            }
+            charged.sort();
+            assert_eq!(
+                charged,
+                [
+                    ("trc-sealer-a".to_owned(), "acct-sealer-a".to_owned()),
+                    ("trc-sealer-b".to_owned(), "acct-sealer-b".to_owned()),
+                ]
+            );
         }
     }
 }

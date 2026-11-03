@@ -63,7 +63,7 @@ pub(crate) trait Authenticator: Send + Sync {
 /// here, so a bad file stops startup.
 pub(crate) fn from_config(config: &AuthenticationConfig) -> Result<Arc<dyn Authenticator>> {
     Ok(match config {
-        AuthenticationConfig::Hosted {} => {
+        AuthenticationConfig::Hosted { .. } => {
             Arc::new(HostedAuthenticator::new(auth::configured_api_origin()?)?)
         }
         AuthenticationConfig::TokenFile { path } => Arc::new(TokenFileAuthenticator::load(path)?),
