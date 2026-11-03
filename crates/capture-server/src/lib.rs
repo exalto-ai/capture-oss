@@ -21,6 +21,7 @@ pub use capture_engine::{
 pub mod admin;
 mod artifact_reconciliation;
 mod cluster_runtime;
+mod customer_api;
 mod persistence;
 mod postgres_metadata_store;
 mod s3_artifact_store;

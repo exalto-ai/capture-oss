@@ -148,6 +148,28 @@ impl PostgresMetadataStore {
         })?
     }
 
+    /// A server store whose pool never reaches a database, for tests that
+    /// must not touch one: every query fails.
+    #[cfg(test)]
+    pub(crate) fn unreachable() -> Self {
+        let refused = std::net::TcpListener::bind("127.0.0.1:0")
+            .and_then(|listener| listener.local_addr())
+            .expect("reserve a local port");
+        Self {
+            pool: PgPoolOptions::new()
+                .max_connections(1)
+                .acquire_timeout(Duration::from_millis(200))
+                .connect_lazy_with(
+                    PgConnectOptions::new()
+                        .host("127.0.0.1")
+                        .port(refused.port())
+                        .ssl_mode(pg_ssl_mode(PostgresSslMode::Disable)),
+                ),
+            full_text_search: true,
+            cluster_mode: true,
+        }
+    }
+
     /// Wraps an existing pool after verifying the daemon-owned migration journal.
     #[cfg(test)]
     async fn from_pool(pool: PgPool, full_text_search: bool) -> MetadataResult<Self> {

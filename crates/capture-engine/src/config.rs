@@ -78,6 +78,23 @@ pub struct ClusterConfig {
     /// provider request carries `Capture-Authorization: Bearer <token>`;
     /// there is no unauthenticated mode.
     pub authentication: AuthenticationConfig,
+    /// The private listener through which capture-api acts for
+    /// organizations. Without it no customer listener runs, and operators
+    /// use the admin listener's dashboard.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub customer_api: Option<CustomerApiConfig>,
+}
+
+/// The customer API: the engine's Trace, operation, verification, activity
+/// and settings routes for the organization each request names. Its bearer
+/// token may act as any organization, so the listener belongs on a private
+/// network that only capture-api reaches.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct CustomerApiConfig {
+    pub listen: SocketAddr,
+    /// A private file holding the bearer token capture-api presents.
+    pub token_file: PathBuf,
 }
 
 /// How a capture server resolves a request's bearer token to an
@@ -809,6 +826,21 @@ impl CapturedConfig {
                 (false, None) => {}
             },
         }
+        if let Some(customer_api) = &cluster.customer_api {
+            ensure!(
+                customer_api.token_file.is_absolute(),
+                "cluster.customer_api.token_file must be an absolute path"
+            );
+            for (name, other) in [
+                ("proxy.listen", self.proxy.listen),
+                ("admin.listen", self.admin.listen),
+            ] {
+                ensure!(
+                    !listeners_collide(customer_api.listen, other),
+                    "cluster.customer_api.listen must not share a port with {name}"
+                );
+            }
+        }
         Ok(())
     }
 
@@ -1108,6 +1140,14 @@ fn resolve_secret_value(
     Ok(value)
 }
 
+/// Whether two listeners cannot both bind: the same port on the same or an
+/// unspecified address. Port 0 asks for a fresh port each time.
+fn listeners_collide(left: SocketAddr, right: SocketAddr) -> bool {
+    left.port() != 0
+        && left.port() == right.port()
+        && (left.ip() == right.ip() || left.ip().is_unspecified() || right.ip().is_unspecified())
+}
+
 fn route_prefixes_overlap(left: &str, right: &str) -> bool {
     left == right
         || left
@@ -1292,8 +1332,8 @@ mod tests {
         assert!(config.validate().is_err());
     }
 
-    #[test]
-    fn cluster_profile_has_safe_defaults_and_rejects_unsafe_combinations() {
+    /// A valid cluster profile with a self-hosted notary.
+    fn cluster_profile() -> CapturedConfig {
         let mut config = CapturedConfig {
             cluster: Some(ClusterConfig {
                 proxy_origin: "https://proxy.notary.example".into(),
@@ -1301,6 +1341,7 @@ mod tests {
                 authentication: AuthenticationConfig::TokenFile {
                     path: "/run/secrets/capture-tokens.toml".into(),
                 },
+                customer_api: None,
             }),
             ..CapturedConfig::default()
         };
@@ -1326,6 +1367,12 @@ mod tests {
         config.notary.endpoint = Some("tcp://notary.internal:7047".into());
         config.notary.public_key =
             Some("0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798".into());
+        config
+    }
+
+    #[test]
+    fn cluster_profile_has_safe_defaults_and_rejects_unsafe_combinations() {
+        let mut config = cluster_profile();
         config.validate().unwrap();
 
         let valid = config.clone();
@@ -1417,6 +1464,144 @@ mod tests {
                 .unwrap(),
             valid.cluster_compatibility_sha256(&vault_identity).unwrap()
         );
+    }
+
+    #[test]
+    fn the_customer_api_is_optional_private_and_on_its_own_port() {
+        let section = |customer_api: &str| {
+            format!(
+                "proxy_origin = \"https://proxy.notary.example\"\nadmin_origin = \"https://admin.notary.example\"\n\n[authentication]\nkind = \"hosted\"\n{customer_api}"
+            )
+        };
+        let parse = |source: String| toml::from_str::<ClusterConfig>(&source);
+        assert_eq!(parse(section("")).unwrap().customer_api, None);
+        assert_eq!(
+            parse(section(
+                "\n[customer_api]\nlisten = \"[::]:8789\"\ntoken_file = \"/run/secrets/customer_api_token\"\n"
+            ))
+            .unwrap()
+            .customer_api,
+            Some(CustomerApiConfig {
+                listen: "[::]:8789".parse().unwrap(),
+                token_file: "/run/secrets/customer_api_token".into(),
+            })
+        );
+        for invalid in [
+            "\n[customer_api]\nlisten = \"[::]:8789\"\n",
+            "\n[customer_api]\ntoken_file = \"/run/secrets/customer_api_token\"\n",
+            "\n[customer_api]\nlisten = \"customer-api:8789\"\ntoken_file = \"/run/secrets/customer_api_token\"\n",
+            "\n[customer_api]\nlisten = \"[::]:8789\"\ntoken_file = \"/run/secrets/customer_api_token\"\ntoken = \"raw\"\n",
+        ] {
+            assert!(parse(section(invalid)).is_err(), "{invalid}");
+        }
+
+        let without = cluster_profile();
+        without.validate().unwrap();
+        assert!(
+            !toml::to_string_pretty(&without)
+                .unwrap()
+                .contains("customer_api")
+        );
+        let mut config = without.clone();
+        config.cluster.as_mut().unwrap().customer_api = Some(CustomerApiConfig {
+            listen: "0.0.0.0:8789".parse().unwrap(),
+            token_file: "/run/secrets/customer_api_token".into(),
+        });
+        config.validate().unwrap();
+        let encoded = toml::to_string_pretty(&config).unwrap();
+        assert!(encoded.contains("[cluster.customer_api]"), "{encoded}");
+        assert_eq!(
+            toml::from_str::<CapturedConfig>(&encoded)
+                .unwrap()
+                .cluster
+                .unwrap()
+                .customer_api,
+            config.cluster.as_ref().unwrap().customer_api
+        );
+
+        // Every replica serves the customer API the same way.
+        let vault_identity = "22".repeat(32);
+        let compatibility = config
+            .cluster_compatibility_sha256(&vault_identity)
+            .unwrap();
+        assert_ne!(
+            without
+                .cluster_compatibility_sha256(&vault_identity)
+                .unwrap(),
+            compatibility
+        );
+        let mut other = config.clone();
+        other
+            .cluster
+            .as_mut()
+            .unwrap()
+            .customer_api
+            .as_mut()
+            .unwrap()
+            .token_file = "/run/secrets/other_customer_api_token".into();
+        assert_ne!(
+            other.cluster_compatibility_sha256(&vault_identity).unwrap(),
+            compatibility
+        );
+
+        let mut invalid = config.clone();
+        invalid
+            .cluster
+            .as_mut()
+            .unwrap()
+            .customer_api
+            .as_mut()
+            .unwrap()
+            .token_file = "customer_api_token".into();
+        let error = invalid.validate().unwrap_err().to_string();
+        assert!(
+            error.contains("token_file must be an absolute path"),
+            "{error}"
+        );
+        // The listener may not take the proxy's or the admin listener's
+        // port on the same or an unspecified address.
+        for (listen, collides) in [
+            ("0.0.0.0:8787", true),
+            ("127.0.0.1:8787", true),
+            ("[::]:8788", true),
+            ("10.0.0.5:8788", true),
+            ("0.0.0.0:8789", false),
+            ("[fdaa::3]:8789", false),
+        ] {
+            let mut candidate = config.clone();
+            candidate
+                .cluster
+                .as_mut()
+                .unwrap()
+                .customer_api
+                .as_mut()
+                .unwrap()
+                .listen = listen.parse().unwrap();
+            match candidate.validate() {
+                Ok(()) => assert!(!collides, "{listen}"),
+                Err(error) => {
+                    assert!(collides, "{listen}: {error}");
+                    assert!(
+                        error
+                            .to_string()
+                            .starts_with("cluster.customer_api.listen must not share a port"),
+                        "{error}"
+                    );
+                }
+            }
+        }
+        assert!(listeners_collide(
+            "127.0.0.1:8789".parse().unwrap(),
+            "127.0.0.1:8789".parse().unwrap()
+        ));
+        assert!(!listeners_collide(
+            "127.0.0.1:8789".parse().unwrap(),
+            "127.0.0.2:8789".parse().unwrap()
+        ));
+        assert!(!listeners_collide(
+            "127.0.0.1:0".parse().unwrap(),
+            "127.0.0.1:0".parse().unwrap()
+        ));
     }
 
     #[test]

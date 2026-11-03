@@ -57,7 +57,23 @@ Every provider request authenticates as an organization with `Capture-Authorizat
 
 - `kind = "hosted"`: tokens are Exalto API keys or Device access tokens with the `capture:request` scope, checked against the configured Exalto API origin (`CAPTURE_PLATFORM_API_ORIGIN`). Each replica caches a successful check for 60 seconds, so a revoked credential can keep working for up to a minute. Failed checks are not cached.
 
-The admin routes still serve only the `default` organization, so the reference setup's token records for `default`.
+The admin routes serve only the `default` organization, so the reference setup's token records for `default`.
+
+## Customer API
+
+In a hosted deployment customers reach their Traces through capture-api, which calls each replica's private customer API server to server on behalf of one organization per request. Self-hosted servers usually leave it off and use the admin listener's dashboard.
+
+```toml
+[cluster.customer_api]
+listen = "[::]:8789"
+token_file = "/run/secrets/customer_api_token"
+```
+
+The listener serves the dashboard's Trace, operation, package, verification, Activity, capture mode and auto-seal routes for the organization named by each request's `Capture-Organization` header, and nothing else: no status, notary, provider or session routes, no dashboard, and no admin credentials. Every request except `GET /healthz` and `GET /readyz` needs `Authorization: Bearer <token>` (`401` otherwise) and then exactly one valid `Capture-Organization` (`400` otherwise). Its readiness follows only the replica lifecycle. Its port must differ from the provider and admin listeners'.
+
+The token can act as any organization. Only capture-api holds it, and the listener must be reachable only on a private network, never through public ingress (on Fly, over the private network, without publishing the port as a service). The token file must be private (mode `0600`) and hold only the token: 32 to 512 printable ASCII characters and at most a trailing newline. Replicas read it at startup and never log the token.
+
+An organization has one capture mode: a change through the customer API applies to that organization's next provider request and to no other organization. As on the admin listener, the cluster manages auto-seal and Trace deletion, so enabling auto-seal or deleting a Trace answers `409`.
 
 ## Notary admission
 

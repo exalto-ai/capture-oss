@@ -19,6 +19,7 @@ use capture_engine::{
         CaptureContext, CaptureSettings, CaptureTasks, DirectUpstreamConnector, NotaryTrust,
         ReqwestDirectUpstreamConnector,
     },
+    storage::Storage,
 };
 use tokio::sync::watch;
 use tracing::Instrument as _;
@@ -34,6 +35,7 @@ use crate::{
     CaptureCheckpoint,
     cluster_runtime::{ClusterCaptureLedger, ClusterNotarizationQueue, ClusterRuntime, Lifecycle},
     config::{AuthenticationConfig, CapturedConfig, load_captured_config},
+    customer_api::{CustomerApiState, CustomerApiToken},
     metadata::{CaptureMode, RegistrySnapshot},
     metadata_store::MetadataStoreError,
     organization::OrganizationId,
@@ -69,12 +71,23 @@ pub(crate) struct SharedCapture {
     pub(crate) direct_upstream: Arc<dyn DirectUpstreamConnector>,
 }
 
-/// Each organization's provider request handling on this replica: its own
-/// capture mode, capture ledger, admission and vault on top of the shared
-/// settings, trust and detached capture tasks. Contexts are created on an
-/// organization's first request and kept for the life of the replica; each
-/// is a few shared pointers and one derived vault key, and only
-/// authenticated organizations get one.
+/// One organization on this replica: its provider request handling, and the
+/// capture mode and stores the customer API acts on.
+#[derive(Clone)]
+pub(crate) struct Organization {
+    pub(crate) capture: CaptureContext,
+    /// The one capture setting the organization's provider requests read and
+    /// its settings routes change.
+    pub(crate) mode: Arc<CaptureSetting>,
+    pub(crate) storage: Storage,
+}
+
+/// Each organization's state on this replica: its own capture mode, stores,
+/// capture ledger, admission and vault on top of the shared settings, trust
+/// and detached capture tasks. An organization's state is created on its
+/// first provider or customer API request and kept for the life of the
+/// replica; each is a few shared pointers and one derived vault key, and
+/// only authenticated organizations get one.
 pub(crate) struct OrganizationCaptures {
     /// The operator organization's context, from which every other
     /// organization's is derived.
@@ -86,7 +99,7 @@ pub(crate) struct OrganizationCaptures {
     /// The cluster vault each organization's vault derives from.
     vault: Arc<Vault>,
     discovery: Arc<dyn NotaryDiscovery>,
-    contexts: std::sync::Mutex<HashMap<OrganizationId, CaptureContext>>,
+    organizations: std::sync::Mutex<HashMap<OrganizationId, Organization>>,
 }
 
 impl OrganizationCaptures {
@@ -103,7 +116,7 @@ impl OrganizationCaptures {
     ) -> Result<Self> {
         let base = CaptureContext::new(
             shared.settings,
-            operator_mode,
+            operator_mode.clone(),
             Arc::new(ClusterCaptureLedger::new(
                 cluster_runtime.clone(),
                 artifacts.clone(),
@@ -114,7 +127,11 @@ impl OrganizationCaptures {
             Arc::new(vault.for_organization(operator.as_str())?),
             shared.direct_upstream,
         );
-        let contexts = HashMap::from([(operator.clone(), base.clone())]);
+        let operator_state = Organization {
+            capture: base.clone(),
+            mode: operator_mode,
+            storage: organization_storage(&cluster_runtime, &artifacts, operator),
+        };
         Ok(Self {
             base,
             cluster_runtime,
@@ -122,18 +139,21 @@ impl OrganizationCaptures {
             admission: shared.admission,
             vault,
             discovery,
-            contexts: std::sync::Mutex::new(contexts),
+            organizations: std::sync::Mutex::new(HashMap::from([(
+                operator.clone(),
+                operator_state,
+            )])),
         })
     }
 
-    /// One organization's request handling, created on first use.
-    pub(crate) fn context(&self, organization: &OrganizationId) -> Result<CaptureContext> {
-        let mut contexts = self
-            .contexts
+    /// One organization's state, created on first use.
+    pub(crate) fn organization(&self, organization: &OrganizationId) -> Result<Organization> {
+        let mut organizations = self
+            .organizations
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if let Some(context) = contexts.get(organization) {
-            return Ok(context.clone());
+        if let Some(state) = organizations.get(organization) {
+            return Ok(state.clone());
         }
         // The setting re-reads the organization's stored mode for every
         // request (`shared`), so starting from Off only means the first
@@ -146,8 +166,8 @@ impl OrganizationCaptures {
             true,
             self.discovery.clone(),
         ));
-        let context = self.base.for_organization(
-            mode,
+        let capture = self.base.for_organization(
+            mode.clone(),
             Arc::new(ClusterCaptureLedger::new(
                 self.cluster_runtime.clone(),
                 self.artifacts.clone(),
@@ -156,14 +176,31 @@ impl OrganizationCaptures {
             self.admission.for_organization(organization),
             Arc::new(self.vault.for_organization(organization.as_str())?),
         );
-        contexts.insert(organization.clone(), context.clone());
-        Ok(context)
+        let state = Organization {
+            capture,
+            mode,
+            storage: organization_storage(&self.cluster_runtime, &self.artifacts, organization),
+        };
+        organizations.insert(organization.clone(), state.clone());
+        Ok(state)
     }
 
     /// Detached capture tasks of every organization.
     pub(crate) fn tasks(&self) -> &CaptureTasks {
         self.base.tasks()
     }
+}
+
+/// One organization's view of the shared metadata and artifacts.
+fn organization_storage(
+    cluster_runtime: &ClusterRuntime,
+    artifacts: &S3ArtifactStore,
+    organization: &OrganizationId,
+) -> Storage {
+    Storage::new(
+        cluster_runtime.metadata().organization(organization),
+        Arc::new(artifacts.for_organization(organization)),
+    )
 }
 
 /// Finds the trusted notary: the configured endpoint, or the hosted Registry
@@ -319,16 +356,25 @@ pub async fn run(args: ProxyArgs) -> Result<()> {
     auth::validate_credential_configuration()?;
     // Provider requests are authenticated as organizations; a bad token file
     // stops startup here.
-    let authentication_config = &config
+    let cluster = config
         .cluster
         .as_ref()
-        .context("server mode requires [cluster]")?
-        .authentication;
+        .context("server mode requires [cluster]")?;
+    let authentication_config = &cluster.authentication;
     let authentication_kind = match authentication_config {
         AuthenticationConfig::Hosted { .. } => "hosted",
         AuthenticationConfig::TokenFile { .. } => "token_file",
     };
     let authenticator = authentication::from_config(authentication_config)?;
+    // So does a bad customer API token file.
+    let customer_api = cluster
+        .customer_api
+        .as_ref()
+        .map(|customer_api| {
+            CustomerApiToken::load(&customer_api.token_file)
+                .map(|token| (customer_api.listen, token))
+        })
+        .transpose()?;
     let listen = config.proxy.listen;
     let max_frame_bytes = config.notary.max_frame_bytes;
     let max_attestable_http_bytes = config.proxy.max_attestable_http_bytes;
@@ -435,6 +481,22 @@ pub async fn run(args: ProxyArgs) -> Result<()> {
     let admin = crate::admin::router(admin_state.clone())?;
     let listener = tokio::net::TcpListener::bind(listen).await?;
     let admin_listener = tokio::net::TcpListener::bind(config.admin.listen).await?;
+    // The customer API acts in the same organizations' states as provider
+    // requests, with the operator listener's notary trust, notarization
+    // worker wake-up and Trace lifecycle gate.
+    let customer = match customer_api {
+        Some((customer_listen, token)) => {
+            let app = crate::customer_api::router(CustomerApiState::new(
+                token,
+                organizations.clone(),
+                admin_state.api().clone(),
+                cluster_runtime.clone(),
+            ));
+            let listener = tokio::net::TcpListener::bind(customer_listen).await?;
+            Some((customer_listen, listener, app))
+        }
+        None => None,
+    };
     tracing::info!(
         address = %listen,
         notary = notary.as_ref().map(ToString::to_string).as_deref().unwrap_or("not yet discovered"),
@@ -446,6 +508,9 @@ pub async fn run(args: ProxyArgs) -> Result<()> {
         "Notary daemon proxy listening"
     );
     tracing::info!(address = %config.admin.listen, "Notary daemon admin API listening");
+    if let Some((listen, _, _)) = &customer {
+        tracing::info!(address = %listen, "Customer API listening");
+    }
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let (heartbeat_shutdown_tx, heartbeat_shutdown_rx) = watch::channel(false);
     cluster_runtime.mark_ready();
@@ -471,6 +536,7 @@ pub async fn run(args: ProxyArgs) -> Result<()> {
         shutdown_rx.clone(),
     );
     let proxy_shutdown = wait_for_shutdown(shutdown_rx.clone());
+    let customer_shutdown = wait_for_shutdown(shutdown_rx.clone());
     let admin_shutdown = wait_for_shutdown(shutdown_rx);
     let mut proxy_server = tokio::spawn(async move {
         axum::serve(listener, app)
@@ -484,16 +550,31 @@ pub async fn run(args: ProxyArgs) -> Result<()> {
             .await
             .context("admin listener exited")
     });
+    let mut customer_server = tokio::spawn(async move {
+        match customer {
+            Some((_, listener, app)) => axum::serve(listener, app)
+                .with_graceful_shutdown(customer_shutdown)
+                .await
+                .context("customer API listener exited"),
+            // Without a customer API there is only shutdown to wait for.
+            None => {
+                customer_shutdown.await;
+                Ok(())
+            }
+        }
+    });
     enum Exit {
         Requested,
         Proxy(Result<()>),
         Admin(Result<()>),
+        Customer(Result<()>),
         Worker(Result<()>),
         Heartbeat(Result<()>),
     }
     let exit = tokio::select! {
         result = &mut proxy_server => Exit::Proxy(joined(result, "proxy server")),
         result = &mut admin_server => Exit::Admin(joined(result, "admin server")),
+        result = &mut customer_server => Exit::Customer(joined(result, "customer API server")),
         result = &mut worker => Exit::Worker(joined(result, "notarization worker")),
         result = &mut heartbeat => Exit::Heartbeat(joined(result, "cluster replica heartbeat")),
         () = system_shutdown_signal() => Exit::Requested,
@@ -515,6 +596,7 @@ pub async fn run(args: ProxyArgs) -> Result<()> {
                 async {
                     joined((&mut proxy_server).await, "proxy server")?;
                     joined((&mut admin_server).await, "admin server")?;
+                    joined((&mut customer_server).await, "customer API server")?;
                     joined((&mut worker).await, "notarization worker")?;
                     Ok::<_, anyhow::Error>(())
                 },
@@ -530,6 +612,7 @@ pub async fn run(args: ProxyArgs) -> Result<()> {
                     );
                     proxy_server.abort();
                     admin_server.abort();
+                    customer_server.abort();
                     worker.abort();
                 }
             }
@@ -537,6 +620,7 @@ pub async fn run(args: ProxyArgs) -> Result<()> {
         Exit::Proxy(result) => {
             result?;
             joined(admin_server.await, "admin server")?;
+            joined(customer_server.await, "customer API server")?;
             joined(worker.await, "notarization worker")?;
             let _ = heartbeat_shutdown_tx.send(true);
             joined(heartbeat.await, "cluster replica heartbeat")?;
@@ -545,15 +629,26 @@ pub async fn run(args: ProxyArgs) -> Result<()> {
         Exit::Admin(result) => {
             result?;
             joined(proxy_server.await, "proxy server")?;
+            joined(customer_server.await, "customer API server")?;
             joined(worker.await, "notarization worker")?;
             let _ = heartbeat_shutdown_tx.send(true);
             joined(heartbeat.await, "cluster replica heartbeat")?;
             bail!("admin server stopped unexpectedly");
         }
+        Exit::Customer(result) => {
+            result?;
+            joined(proxy_server.await, "proxy server")?;
+            joined(admin_server.await, "admin server")?;
+            joined(worker.await, "notarization worker")?;
+            let _ = heartbeat_shutdown_tx.send(true);
+            joined(heartbeat.await, "cluster replica heartbeat")?;
+            bail!("customer API server stopped unexpectedly");
+        }
         Exit::Worker(result) => {
             result?;
             joined(proxy_server.await, "proxy server")?;
             joined(admin_server.await, "admin server")?;
+            joined(customer_server.await, "customer API server")?;
             let _ = heartbeat_shutdown_tx.send(true);
             joined(heartbeat.await, "cluster replica heartbeat")?;
             bail!("notarization worker stopped unexpectedly");
@@ -562,6 +657,7 @@ pub async fn run(args: ProxyArgs) -> Result<()> {
             result?;
             joined(proxy_server.await, "proxy server")?;
             joined(admin_server.await, "admin server")?;
+            joined(customer_server.await, "customer API server")?;
             joined(worker.await, "notarization worker")?;
             bail!("cluster replica heartbeat stopped unexpectedly");
         }
@@ -819,8 +915,11 @@ async fn proxy(State(state): State<AppState>, mut request: Request) -> Response 
         }
     };
     drop(token);
-    let context = match state.organizations.context(&authenticated.organization) {
-        Ok(context) => context,
+    let context = match state
+        .organizations
+        .organization(&authenticated.organization)
+    {
+        Ok(organization) => organization.capture,
         Err(_) => {
             tracing::warn!(
                 organization = %authenticated.organization,
@@ -851,6 +950,128 @@ fn proxy_error(status: StatusCode, message: &str) -> Response {
         .into_response()
 }
 
+/// A replica's organizations for route tests.
+#[cfg(test)]
+pub(crate) mod test_organizations {
+    use std::{path::Path, sync::Mutex, time::Duration};
+
+    use axum::http::HeaderMap;
+    use capture_engine::proxy::DirectUpstreamResponse;
+
+    use super::*;
+    use crate::{config::S3ArtifactStoreConfig, s3_artifact_store::S3ArtifactStoreCredentials};
+
+    /// Records the headers each direct provider request carried upstream,
+    /// and answers it.
+    #[derive(Default)]
+    pub(crate) struct RecordingUpstream(pub(crate) Mutex<Vec<HeaderMap>>);
+
+    #[async_trait::async_trait]
+    impl DirectUpstreamConnector for RecordingUpstream {
+        async fn send(
+            &self,
+            _provider: Provider,
+            request: Request,
+        ) -> Result<DirectUpstreamResponse> {
+            self.0.lock().unwrap().push(request.headers().clone());
+            Ok(DirectUpstreamResponse {
+                status: StatusCode::OK,
+                headers: HeaderMap::new(),
+                body: Body::from(r#"{"ok":true}"#),
+            })
+        }
+    }
+
+    /// An artifact store that is never contacted.
+    pub(crate) fn unused_artifacts() -> Arc<S3ArtifactStore> {
+        Arc::new(
+            S3ArtifactStore::new(
+                S3ArtifactStoreConfig::new(
+                    Some("http://127.0.0.1:9".parse().unwrap()),
+                    "us-east-1".to_owned(),
+                    "unused".to_owned(),
+                    String::new(),
+                    true,
+                    true,
+                    Duration::from_secs(1),
+                    Duration::from_secs(1),
+                )
+                .unwrap(),
+                S3ArtifactStoreCredentials::new("unused", "unused", None),
+            )
+            .unwrap(),
+        )
+    }
+
+    /// Every organization's state on `cluster_runtime`'s metadata, and the
+    /// replica's configuration. Captures use an explicitly configured notary
+    /// that refuses connections, so each admitted one leaves one failed
+    /// Trace in its organization's metadata; direct requests reach
+    /// `upstream`, and S3 is never contacted. Building it touches no
+    /// database.
+    pub(crate) fn organizations(
+        cluster_runtime: Arc<ClusterRuntime>,
+        directory: &Path,
+        admission: ServerAdmission,
+        upstream: Arc<dyn DirectUpstreamConnector>,
+    ) -> (Arc<OrganizationCaptures>, Arc<CapturedConfig>) {
+        let refused = std::net::TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap();
+        let mut config = CapturedConfig::default();
+        config.notary.endpoint = Some(format!("tcp://{refused}"));
+        config.notary.public_key = Some(hex::encode(
+            k256::ecdsa::SigningKey::from_slice(&[7; 32])
+                .unwrap()
+                .verifying_key()
+                .to_sec1_bytes(),
+        ));
+        let config = Arc::new(config);
+        let vault =
+            Arc::new(Vault::init_cluster_key(&directory.join("cluster-vault.key")).unwrap());
+        let discovery = Arc::new(DaemonNotaryDiscovery::new(
+            config.clone(),
+            cluster_runtime.clone(),
+        ));
+        let operator = default_organization();
+        // A shared setting re-reads the stored mode for every request.
+        let operator_mode = Arc::new(CaptureSetting::new(
+            CaptureMode::Off,
+            config.notary_endpoint().unwrap(),
+            cluster_runtime.metadata().organization(&operator),
+            true,
+            discovery.clone(),
+        ));
+        let organizations = OrganizationCaptures::new(
+            SharedCapture {
+                settings: CaptureSettings {
+                    providers: config.providers.clone(),
+                    prompt_preview_chars: 1_000,
+                    output_preview_chars: 1_000,
+                    max_attestable_http_bytes: config.proxy.max_attestable_http_bytes,
+                    max_frame_bytes: config.notary.max_frame_bytes,
+                    config_fingerprint: "sha256:test".to_owned(),
+                },
+                admission,
+                trust: Arc::new(DaemonNotaryTrust::new(
+                    config.clone(),
+                    cluster_runtime.clone(),
+                )),
+                direct_upstream: upstream,
+            },
+            cluster_runtime,
+            unused_artifacts(),
+            vault,
+            discovery,
+            &operator,
+            operator_mode,
+        )
+        .unwrap();
+        (Arc::new(organizations), config)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -876,16 +1097,14 @@ mod tests {
     }
 
     mod over_postgres {
-        use std::{path::Path, sync::Mutex as StdMutex, time::Duration};
+        use std::{path::Path, sync::Mutex as StdMutex};
 
-        use axum::http::HeaderMap;
         use capture_engine::{
             artifact_store::{ArtifactKind, ArtifactLocator},
             metadata::TraceFilters,
             metadata_store::{
                 CaptureClaim, ReplicaIdentity, ServerMetadataStore as _, conformance,
             },
-            proxy::DirectUpstreamResponse,
         };
         use http_body_util::BodyExt as _;
         use sha2::{Digest as _, Sha256};
@@ -893,13 +1112,14 @@ mod tests {
 
         use super::*;
         use crate::{
-            config::S3ArtifactStoreConfig,
             postgres_metadata_store::{
                 PostgresMetadataStore,
                 test_postgres::{TestPostgres, server_store},
             },
-            s3_artifact_store::S3ArtifactStoreCredentials,
-            service::admission::test_capture_api::{TestCaptureApi, per_organization},
+            service::{
+                admission::test_capture_api::{TestCaptureApi, per_organization},
+                proxy::test_organizations::{self, RecordingUpstream},
+            },
         };
 
         /// Collects formatted log lines for assertions.
@@ -928,46 +1148,6 @@ mod tests {
         const COMPATIBILITY: &str =
             "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd";
 
-        /// Records the headers each direct provider request carried upstream.
-        struct RecordingUpstream(StdMutex<Vec<HeaderMap>>);
-
-        #[async_trait::async_trait]
-        impl DirectUpstreamConnector for RecordingUpstream {
-            async fn send(
-                &self,
-                _provider: Provider,
-                request: Request,
-            ) -> Result<DirectUpstreamResponse> {
-                self.0.lock().unwrap().push(request.headers().clone());
-                Ok(DirectUpstreamResponse {
-                    status: StatusCode::OK,
-                    headers: HeaderMap::new(),
-                    body: Body::from(r#"{"ok":true}"#),
-                })
-            }
-        }
-
-        /// An artifact store that is never contacted.
-        fn unused_artifacts() -> Arc<S3ArtifactStore> {
-            Arc::new(
-                S3ArtifactStore::new(
-                    S3ArtifactStoreConfig::new(
-                        Some("http://127.0.0.1:9".parse().unwrap()),
-                        "us-east-1".to_owned(),
-                        "unused".to_owned(),
-                        String::new(),
-                        true,
-                        true,
-                        Duration::from_secs(1),
-                        Duration::from_secs(1),
-                    )
-                    .unwrap(),
-                    S3ArtifactStoreCredentials::new("unused", "unused", None),
-                )
-                .unwrap(),
-            )
-        }
-
         /// A registered, ready replica on `store`.
         async fn ready_replica(
             store: &Arc<PostgresMetadataStore>,
@@ -991,10 +1171,8 @@ mod tests {
 
         /// A replica's provider listener on a disposable database, with a
         /// token file mapping each token to its organization and
-        /// `admission` paying for captures. Direct requests reach
-        /// `upstream`. Captures use a notary that refuses connections, so
-        /// each admitted one leaves one failed Trace in its organization's
-        /// metadata. S3 is never contacted.
+        /// `admission` paying for captures; see
+        /// [`test_organizations::organizations`].
         async fn provider_listener(
             store: Arc<PostgresMetadataStore>,
             upstream: Arc<RecordingUpstream>,
@@ -1022,62 +1200,14 @@ mod tests {
                     .unwrap();
 
             let cluster_runtime = ready_replica(&store, "proxy-route-test").await;
-            let refused = std::net::TcpListener::bind("127.0.0.1:0")
-                .unwrap()
-                .local_addr()
-                .unwrap();
-            let mut config = CapturedConfig::default();
-            config.notary.endpoint = Some(format!("tcp://{refused}"));
-            config.notary.public_key = Some(hex::encode(
-                k256::ecdsa::SigningKey::from_slice(&[7; 32])
-                    .unwrap()
-                    .verifying_key()
-                    .to_sec1_bytes(),
-            ));
-            let config = Arc::new(config);
-            let artifacts = unused_artifacts();
-            let vault =
-                Arc::new(Vault::init_cluster_key(&directory.join("cluster-vault.key")).unwrap());
-            let discovery = Arc::new(DaemonNotaryDiscovery::new(
-                config.clone(),
+            let (organizations, _) = test_organizations::organizations(
                 cluster_runtime.clone(),
-            ));
-            let operator = default_organization();
-            let operator_metadata = store.organization(&operator);
-            let operator_mode = Arc::new(CaptureSetting::new(
-                operator_metadata.capture_mode().await.unwrap(),
-                Some(discovery.discover().await.unwrap()),
-                operator_metadata,
-                true,
-                discovery.clone(),
-            ));
-            let organizations = OrganizationCaptures::new(
-                SharedCapture {
-                    settings: CaptureSettings {
-                        providers: config.providers.clone(),
-                        prompt_preview_chars: 1_000,
-                        output_preview_chars: 1_000,
-                        max_attestable_http_bytes: config.proxy.max_attestable_http_bytes,
-                        max_frame_bytes: config.notary.max_frame_bytes,
-                        config_fingerprint: "sha256:test".to_owned(),
-                    },
-                    admission,
-                    trust: Arc::new(DaemonNotaryTrust::new(
-                        config.clone(),
-                        cluster_runtime.clone(),
-                    )),
-                    direct_upstream: upstream,
-                },
-                cluster_runtime.clone(),
-                artifacts,
-                vault,
-                discovery,
-                &operator,
-                operator_mode,
-            )
-            .unwrap();
+                directory,
+                admission,
+                upstream,
+            );
             router(AppState {
-                organizations: Arc::new(organizations),
+                organizations,
                 authenticator,
                 cluster_runtime,
             })
@@ -1352,8 +1482,12 @@ mod tests {
             let vault = Arc::new(
                 Vault::init_cluster_key(&directory.path().join("worker-vault.key")).unwrap(),
             );
-            let queue =
-                ClusterNotarizationQueue::new(replica, unused_artifacts(), vault, admission);
+            let queue = ClusterNotarizationQueue::new(
+                replica,
+                test_organizations::unused_artifacts(),
+                vault,
+                admission,
+            );
             let mut charged = Vec::new();
             while let Some(claim) = queue.claim_next(0).await.unwrap() {
                 claim

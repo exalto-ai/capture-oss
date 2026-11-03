@@ -132,6 +132,12 @@ impl AdminState {
             api,
         })
     }
+
+    /// The operator organization's context for the shared routes. The
+    /// customer API derives every organization's context from it.
+    pub(crate) fn api(&self) -> &ApiContext {
+        &self.api
+    }
 }
 async fn probe_dependencies(state: &AdminState) -> std::result::Result<(), &'static str> {
     let mut cached = state.dependency_probe.lock().await;
@@ -368,7 +374,7 @@ impl Modify for SecurityAddon {
 }
 
 #[utoipa::path(get, path = "/healthz", summary = "Check service health", description = "Returns the local service health and API version without requiring authentication.", responses((status = 200, body = HealthResponse)), tag = "local-admin")]
-async fn health() -> Json<HealthResponse> {
+pub(crate) async fn health() -> Json<HealthResponse> {
     Json(HealthResponse {
         service: "capture-server".into(),
         status: "ok".into(),
@@ -937,7 +943,7 @@ fn now_ms() -> Result<u64> {
 }
 
 #[derive(Debug, Serialize, ToSchema)]
-struct HealthResponse {
+pub(crate) struct HealthResponse {
     service: String,
     status: String,
     api_version: String,
@@ -1129,6 +1135,7 @@ mod tests {
             authentication: crate::config::AuthenticationConfig::Hosted {
                 capture_service_token_file: None,
             },
+            customer_api: None,
         });
         config.notary.endpoint = Some("tcp://127.0.0.1:9".to_owned());
         config.notary.public_key = Some(hex::encode(

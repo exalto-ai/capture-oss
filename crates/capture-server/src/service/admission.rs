@@ -11,9 +11,9 @@
 //!   organization's credential, and the background notarization worker can
 //!   charge an operation's organization long after its request.
 
-use std::{io::Read as _, path::Path, sync::Arc, time::Duration};
+use std::{path::Path, sync::Arc, time::Duration};
 
-use anyhow::{Context as _, Result, ensure};
+use anyhow::{Context as _, Result};
 use axum::http::StatusCode;
 use capture_engine::{
     admission::{
@@ -26,7 +26,7 @@ use capture_engine::{
 };
 use serde::Serialize;
 
-use super::{auth, http_client_builder};
+use super::{auth, http_client_builder, private_token};
 use crate::{CaptureCheckpoint, organization::OrganizationId};
 
 /// Who pays for each organization's notary operations on this server.
@@ -133,11 +133,6 @@ pub(crate) struct CaptureService {
 const CAPTURE_SERVICE_ADMISSIONS: &str = "/api/internal/capture/admissions";
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
-/// capture-api accepts capture service tokens of 32 to 512 bytes.
-const MIN_TOKEN_BYTES: usize = 32;
-const MAX_TOKEN_BYTES: usize = 512;
-/// The token and at most a trailing line ending.
-const MAX_TOKEN_FILE_BYTES: u64 = 1024;
 
 #[derive(Serialize)]
 struct CaptureServiceAdmissionRequest<'a> {
@@ -150,7 +145,7 @@ impl CaptureService {
     /// file holding only the token and at most a trailing line ending.
     /// Errors name the file, never its contents.
     pub(crate) fn load(origin: ApiOrigin, token_file: &Path) -> Result<Self> {
-        let token = read_token_file(token_file)
+        let token = private_token::read(token_file)
             .with_context(|| format!("capture service token file {}", token_file.display()))?;
         Self::new(origin, token)
     }
@@ -222,38 +217,6 @@ impl CaptureService {
         }
         Ok(admission_ticket_from_response(response).await?)
     }
-}
-
-fn read_token_file(path: &Path) -> Result<String> {
-    let file = std::fs::File::open(path).context("opening the file")?;
-    let metadata = file.metadata().context("inspecting the file")?;
-    ensure!(metadata.is_file(), "it is not a regular file");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-        ensure!(
-            metadata.permissions().mode() & 0o077 == 0,
-            "it must not be accessible by group or others"
-        );
-    }
-    let mut bytes = Vec::new();
-    file.take(MAX_TOKEN_FILE_BYTES + 1)
-        .read_to_end(&mut bytes)
-        .context("reading the file")?;
-    ensure!(
-        bytes.len() as u64 <= MAX_TOKEN_FILE_BYTES,
-        "it is larger than {MAX_TOKEN_FILE_BYTES} bytes"
-    );
-    let token = match bytes.strip_suffix(b"\n") {
-        Some(line) => line.strip_suffix(b"\r").unwrap_or(line),
-        None => &bytes,
-    };
-    ensure!(
-        (MIN_TOKEN_BYTES..=MAX_TOKEN_BYTES).contains(&token.len())
-            && token.iter().all(u8::is_ascii_graphic),
-        "it must hold one token of {MIN_TOKEN_BYTES} to {MAX_TOKEN_BYTES} printable ASCII characters"
-    );
-    Ok(String::from_utf8(token.to_vec()).expect("printable ASCII is UTF-8"))
 }
 
 /// Admission charged to one organization through the capture service route.
@@ -738,11 +701,14 @@ mod tests {
             format!("{TOKEN}\r\n"),
         ] {
             write_private(&path, contents.as_bytes());
-            assert_eq!(read_token_file(&path).unwrap(), TOKEN);
+            assert_eq!(private_token::read(&path).unwrap(), TOKEN);
             CaptureService::load(origin.clone(), &path).unwrap();
         }
-        write_private(&path, "t".repeat(MAX_TOKEN_BYTES).as_bytes());
-        assert_eq!(read_token_file(&path).unwrap().len(), MAX_TOKEN_BYTES);
+        write_private(&path, "t".repeat(private_token::MAX_TOKEN_BYTES).as_bytes());
+        assert_eq!(
+            private_token::read(&path).unwrap().len(),
+            private_token::MAX_TOKEN_BYTES
+        );
 
         #[cfg(unix)]
         {
@@ -768,15 +734,15 @@ mod tests {
         for invalid in [
             String::new(),
             "\n".to_owned(),
-            "t".repeat(MIN_TOKEN_BYTES - 1),
-            "t".repeat(MAX_TOKEN_BYTES + 1),
+            "t".repeat(private_token::MIN_TOKEN_BYTES - 1),
+            "t".repeat(private_token::MAX_TOKEN_BYTES + 1),
             format!("{secret}\n\n"),
             format!(" {secret}"),
             format!("{secret} trailing"),
             format!("{secret}\tx"),
             format!("{secret}\n{secret}"),
             format!("{secret}\u{e9}"),
-            "x".repeat(usize::try_from(MAX_TOKEN_FILE_BYTES).unwrap() + 1),
+            "x".repeat(usize::try_from(private_token::MAX_TOKEN_FILE_BYTES).unwrap() + 1),
         ] {
             write_private(&path, invalid.as_bytes());
             let error = format!(
