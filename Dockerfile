@@ -1,40 +1,3 @@
-FROM rust:1.95-slim-bookworm AS builder
-
-WORKDIR /app
-COPY . .
-RUN cargo build --locked --release \
-    -p capture --bin capture \
-    -p capture-server --bin capture-server \
-    -p capture-notary --bin capture-notary
-
-FROM debian:bookworm-slim AS daemon
-
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
-COPY --from=builder /app/target/release/capture-server /usr/local/bin/capture-server
-COPY --from=builder /app/target/release/capture /usr/local/bin/capture
-RUN capture-server --help >/dev/null && capture --help >/dev/null
-ENTRYPOINT ["capture-server"]
-
-FROM daemon AS cluster
-
-RUN groupadd --gid 10001 notary \
-    && useradd --uid 10001 --gid 10001 --system --no-create-home notary
-USER 10001:10001
-EXPOSE 8787 8788
-
-FROM debian:bookworm-slim AS capture-notary
-
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
-COPY --from=builder /app/target/release/capture-notary /usr/local/bin/capture-notary
-RUN capture-notary --help >/dev/null
-EXPOSE 7047
-ENTRYPOINT ["capture-notary"]
-CMD ["serve"]
-
 # The E2E test image has its own builder so a layer cache can keep compiled
 # dependencies across source changes. cargo-chef stubs out every local crate,
 # so the cooked layer changes only when a dependency or its features change.
@@ -86,6 +49,3 @@ RUN capture-server --help >/dev/null && capture --help >/dev/null
 ENTRYPOINT ["capture-server"]
 COPY deploy-daemon-e2e/config-cluster-template.toml /etc/capture/config-cluster-template.toml
 COPY deploy-daemon-e2e/provider.py /usr/local/libexec/notary-e2e-provider.py
-
-# Keep a plain `docker build .` on the production daemon, not the test image.
-FROM daemon AS runtime
