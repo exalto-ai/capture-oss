@@ -162,10 +162,11 @@ existing capture.
 
 The desktop app's local service keeps SQLite metadata and filesystem
 artifacts. `capture-server` always runs as a cluster: PostgreSQL metadata,
-a private S3-compatible namespace, and one shared 32-byte vault key. Replicas share a compatibility fingerprint
-derived from runtime configuration and that key. S3 adds no evidence or
-encryption layer: captures are encrypted before upload and trace packages stay
-the exact independently verifiable bytes.
+a private S3-compatible namespace, and one shared 32-byte vault key. The first
+migration pins that key's identity, and a replica with any other key refuses
+to start. S3 adds no evidence or encryption layer: captures are encrypted
+before upload and trace packages stay the exact independently verifiable
+bytes.
 
 ## Trust anchors and verification
 

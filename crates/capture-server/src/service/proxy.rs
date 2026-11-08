@@ -395,12 +395,11 @@ pub async fn run(args: ProxyArgs) -> Result<()> {
     let (persistence, cluster_runtime) = Persistence::open_cluster(&config, identity).await?;
     let cluster_runtime = Arc::new(cluster_runtime);
     let vault = Arc::new(Vault::open_cluster().context("opening the shared cluster vault")?);
-    let vault_identity = vault.cluster_identity_sha256()?;
     cluster_runtime
         .metadata()
         .register_replica(
             cluster_runtime.identity(),
-            &config.cluster_compatibility_sha256(&vault_identity)?,
+            &vault.cluster_identity_sha256()?,
             cluster_runtime.lease_seconds(),
         )
         .await?;

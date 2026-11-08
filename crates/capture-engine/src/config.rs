@@ -913,27 +913,6 @@ impl CapturedConfig {
         ))
     }
 
-    /// Identifies the exact non-secret cluster configuration and shared vault
-    /// key expected by every replica.
-    pub fn cluster_compatibility_sha256(&self, vault_identity: &str) -> Result<String> {
-        ensure!(self.cluster.is_some(), "cluster mode is not enabled");
-        ensure!(
-            vault_identity.len() == 64
-                && vault_identity
-                    .bytes()
-                    .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f')),
-            "cluster vault identity is invalid"
-        );
-        let mut normalized = self.clone();
-        if let Some(auth) = normalized.admin.auth.as_mut() {
-            auth.password_hash = None;
-        }
-        let normalized = toml::to_string(&normalized)?;
-        Ok(sha256_hex(
-            format!("ecp/captured-cluster/v1\n{normalized}\nvault={vault_identity}\n").as_bytes(),
-        ))
-    }
-
     pub fn notary_endpoint(&self) -> Result<Option<NotaryEndpoint>> {
         self.notary.endpoint.as_deref().map(str::parse).transpose()
     }
@@ -1381,20 +1360,6 @@ mod tests {
         assert!(
             toml::from_str::<CapturedConfig>(&encoded.replace("[cluster]", "[server]")).is_err()
         );
-        let vault_identity = "11".repeat(32);
-        let compatibility = valid.cluster_compatibility_sha256(&vault_identity).unwrap();
-        let mut peer = valid.clone();
-        peer.admin.auth.as_mut().unwrap().password_hash =
-            Some(hash_admin_password(b"generated at startup").unwrap());
-        assert_eq!(
-            peer.cluster_compatibility_sha256(&vault_identity).unwrap(),
-            compatibility
-        );
-        peer.storage.s3.as_mut().unwrap().prefix = "different".into();
-        assert_ne!(
-            peer.cluster_compatibility_sha256(&vault_identity).unwrap(),
-            compatibility
-        );
         config.metadata.backend = MetadataBackend::Sqlite;
         assert!(config.validate().is_err());
         config = valid.clone();
@@ -1415,13 +1380,6 @@ mod tests {
             capture_service_token_file: None,
         };
         config.validate().unwrap();
-        assert_ne!(
-            config
-                .cluster_compatibility_sha256(&vault_identity)
-                .unwrap(),
-            compatibility,
-            "every replica must authenticate requests the same way"
-        );
         // A self-hosted notary needs no admission, so nothing is charged and
         // a capture service credential would be unused.
         config.cluster.as_mut().unwrap().authentication = AuthenticationConfig::Hosted {
@@ -1433,19 +1391,6 @@ mod tests {
         config.notary.endpoint = None;
         config.notary.public_key = None;
         config.validate().unwrap();
-        let charged = config
-            .cluster_compatibility_sha256(&vault_identity)
-            .unwrap();
-        config.cluster.as_mut().unwrap().authentication = AuthenticationConfig::Hosted {
-            capture_service_token_file: Some("/run/secrets/other_capture_service_token".into()),
-        };
-        assert_ne!(
-            config
-                .cluster_compatibility_sha256(&vault_identity)
-                .unwrap(),
-            charged,
-            "every replica must charge admission the same way"
-        );
         config.cluster.as_mut().unwrap().authentication = AuthenticationConfig::Hosted {
             capture_service_token_file: Some("capture_service_token".into()),
         };
@@ -1458,12 +1403,6 @@ mod tests {
         config.notary.endpoint = None;
         config.notary.public_key = None;
         config.validate().unwrap();
-        assert_ne!(
-            config
-                .cluster_compatibility_sha256(&vault_identity)
-                .unwrap(),
-            valid.cluster_compatibility_sha256(&vault_identity).unwrap()
-        );
     }
 
     #[test]
@@ -1517,31 +1456,6 @@ mod tests {
                 .unwrap()
                 .customer_api,
             config.cluster.as_ref().unwrap().customer_api
-        );
-
-        // Every replica serves the customer API the same way.
-        let vault_identity = "22".repeat(32);
-        let compatibility = config
-            .cluster_compatibility_sha256(&vault_identity)
-            .unwrap();
-        assert_ne!(
-            without
-                .cluster_compatibility_sha256(&vault_identity)
-                .unwrap(),
-            compatibility
-        );
-        let mut other = config.clone();
-        other
-            .cluster
-            .as_mut()
-            .unwrap()
-            .customer_api
-            .as_mut()
-            .unwrap()
-            .token_file = "/run/secrets/other_customer_api_token".into();
-        assert_ne!(
-            other.cluster_compatibility_sha256(&vault_identity).unwrap(),
-            compatibility
         );
 
         let mut invalid = config.clone();

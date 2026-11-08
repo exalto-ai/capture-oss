@@ -144,12 +144,11 @@ async fn run_daemon_migrator(config_path: Option<PathBuf>) -> Result<()> {
     .map_err(|_| anyhow::anyhow!("local daemon PostgreSQL metadata migration failed"))?;
     if config.cluster.is_some() {
         let vault = capture_core::vault::Vault::open_cluster()?;
-        let vault_identity = vault.cluster_identity_sha256()?;
         postgres_metadata_store::configure_cluster_compatibility(
             database_url.expose(),
             postgres.ssl_mode,
             Duration::from_secs(postgres.connect_timeout_seconds),
-            &config.cluster_compatibility_sha256(&vault_identity)?,
+            &vault.cluster_identity_sha256()?,
         )
         .await
         .map_err(|_| anyhow::anyhow!("server compatibility configuration failed"))?;

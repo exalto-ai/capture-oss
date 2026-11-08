@@ -41,13 +41,14 @@ use crate::{
 const SCHEMA: &str = "captured";
 const JOURNAL: &str = "captured.schema_migrations";
 const MIGRATION_LOCK_NAMESPACE: &str = "ecp/captured-postgres-migrations/v1";
-const LATEST_SCHEMA_VERSION: i64 = 3;
+const LATEST_SCHEMA_VERSION: i64 = 4;
 const INITIAL_MIGRATION: &str = include_str!("../migrations-postgres-daemon/0001_initial.sql");
 const CAPTURE_MODES_MIGRATION: &str =
     include_str!("../migrations-postgres-daemon/0002_capture_modes.sql");
 const ORGANIZATIONS_MIGRATION: &str =
     include_str!("../migrations-postgres-daemon/0003_organizations.sql");
-const MIGRATIONS: [(i64, &str, &str); 3] = [
+const VAULT_PIN_MIGRATION: &str = include_str!("../migrations-postgres-daemon/0004_vault_pin.sql");
+const MIGRATIONS: [(i64, &str, &str); 4] = [
     (1, "initial captured metadata schema", INITIAL_MIGRATION),
     (
         2,
@@ -55,6 +56,7 @@ const MIGRATIONS: [(i64, &str, &str); 3] = [
         CAPTURE_MODES_MIGRATION,
     ),
     (3, "organizations", ORGANIZATIONS_MIGRATION),
+    (4, "pin only the vault key", VAULT_PIN_MIGRATION),
 ];
 
 /// A pooled PostgreSQL metadata backend whose schema has already been migrated.
@@ -374,9 +376,9 @@ async fn migrate_database_through(
     Ok(())
 }
 
-/// Pins the operator-provided, non-secret server compatibility identity after
-/// migrations. Exact replay is idempotent; a different profile never replaces
-/// the installed identity.
+/// Pins the identity of the shared vault key after migrations. A replica with
+/// another key would write checkpoints no other replica can decrypt, so a
+/// different key never replaces the pinned one; configuration is not pinned.
 pub(crate) async fn configure_cluster_compatibility(
     database_url: &str,
     ssl_mode: PostgresSslMode,
@@ -5057,7 +5059,7 @@ mod tests {
                 .fetch_all(&pool)
                 .await
                 .unwrap();
-        assert_eq!(versions, [1, 2, 3]);
+        assert_eq!(versions, [1, 2, 3, 4]);
         for table in ["traces", "operations", "events"] {
             let organizations: Vec<String> = sqlx::query_scalar(&format!(
                 "SELECT DISTINCT organization_id FROM captured.{table}"
@@ -5159,5 +5161,63 @@ mod tests {
                 .events
                 .is_empty()
         );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires Docker and a disposable PostgreSQL 17 container"]
+    async fn migrating_version_3_replaces_the_configuration_pin_with_the_vault_key() {
+        let server = TestPostgres::start().await;
+        let url = server.create_database("daemon_version_3").await;
+        migrate_database_through(
+            &url,
+            PostgresSslMode::Disable,
+            Duration::from_secs(5),
+            Duration::from_secs(5),
+            &MIGRATIONS[..3],
+        )
+        .await
+        .expect("apply version 3");
+        let configure = |identity: String| {
+            let url = url.clone();
+            async move {
+                configure_cluster_compatibility(
+                    &url,
+                    PostgresSslMode::Disable,
+                    Duration::from_secs(5),
+                    &identity,
+                )
+                .await
+            }
+        };
+        // A version 3 pin covers the configuration too, so it matches nothing
+        // a replica computes now.
+        configure("1".repeat(64)).await.expect("pin version 3");
+        let vault = "2".repeat(64);
+        assert!(configure(vault.clone()).await.is_err());
+
+        migrate_database(
+            &url,
+            PostgresSslMode::Disable,
+            Duration::from_secs(5),
+            Duration::from_secs(5),
+        )
+        .await
+        .expect("migrate version 3 to the latest version");
+        configure(vault.clone()).await.expect("pin the vault key");
+        // The vault key stays pinned: another key never replaces it.
+        configure(vault.clone()).await.expect("replay the same pin");
+        assert!(configure("3".repeat(64)).await.is_err());
+        let store = PostgresMetadataStore::connect_server(
+            &url,
+            2,
+            Duration::from_secs(5),
+            Duration::from_secs(5),
+            PostgresSslMode::Disable,
+            true,
+        )
+        .await
+        .unwrap();
+        let replica = ReplicaIdentity::new("replica-a").unwrap();
+        store.register_replica(&replica, &vault, 20).await.unwrap();
     }
 }
