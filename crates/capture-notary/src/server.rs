@@ -1281,15 +1281,15 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn signing_key_rejects_insecure_permissions_and_symlinks() {
+    fn signing_key_rejects_symlinks() {
         use std::os::unix::fs::{PermissionsExt as _, symlink};
 
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("signing-key");
         write_private_test_file(&path, "01".repeat(32));
-        fs::set_permissions(&path, fs::Permissions::from_mode(0o640)).unwrap();
-        assert!(read_signing_key(&path).is_err());
-        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+        // Fly mounts secret files readable by every user in the container.
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+        read_signing_key(&path).unwrap();
         let link = directory.path().join("signing-key-link");
         symlink(&path, &link).unwrap();
         assert!(read_signing_key(&link).is_err());

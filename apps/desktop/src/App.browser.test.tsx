@@ -136,12 +136,6 @@ beforeEach(() => {
           headers: { 'content-type': 'application/json' },
         });
       if (path === '/v1/session') return new Response(null, { status: 204 });
-      if (path === '/admin-api/v1/status') {
-        return response(
-          { error: { code: 'service_unavailable', message: 'The local service is off.' } },
-          503,
-        );
-      }
       if (path === '/v1/status') {
         return response({
           version: '0.1.9',

@@ -1196,7 +1196,7 @@ mod tests {
 
     #[tokio::test]
     #[ignore = "requires Docker and a disposable SeaweedFS container"]
-    async fn seaweedfs_conforms_and_detects_missing_corrupt_and_oversized_objects() {
+    async fn seaweedfs_keeps_each_organization_under_its_own_prefix() {
         let seaweedfs_credentials = credentials();
         let server = GenericImage::new("chrislusf/seaweedfs", SEAWEEDFS_TAG)
             .with_exposed_port(8333.tcp())

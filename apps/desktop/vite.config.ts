@@ -29,13 +29,6 @@ export default defineConfig({
     host: '127.0.0.1',
     port: 1420,
     strictPort: true,
-    proxy: {
-      '/admin-api': {
-        target: 'http://127.0.0.1:8788',
-        changeOrigin: true,
-        rewrite: (path) => path.replace(/^\/admin-api/, ''),
-      },
-    },
     fs: {
       allow: [resolve(process.cwd()), resolve(process.cwd(), '../admin-dashboard')],
     },

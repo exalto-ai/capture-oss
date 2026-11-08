@@ -297,8 +297,7 @@ fn validate_allowed_hosts(hosts: Vec<String>) -> Result<Vec<String>> {
     Ok(hosts)
 }
 
-/// Reads a credential file after rejecting links, special files, and insecure
-/// Unix group/other permissions.
+/// Reads a credential file after rejecting links and special files.
 pub fn read_private_file(path: &Path, description: &str) -> Result<Vec<u8>> {
     let path_metadata = fs::symlink_metadata(path)
         .with_context(|| format!("reading {description} metadata from {}", path.display()))?;
@@ -320,13 +319,6 @@ pub fn read_private_file(path: &Path, description: &str) -> Result<Vec<u8>> {
         .with_context(|| format!("reading opened {description} metadata"))?;
     if !metadata.file_type().is_file() {
         bail!("{description} must be a regular file, not a link or special file");
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-        if metadata.permissions().mode() & 0o077 != 0 {
-            bail!("{description} must not be accessible by group or other users");
-        }
     }
     let mut bytes = Vec::new();
     file.read_to_end(&mut bytes)
