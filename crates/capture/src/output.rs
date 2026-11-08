@@ -13,7 +13,7 @@ pub(super) fn human_output(command: &CliCommand, value: &Value) -> Result<String
         }
         CliCommand::Mode(_) => Ok(capture_mode_line(&value_string(value, "/mode"))),
         CliCommand::Status => Ok(format!(
-            "captured {} ({})\ncapture {}\nproxy {}\nadmin {}\nmetadata {} ({})\nartifacts {} ({})\ntraces {} captured, {} sealing, {} sealed, {} need attention\nsource capture {} active, {} failed\nupdates {}",
+            "Exalto Capture {} ({})\ncapture {}\nproxy {}\nadmin {}\nmetadata {} ({})\nartifacts {} ({})\ntraces {} captured, {} sealing, {} sealed, {} need attention\nsource capture {} active, {} failed\nupdates {}",
             value_string(value, "/version"),
             value_string(value, "/build_id"),
             value_string(value, "/capture_mode"),
@@ -142,9 +142,9 @@ pub(super) fn human_output(command: &CliCommand, value: &Value) -> Result<String
                     value_string(value, "/credential_name"),
                 );
                 let mut output = if provider == "-" {
-                    format!("Connected to Notary as {display_name} ({credential})")
+                    format!("Connected to Exalto as {display_name} ({credential})")
                 } else {
-                    format!("Connected to Notary as {display_name} ({provider}; {credential})")
+                    format!("Connected to Exalto as {display_name} ({provider}; {credential})")
                 };
                 if let Some(billing) = value.get("billing") {
                     output.push_str(&format!(
@@ -202,20 +202,20 @@ pub(super) fn human_output(command: &CliCommand, value: &Value) -> Result<String
             } else {
                 match value_string(value, "/connection_state").as_str() {
                     "reauthorization_required" => Ok(
-                        "Notary Account authorization has expired or was revoked; reconnect it."
+                        "Exalto account authorization has expired or was revoked; reconnect it."
                             .to_owned(),
                     ),
                     "unavailable" => Ok(
-                        "Notary Account status is temporarily unavailable; local work remains available."
+                        "Exalto account status is temporarily unavailable; local work remains available."
                             .to_owned(),
                     ),
-                    _ => Ok("No Notary Account is connected.".to_owned()),
+                    _ => Ok("No Exalto account is connected.".to_owned()),
                 }
             }
         }
         CliCommand::Account {
             command: AccountCommand::Disconnect,
-        } => Ok("Disconnected from Notary. Local Traces remain private.".to_owned()),
+        } => Ok("Disconnected from Exalto. Local Traces remain private.".to_owned()),
         CliCommand::Traces {
             command: TracesCommand::Share(_),
         } => Ok(format!(

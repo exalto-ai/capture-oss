@@ -324,7 +324,7 @@ pub(super) async fn connect_account(
         if tokio::time::Instant::now() >= deadline {
             return Err(CliError::new(
                 EXIT_AUTHENTICATION,
-                "Notary Account connection expired; run `capture account connect` again",
+                "Exalto account connection expired; run `capture account connect` again",
             ));
         }
         tokio::time::sleep(Duration::from_secs(poll_interval)).await;

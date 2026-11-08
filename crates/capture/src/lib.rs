@@ -189,7 +189,7 @@ async fn run_parsed(
             cli.json,
             &value,
             format!(
-                "Notary {} ({}){}",
+                "capture {} ({}){}",
                 env!("CARGO_PKG_VERSION"),
                 BUILD_ID,
                 windows_suffix,
@@ -364,6 +364,26 @@ mod tests {
         assert_eq!(value["build_id"], BUILD_ID);
         assert_eq!(value["version"], env!("CARGO_PKG_VERSION"));
         assert!(stderr.is_empty());
+    }
+
+    #[tokio::test]
+    async fn version_and_status_name_the_cli_and_the_app() {
+        let cli = Cli::try_parse_from(["capture", "version"]).unwrap();
+        let mut stdout = Vec::new();
+        run_parsed(cli, &mut stdout, &mut Vec::new()).await.unwrap();
+        let version = String::from_utf8(stdout).unwrap();
+        let expected = format!("capture {} ({BUILD_ID})", env!("CARGO_PKG_VERSION"));
+        assert!(version.starts_with(&expected), "{version}");
+
+        let status = human_output(
+            &CliCommand::Status,
+            &json!({ "version": "1.2.3", "build_id": "build-1" }),
+        )
+        .unwrap();
+        assert!(
+            status.starts_with("Exalto Capture 1.2.3 (build-1)\n"),
+            "{status}"
+        );
     }
 
     #[tokio::test]
@@ -854,7 +874,7 @@ mod tests {
                 &connected,
             )
             .unwrap(),
-            "Connected to Notary as octocat (device_session: workstation)"
+            "Connected to Exalto as octocat (device_session: workstation)"
         );
         let rich_connected = json!({
             "signed_in": true,
@@ -897,7 +917,7 @@ mod tests {
                 &json!({ "signed_in": false }),
             )
             .unwrap(),
-            "No Notary Account is connected."
+            "No Exalto account is connected."
         );
         assert_eq!(
             human_output(
@@ -907,7 +927,7 @@ mod tests {
                 &json!({ "signed_in": false, "connection_state": "reauthorization_required" })
             )
             .unwrap(),
-            "Notary Account authorization has expired or was revoked; reconnect it."
+            "Exalto account authorization has expired or was revoked; reconnect it."
         );
         assert_eq!(
             human_output(
@@ -917,7 +937,7 @@ mod tests {
                 &json!({ "signed_in": false }),
             )
             .unwrap(),
-            "Disconnected from Notary. Local Traces remain private."
+            "Disconnected from Exalto. Local Traces remain private."
         );
     }
 
