@@ -327,7 +327,7 @@ fn trace_state_label(trace: &Value) -> String {
 }
 
 /// Labels a runtime state value with the public verbs; the API keeps the
-/// notarization names for protocol compatibility (ADR 0003).
+/// notarization names for protocol compatibility.
 pub(super) fn trace_status_label(value: &str) -> String {
     let mut words = value
         .replace("notarization", "sealing")
