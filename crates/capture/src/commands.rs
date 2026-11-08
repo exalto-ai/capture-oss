@@ -13,7 +13,7 @@ use super::{CliError, EXIT_AUTHENTICATION, EXIT_CONFLICT, EXIT_ERROR, EXIT_RETRY
 use crate::{
     cli::*,
     client::{CapturedClient, read_private_secret_file},
-    output::{format_bytes, open_dashboard, value_i64, value_string},
+    output::{format_bytes, value_i64, value_string},
 };
 
 pub(super) async fn execute(
@@ -171,10 +171,6 @@ pub(super) async fn execute(
             list_request(client, "/v1/activity", activity_query(args), args.all).await
         }
         CliCommand::Notaries { .. } => client.request(Method::GET, "/v1/notaries", &[]).await,
-        CliCommand::Open => {
-            open_dashboard(client.origin().as_str())?;
-            Ok(json!({ "opened": client.origin().as_str() }))
-        }
     }
 }
 

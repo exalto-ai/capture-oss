@@ -1,8 +1,6 @@
-use std::process::Command as ProcessCommand;
-
 use serde_json::Value;
 
-use super::{CliError, EXIT_ERROR, EXIT_RETRYABLE};
+use super::{CliError, EXIT_RETRYABLE};
 use crate::cli::*;
 
 pub(super) fn human_output(command: &CliCommand, value: &Value) -> Result<String, CliError> {
@@ -261,7 +259,6 @@ pub(super) fn human_output(command: &CliCommand, value: &Value) -> Result<String
                 items,
             ))
         }
-        CliCommand::Open => Ok(format!("Opened {}", value_string(value, "/opened"))),
     }
 }
 
@@ -389,22 +386,4 @@ pub(super) fn value_string(value: &Value, pointer: &str) -> String {
         Some(Value::Bool(value)) => value.to_string(),
         _ => "-".to_owned(),
     }
-}
-
-pub(super) fn open_dashboard(url: &str) -> Result<(), CliError> {
-    #[cfg(target_os = "macos")]
-    let result = ProcessCommand::new("open").arg(url).spawn();
-    #[cfg(target_os = "windows")]
-    let result = ProcessCommand::new("cmd")
-        .args(["/C", "start", "", url])
-        .spawn();
-    #[cfg(all(unix, not(target_os = "macos")))]
-    let result = ProcessCommand::new("xdg-open").arg(url).spawn();
-    result.map_err(|_| {
-        CliError::new(
-            EXIT_ERROR,
-            format!("could not open the browser; visit {url} directly"),
-        )
-    })?;
-    Ok(())
 }

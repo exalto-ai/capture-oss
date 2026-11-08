@@ -488,10 +488,6 @@ impl CapturedClient {
         .map(|page| page.items)
     }
 
-    pub fn origin(&self) -> &Url {
-        &self.origin
-    }
-
     pub(super) async fn request(
         &self,
         method: Method,

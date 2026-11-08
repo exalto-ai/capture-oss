@@ -231,15 +231,7 @@ async fn run_parsed(
     let config = load_config_for_cli(cli.config.as_deref())?;
     let mut client = CapturedClient::new(config.admin.listen, None)?;
     client.verify_version().await?;
-    if matches!(&cli.command, CliCommand::Open) {
-        if cli.admin_password_file.is_some() {
-            return Err(CliError::invalid(
-                "--admin-password-file is not used by `capture open`",
-            ));
-        }
-    } else {
-        client.credentials = load_admin_credentials(&config, cli.admin_password_file.as_deref())?;
-    }
+    client.credentials = load_admin_credentials(&config, cli.admin_password_file.as_deref())?;
     let value = execute(&client, &cli.command, stderr, !cli.json).await?;
     let output = if cli.json {
         serde_json::to_string_pretty(&value)
@@ -322,7 +314,6 @@ mod tests {
             vec!["capture", "activity", "--all"],
             vec!["capture", "activity", "--after", "high-water"],
             vec!["capture", "notaries", "list"],
-            vec!["capture", "open"],
         ] {
             assert!(Cli::try_parse_from(arguments).is_ok());
         }
@@ -335,6 +326,7 @@ mod tests {
             "logout",
             "whoami",
             "publish",
+            "open",
         ] {
             assert!(Cli::try_parse_from(["capture", retired]).is_err());
         }

@@ -48,7 +48,6 @@ pub(super) enum CliCommand {
         #[command(subcommand)]
         command: NotariesCommand,
     },
-    Open,
 }
 
 #[derive(Args, Debug)]
