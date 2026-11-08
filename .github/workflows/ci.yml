@@ -40,6 +40,11 @@ jobs:
 
   desktop:
     runs-on: macos-15
+    # Tauri finds the frontend from its working directory, so run it in the
+    # app's own folder rather than the repository root.
+    defaults:
+      run:
+        working-directory: apps/desktop
     steps:
       - uses: actions/checkout@v6
       - name: Install Rust toolchain from rust-toolchain.toml
@@ -51,12 +56,15 @@ jobs:
           node-version: 24
           cache: npm
           cache-dependency-path: apps/desktop/package-lock.json
-      - run: npm --prefix apps/desktop ci
-      - run: cargo clippy --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets -- -D warnings
-      - run: npm --prefix apps/desktop exec -- tauri build --debug --bundles app -- --locked
+      - run: npm ci
+      - run: cargo clippy --locked --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+      - run: npm exec -- tauri build --debug --bundles app -- --locked
 
   desktop-linux:
     runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: apps/desktop
     steps:
       - uses: actions/checkout@v6
       - name: Install Tauri's Linux build dependencies
@@ -74,9 +82,9 @@ jobs:
           node-version: 24
           cache: npm
           cache-dependency-path: apps/desktop/package-lock.json
-      - run: npm --prefix apps/desktop ci
-      - run: cargo clippy --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets -- -D warnings
-      - run: npm --prefix apps/desktop exec -- tauri build --debug --no-bundle -- --locked
+      - run: npm ci
+      - run: cargo clippy --locked --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+      - run: npm exec -- tauri build --debug --no-bundle -- --locked
 
   gitleaks:
     runs-on: ubuntu-24.04
