@@ -108,6 +108,12 @@ impl HostedAdmissionFailure {
             "capture_credits_exhausted" => {
                 "The monthly hosted capture allowance is exhausted. Wait for the monthly reset or change plans."
             }
+            "notarization_not_included" => {
+                "The Free plan includes no hosted notarization for team organizations. An owner can buy notarization credits or choose a plan in Plan & usage."
+            }
+            "capture_not_included" => {
+                "The Free plan includes no hosted capture for team organizations. An owner can choose a plan in Plan & usage."
+            }
             "billing_review" => {
                 "Hosted capture and notarization are unavailable while billing is under review. Open Plan & usage to manage the subscription."
             }
@@ -122,18 +128,28 @@ impl HostedAdmissionFailure {
     }
 }
 
+/// The codes for a hosted admission refused over billing: what an account can
+/// see and act on, never a server-supplied value.
+fn payment_required_code(code: &str) -> Option<&'static str> {
+    Some(match code {
+        "notarization_credits_exhausted" => "notarization_credits_exhausted",
+        "capture_credits_exhausted" => "capture_credits_exhausted",
+        "notarization_not_included" => "notarization_not_included",
+        "capture_not_included" => "capture_not_included",
+        "billing_review" => "billing_review",
+        _ => return None,
+    })
+}
+
 pub fn hosted_admission_failure(error: &anyhow::Error) -> Option<HostedAdmissionFailure> {
     if let Some(error) = hosted_admission_error(error) {
         return Some(HostedAdmissionFailure {
             status: error.status(),
-            code: match error.code() {
-                "notarization_credits_exhausted" => "notarization_credits_exhausted",
-                "capture_credits_exhausted" => "capture_credits_exhausted",
-                "billing_review" => "billing_review",
+            code: payment_required_code(error.code()).unwrap_or(match error.code() {
                 "hosted_admission_expired" => "hosted_admission_expired",
                 "hosted_admission_unavailable" => "hosted_admission_unavailable",
                 _ => "hosted_admission_denied",
-            },
+            }),
         });
     }
     let admission = capture_core::notary_admission_error(error)?;
@@ -168,22 +184,18 @@ pub fn hosted_admission_failure(error: &anyhow::Error) -> Option<HostedAdmission
 }
 
 pub fn hosted_admission_denial(code: &str) -> HostedAdmissionError {
+    if let Some(code) = payment_required_code(code) {
+        let failure = HostedAdmissionFailure {
+            status: StatusCode::PAYMENT_REQUIRED,
+            code,
+        };
+        return HostedAdmissionError {
+            status: failure.status(),
+            code: code.to_owned(),
+            message: failure.message().to_owned(),
+        };
+    }
     let (status, code, message) = match code {
-        "notarization_credits_exhausted" => (
-            StatusCode::PAYMENT_REQUIRED,
-            "notarization_credits_exhausted",
-            "Hosted notarization allowance is exhausted. Wait for the monthly reset or buy additional credits.",
-        ),
-        "capture_credits_exhausted" => (
-            StatusCode::PAYMENT_REQUIRED,
-            "capture_credits_exhausted",
-            "The monthly hosted capture allowance is exhausted. Wait for the monthly reset or change plans.",
-        ),
-        "billing_review" => (
-            StatusCode::PAYMENT_REQUIRED,
-            "billing_review",
-            "Hosted capture and notarization are unavailable while billing is under review. Open Plan & usage to manage the subscription.",
-        ),
         "ticket_expired" | "admission_ticket_expired" => (
             StatusCode::SERVICE_UNAVAILABLE,
             "hosted_admission_expired",
@@ -225,6 +237,17 @@ mod tests {
         assert_eq!(exhausted.status(), StatusCode::PAYMENT_REQUIRED);
         assert_eq!(exhausted.code(), "notarization_credits_exhausted");
         assert!(exhausted.to_string().contains("monthly reset"));
+
+        for (code, copy) in [
+            ("capture_not_included", "team organizations"),
+            ("notarization_not_included", "buy notarization credits"),
+        ] {
+            let not_included = hosted_admission_denial(code);
+            assert_eq!(not_included.status(), StatusCode::PAYMENT_REQUIRED);
+            assert_eq!(not_included.code(), code);
+            assert!(not_included.to_string().contains(copy));
+            assert!(!not_included.to_string().contains("monthly reset"));
+        }
 
         let billing_review = hosted_admission_denial("billing_review");
         assert_eq!(billing_review.status(), StatusCode::PAYMENT_REQUIRED);

@@ -515,6 +515,13 @@ mod tests {
                     ),
                 ),
                 (
+                    "acct-team-free",
+                    (
+                        StatusCode::PAYMENT_REQUIRED,
+                        r#"{"error":"capture_not_included","message":"capture_not_included"}"#,
+                    ),
+                ),
+                (
                     "acct-review",
                     (
                         StatusCode::PAYMENT_REQUIRED,
@@ -567,6 +574,12 @@ mod tests {
                 "acct-sealing-exhausted",
                 StatusCode::PAYMENT_REQUIRED,
                 "notarization_credits_exhausted",
+            ),
+            (
+                &admission,
+                "acct-team-free",
+                StatusCode::PAYMENT_REQUIRED,
+                "capture_not_included",
             ),
             (
                 &admission,
