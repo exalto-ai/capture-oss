@@ -192,7 +192,8 @@ fn parse_explicit_key(value: &str) -> Result<(Vec<u8>, String)> {
     Ok((key.clone(), key_id(&key)))
 }
 
-fn now_ms() -> Result<u64> {
+/// The current time in Unix milliseconds.
+pub fn now_ms() -> Result<u64> {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .context("system clock is before Unix epoch")?

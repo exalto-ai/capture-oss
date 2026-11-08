@@ -2,6 +2,7 @@
 //! artifact store contracts, the local SQLite and filesystem stores, and the
 //! durable record of each capture.
 
+pub mod admin;
 pub mod admission;
 pub mod api;
 pub mod artifact_store;

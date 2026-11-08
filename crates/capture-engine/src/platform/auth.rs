@@ -150,7 +150,6 @@ struct RefreshRequest<'a> {
 struct RefreshResponse {
     access_token: String,
     refresh_token: String,
-    expires_in: u64,
 }
 
 #[derive(Deserialize)]
@@ -340,14 +339,28 @@ pub async fn logout_for_service() -> Result<()> {
 
 pub async fn account_connection_status() -> Result<AccountConnectionStatus> {
     match credential_configuration()? {
-        CredentialConfiguration::Anonymous { origin } => Ok(disconnected_status(&origin)),
+        CredentialConfiguration::Anonymous { origin } => Ok(signed_out_status(
+            &origin,
+            AccountConnectionState::Disconnected,
+        )),
         CredentialConfiguration::ApiKey(authenticated) => {
             Ok(lookup_account_status(authenticated).await)
         }
         CredentialConfiguration::DeviceSession { origin } => {
-            let authenticated = match refresh_device_session_for_status(&origin).await {
+            let authenticated = match refresh_device_session(account_http_client_builder()).await {
                 Ok(authenticated) => authenticated,
-                Err(state) => return Ok(unavailable_or_reauthorization_status(&origin, state)),
+                Err(error) => {
+                    let state = match error {
+                        // Credentials that cannot be read ask for a reconnect too.
+                        DeviceSessionError::Missing
+                        | DeviceSessionError::Unreadable(_)
+                        | DeviceSessionError::Rejected => {
+                            AccountConnectionState::ReauthorizationRequired
+                        }
+                        DeviceSessionError::Unavailable(_) => AccountConnectionState::Unavailable,
+                    };
+                    return Ok(signed_out_status(&origin, state));
+                }
             };
             Ok(lookup_account_status(authenticated).await)
         }
@@ -363,26 +376,7 @@ pub fn account_action_links(origin: &ApiOrigin) -> AccountActionLinks {
     }
 }
 
-fn disconnected_status(origin: &ApiOrigin) -> AccountConnectionStatus {
-    AccountConnectionStatus {
-        signed_in: false,
-        connection_state: AccountConnectionState::Disconnected,
-        provider_display_name: None,
-        display_name: None,
-        auth_provider: None,
-        device_name: None,
-        credential_kind: None,
-        credential_name: None,
-        billing: None,
-        credits: None,
-        links: account_action_links(origin),
-    }
-}
-
-fn unavailable_or_reauthorization_status(
-    origin: &ApiOrigin,
-    state: AccountConnectionState,
-) -> AccountConnectionStatus {
+fn signed_out_status(origin: &ApiOrigin, state: AccountConnectionState) -> AccountConnectionStatus {
     AccountConnectionStatus {
         signed_in: false,
         connection_state: state,
@@ -411,38 +405,23 @@ async fn lookup_account_status(authenticated: AuthenticatedApi) -> AccountConnec
                 if response.status() == StatusCode::UNAUTHORIZED
                     || response.status() == StatusCode::FORBIDDEN =>
             {
-                return unavailable_or_reauthorization_status(
-                    &origin,
-                    AccountConnectionState::ReauthorizationRequired,
-                );
+                return signed_out_status(&origin, AccountConnectionState::ReauthorizationRequired);
             }
             Ok(response) if !response.status().is_success() => {
-                return unavailable_or_reauthorization_status(
-                    &origin,
-                    AccountConnectionState::Unavailable,
-                );
+                return signed_out_status(&origin, AccountConnectionState::Unavailable);
             }
             Ok(response) => match response.json::<WhoamiResponse>().await {
                 Ok(response) => response,
                 Err(_) => {
-                    return unavailable_or_reauthorization_status(
-                        &origin,
-                        AccountConnectionState::Unavailable,
-                    );
+                    return signed_out_status(&origin, AccountConnectionState::Unavailable);
                 }
             },
             Err(_) => {
-                return unavailable_or_reauthorization_status(
-                    &origin,
-                    AccountConnectionState::Unavailable,
-                );
+                return signed_out_status(&origin, AccountConnectionState::Unavailable);
             }
         },
         Err(_) => {
-            return unavailable_or_reauthorization_status(
-                &origin,
-                AccountConnectionState::Unavailable,
-            );
+            return signed_out_status(&origin, AccountConnectionState::Unavailable);
         }
     };
     let device_name = response.device.map(|device| device.device_name);
@@ -461,39 +440,80 @@ async fn lookup_account_status(authenticated: AuthenticatedApi) -> AccountConnec
     }
 }
 
-async fn refresh_device_session_for_status(
-    origin: &ApiOrigin,
-) -> std::result::Result<AuthenticatedApi, AccountConnectionState> {
+/// Why the stored Device session could not produce an access token. Each
+/// caller maps it to its own errors.
+#[derive(Debug, thiserror::Error)]
+enum DeviceSessionError {
+    /// No credentials file is stored, or its keychain item is gone.
+    #[error("Exalto account credentials are missing; reconnect through the local admin API")]
+    Missing,
+    /// The stored credentials or the keychain could not be read.
+    #[error("reading Exalto account credentials")]
+    Unreadable(#[source] anyhow::Error),
+    /// The API rejected the refresh token.
+    #[error("the Exalto API rejected the Device session")]
+    Rejected,
+    /// The API could not be reached or answered unexpectedly, or the rotated
+    /// refresh token could not be stored.
+    #[error("refreshing Device credentials")]
+    Unavailable(#[source] anyhow::Error),
+}
+
+impl From<DeviceSessionError> for SharingAuthenticationError {
+    fn from(error: DeviceSessionError) -> Self {
+        match error {
+            DeviceSessionError::Missing | DeviceSessionError::Rejected => Self::Required,
+            DeviceSessionError::Unreadable(_) | DeviceSessionError::Unavailable(_) => {
+                Self::Unavailable
+            }
+        }
+    }
+}
+
+/// Exchanges the stored Device session's refresh token for an access token
+/// through a client from `client`, and stores the rotated refresh token.
+/// Every credential change is serialized with it.
+async fn refresh_device_session(
+    client: reqwest::ClientBuilder,
+) -> std::result::Result<AuthenticatedApi, DeviceSessionError> {
     let _refresh = credential_refresh_guard().await;
-    let mut credentials =
-        load_credentials().map_err(|_| AccountConnectionState::ReauthorizationRequired)?;
-    let client = account_http_client_builder()
-        .build()
-        .map_err(|_| AccountConnectionState::Unavailable)?;
+    let mut credentials = load_credentials()?;
+    let tokens = rotate_refresh_token(client, &credentials).await?;
+    credentials.refresh_token = tokens.refresh_token;
+    save_credentials(&credentials).map_err(DeviceSessionError::Unavailable)?;
+    Ok(AuthenticatedApi {
+        origin: credentials.api_origin,
+        access_token: tokens.access_token,
+    })
+}
+
+async fn rotate_refresh_token(
+    client: reqwest::ClientBuilder,
+    credentials: &FileCredentials,
+) -> std::result::Result<RefreshResponse, DeviceSessionError> {
+    let unavailable = |error: reqwest::Error| DeviceSessionError::Unavailable(error.into());
     let response = client
-        .post(origin.api_url("/api/device-session/token"))
+        .build()
+        .map_err(unavailable)?
+        .post(credentials.api_origin.api_url("/api/device-session/token"))
         .json(&RefreshRequest {
             refresh_token: &credentials.refresh_token,
         })
         .send()
         .await
-        .map_err(|_| AccountConnectionState::Unavailable)?;
-    if response.status() == StatusCode::UNAUTHORIZED || response.status() == StatusCode::FORBIDDEN {
-        return Err(AccountConnectionState::ReauthorizationRequired);
+        .map_err(unavailable)?;
+    if matches!(
+        response.status(),
+        StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN
+    ) {
+        return Err(DeviceSessionError::Rejected);
     }
-    if !response.status().is_success() {
-        return Err(AccountConnectionState::Unavailable);
-    }
-    let response = response
+    response
+        .error_for_status()
+        .map_err(unavailable)?
         .json::<RefreshResponse>()
         .await
-        .map_err(|_| AccountConnectionState::Unavailable)?;
-    credentials.refresh_token = response.refresh_token;
-    save_credentials(&credentials).map_err(|_| AccountConnectionState::Unavailable)?;
-    Ok(AuthenticatedApi {
-        origin: origin.clone(),
-        access_token: response.access_token,
-    })
+        .map_err(unavailable)
 }
 
 fn account_http_client_builder() -> reqwest::ClientBuilder {
@@ -519,15 +539,7 @@ async fn authenticate_configuration(
 }
 
 async fn authenticate_device_session() -> Result<AuthenticatedApi> {
-    let _refresh = credential_refresh_guard().await;
-    let mut credentials = load_credentials().context("an Exalto account connection is required")?;
-    let (access_token, rotated_refresh_token) = refresh(&credentials).await?;
-    credentials.refresh_token = rotated_refresh_token;
-    save_credentials(&credentials)?;
-    Ok(AuthenticatedApi {
-        origin: credentials.api_origin,
-        access_token,
-    })
+    Ok(refresh_device_session(http_client_builder()).await?)
 }
 
 pub async fn issue_capture_admission() -> Result<AdmissionTicket> {
@@ -651,15 +663,7 @@ pub async fn authenticate_for_sharing_status()
         CredentialConfiguration::ApiKey(authenticated) => return Ok(authenticated),
         CredentialConfiguration::DeviceSession { .. } => {}
     }
-    let _refresh = credential_refresh_guard().await;
-    let mut credentials = load_credentials_for_sharing_status()?;
-    let (access_token, rotated_refresh_token) = refresh_for_sharing_status(&credentials).await?;
-    credentials.refresh_token = rotated_refresh_token;
-    save_credentials(&credentials).map_err(|_| SharingAuthenticationError::Unavailable)?;
-    Ok(AuthenticatedApi {
-        origin: credentials.api_origin,
-        access_token,
-    })
+    Ok(refresh_device_session(http_client_builder()).await?)
 }
 
 pub fn validate_credential_configuration() -> Result<()> {
@@ -798,57 +802,6 @@ fn is_lower_hex(value: &str, len: usize) -> bool {
             .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
 }
 
-async fn refresh(credentials: &FileCredentials) -> Result<(String, String)> {
-    let response = http_client_builder()
-        .build()
-        .context("building API client")?
-        .post(credentials.api_origin.api_url("/api/device-session/token"))
-        .json(&RefreshRequest {
-            refresh_token: &credentials.refresh_token,
-        })
-        .send()
-        .await
-        .context("refreshing Device credentials")?
-        .error_for_status()
-        .context("refreshing Device credentials")?
-        .json::<RefreshResponse>()
-        .await
-        .context("reading refreshed Device credentials")?;
-    let _ = response.expires_in;
-    Ok((response.access_token, response.refresh_token))
-}
-
-async fn refresh_for_sharing_status(
-    credentials: &FileCredentials,
-) -> std::result::Result<(String, String), SharingAuthenticationError> {
-    let client = http_client_builder()
-        .build()
-        .map_err(|_| SharingAuthenticationError::Unavailable)?;
-    let response = client
-        .post(credentials.api_origin.api_url("/api/device-session/token"))
-        .json(&RefreshRequest {
-            refresh_token: &credentials.refresh_token,
-        })
-        .send()
-        .await
-        .map_err(|_| SharingAuthenticationError::Unavailable)?;
-    if matches!(
-        response.status(),
-        StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN
-    ) {
-        return Err(SharingAuthenticationError::Required);
-    }
-    if !response.status().is_success() {
-        return Err(SharingAuthenticationError::Unavailable);
-    }
-    let response = response
-        .json::<RefreshResponse>()
-        .await
-        .map_err(|_| SharingAuthenticationError::Unavailable)?;
-    let _ = response.expires_in;
-    Ok((response.access_token, response.refresh_token))
-}
-
 fn credentials_path() -> Result<PathBuf> {
     storage::config_file("credentials.json")
 }
@@ -864,41 +817,29 @@ fn save_credentials(credentials: &FileCredentials) -> Result<()> {
     }
 }
 
-fn load_credentials() -> Result<FileCredentials> {
-    let path = credentials_path()?;
-    let data = fs::read(&path).with_context(|| format!("read {}", path.display()))?;
-    let mut credentials: FileCredentials =
-        serde_json::from_slice(&data).context("parse Device credentials")?;
-    if credentials.refresh_token.is_empty() {
-        credentials.refresh_token = keychain_load()?.ok_or_else(|| {
-            anyhow!("Exalto account credentials are missing; reconnect through the local admin API")
-        })?;
-    }
-    Ok(credentials)
+fn load_credentials() -> std::result::Result<FileCredentials, DeviceSessionError> {
+    load_credentials_at(&credentials_path().map_err(DeviceSessionError::Unreadable)?)
 }
 
-fn load_credentials_for_sharing_status()
--> std::result::Result<FileCredentials, SharingAuthenticationError> {
-    let path = credentials_path().map_err(|_| SharingAuthenticationError::Unavailable)?;
-    load_credentials_for_sharing_status_at(&path)
-}
-
-fn load_credentials_for_sharing_status_at(
-    path: &Path,
-) -> std::result::Result<FileCredentials, SharingAuthenticationError> {
+fn load_credentials_at(path: &Path) -> std::result::Result<FileCredentials, DeviceSessionError> {
     let data = match fs::read(path) {
         Ok(data) => data,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return Err(SharingAuthenticationError::Required);
+            return Err(DeviceSessionError::Missing);
         }
-        Err(_) => return Err(SharingAuthenticationError::Unavailable),
+        Err(error) => {
+            return Err(DeviceSessionError::Unreadable(
+                anyhow::Error::new(error).context(format!("read {}", path.display())),
+            ));
+        }
     };
-    let mut credentials: FileCredentials =
-        serde_json::from_slice(&data).map_err(|_| SharingAuthenticationError::Unavailable)?;
+    let mut credentials: FileCredentials = serde_json::from_slice(&data)
+        .context("parse Device credentials")
+        .map_err(DeviceSessionError::Unreadable)?;
     if credentials.refresh_token.is_empty() {
         credentials.refresh_token = keychain_load()
-            .map_err(|_| SharingAuthenticationError::Unavailable)?
-            .ok_or(SharingAuthenticationError::Required)?;
+            .map_err(DeviceSessionError::Unreadable)?
+            .ok_or(DeviceSessionError::Missing)?;
     }
     Ok(credentials)
 }
@@ -1095,10 +1036,10 @@ fn keychain_delete() -> Result<()> {
 mod tests {
     use super::*;
 
-    async fn sharing_status_refresh_result(
+    async fn refresh_result(
         status: StatusCode,
         body: &'static str,
-    ) -> std::result::Result<(String, String), SharingAuthenticationError> {
+    ) -> std::result::Result<RefreshResponse, DeviceSessionError> {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let origin = format!("http://{}", listener.local_addr().unwrap());
         let app = axum::Router::new().route(
@@ -1112,7 +1053,7 @@ mod tests {
             api_origin: ApiOrigin::parse(&origin).unwrap(),
             refresh_token: "refresh-token".to_owned(),
         };
-        let result = refresh_for_sharing_status(&credentials).await;
+        let result = rotate_refresh_token(http_client_builder(), &credentials).await;
         server.abort();
         result
     }
@@ -1331,25 +1272,28 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn sharing_status_refresh_distinguishes_reauthorization_from_outages() {
-        assert_eq!(
-            sharing_status_refresh_result(StatusCode::UNAUTHORIZED, "{}")
-                .await
-                .unwrap_err(),
-            SharingAuthenticationError::Required
-        );
-        assert_eq!(
-            sharing_status_refresh_result(StatusCode::SERVICE_UNAVAILABLE, "{}")
-                .await
-                .unwrap_err(),
-            SharingAuthenticationError::Unavailable
-        );
-        assert_eq!(
-            sharing_status_refresh_result(StatusCode::OK, "not-json")
-                .await
-                .unwrap_err(),
-            SharingAuthenticationError::Unavailable
-        );
+    async fn refresh_distinguishes_reauthorization_from_outages() {
+        for (status, body, rejected) in [
+            (StatusCode::UNAUTHORIZED, "{}", true),
+            (StatusCode::FORBIDDEN, "{}", true),
+            (StatusCode::SERVICE_UNAVAILABLE, "{}", false),
+            (StatusCode::OK, "not-json", false),
+        ] {
+            let error = refresh_result(status, body).await.err().unwrap();
+            assert_eq!(
+                matches!(error, DeviceSessionError::Rejected),
+                rejected,
+                "{status}"
+            );
+            assert_eq!(
+                SharingAuthenticationError::from(error),
+                if rejected {
+                    SharingAuthenticationError::Required
+                } else {
+                    SharingAuthenticationError::Unavailable
+                }
+            );
+        }
     }
 
     #[test]
@@ -1381,19 +1325,19 @@ mod tests {
     }
 
     #[test]
-    fn sharing_status_credential_load_distinguishes_absence_from_broken_storage() {
+    fn credential_load_distinguishes_absence_from_broken_storage() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("config").join("credentials.json");
         assert!(matches!(
-            load_credentials_for_sharing_status_at(&path),
-            Err(SharingAuthenticationError::Required)
+            load_credentials_at(&path),
+            Err(DeviceSessionError::Missing)
         ));
 
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(&path, b"not-json").unwrap();
         assert!(matches!(
-            load_credentials_for_sharing_status_at(&path),
-            Err(SharingAuthenticationError::Unavailable)
+            load_credentials_at(&path),
+            Err(DeviceSessionError::Unreadable(_))
         ));
 
         let credentials = FileCredentials {
@@ -1401,7 +1345,7 @@ mod tests {
             refresh_token: "refresh-token".to_owned(),
         };
         write_file_credentials_at(&path, &credentials).unwrap();
-        let loaded = load_credentials_for_sharing_status_at(&path).unwrap();
+        let loaded = load_credentials_at(&path).unwrap();
         assert_eq!(loaded.api_origin, credentials.api_origin);
         assert_eq!(loaded.refresh_token, credentials.refresh_token);
     }

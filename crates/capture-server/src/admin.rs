@@ -1,9 +1,6 @@
 //! The server's authenticated administration API and embedded dashboard.
 
-use std::{
-    sync::Arc,
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
-};
+use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use argon2::{Argon2, PasswordHash, PasswordVerifier};
@@ -19,7 +16,7 @@ use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use rust_embed::RustEmbed;
 use serde::Serialize;
 use sha2::{Digest as _, Sha256};
-use tokio::sync::{Mutex, Notify};
+use tokio::sync::Notify;
 use tower_http::{
     request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer},
     sensitive_headers::SetSensitiveRequestHeadersLayer,
@@ -27,13 +24,20 @@ use tower_http::{
 };
 use utoipa::{Modify, OpenApi, ToSchema};
 
-use capture_engine::api::{
-    ActivityItem, ActivityPage, ApiContext, ApiError, AutoSealSettingResponse,
-    CaptureSettingResponse, ErrorBody, ErrorEnvelope, EvidenceArtifact, NotarizationAttempt,
-    NotarizationRequest, OperationProgressResponse, OperationProofProgressResponse, ShareProgress,
-    ShareVisibility, TechnicalOperation, TraceContent, TraceDetail, TraceOperationalStatus,
-    TracePage, TraceShare, TraceState, TraceSummary, UpdateAutoSealSetting, UpdateCaptureSetting,
-    VerificationOutcome, VerificationResult,
+use capture_engine::{
+    admin::{
+        DependencyProbe, DependencyProbeResult, NotariesResponse, Notary, Provider,
+        ProvidersResponse, ReadinessResponse, TraceCounts, ready_trace_counts,
+    },
+    api::{
+        ActivityItem, ActivityPage, ApiContext, ApiError, AutoSealSettingResponse,
+        CaptureSettingResponse, ErrorBody, ErrorEnvelope, EvidenceArtifact, NotarizationAttempt,
+        NotarizationRequest, OperationProgressResponse, OperationProofProgressResponse,
+        ShareProgress, ShareVisibility, TechnicalOperation, TraceContent, TraceDetail,
+        TraceOperationalStatus, TracePage, TraceShare, TraceState, TraceSummary,
+        UpdateAutoSealSetting, UpdateCaptureSetting, VerificationOutcome, VerificationResult,
+        now_ms,
+    },
 };
 
 use crate::{
@@ -41,23 +45,17 @@ use crate::{
     config::CapturedConfig,
     metadata::CaptureMode,
     persistence::Persistence,
-    registry::{NotaryKeyStatus, RegistryRecord, key_id},
     service::registry as registry_service,
 };
 
 const API_VERSION: &str = "v1";
 const SESSION_COOKIE: &str = "notary_admin_session";
 const SESSION_MAX_AGE_SECONDS: u64 = 43_200;
-const DEPENDENCY_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
-const DEPENDENCY_PROBE_CACHE_TTL: Duration = Duration::from_secs(1);
 const DASHBOARD_HEADER: &str = "x-notary-request";
 const DASHBOARD_CSP: &str = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'";
 #[derive(RustEmbed)]
 #[folder = "dashboard/"]
 struct DashboardAssets;
-
-type DependencyProbeResult = std::result::Result<(), &'static str>;
-type DependencyProbeCache = Option<(Instant, DependencyProbeResult)>;
 
 #[derive(Clone)]
 pub(crate) struct AdminState {
@@ -68,7 +66,7 @@ pub(crate) struct AdminState {
     /// Public origins from `[cluster]`, which server mode requires.
     proxy_origin: String,
     admin_origin: String,
-    dependency_probe: Arc<Mutex<DependencyProbeCache>>,
+    dependency_probe: DependencyProbe,
     capture_mode: Arc<crate::service::proxy::CaptureSetting>,
     /// The shared administration routes' context.
     api: ApiContext,
@@ -121,7 +119,7 @@ impl AdminState {
             cluster_runtime,
             proxy_origin,
             admin_origin,
-            dependency_probe: Arc::new(Mutex::new(None)),
+            dependency_probe: DependencyProbe::default(),
             capture_mode,
             api,
         })
@@ -133,56 +131,45 @@ impl AdminState {
         &self.api
     }
 }
-async fn probe_dependencies(state: &AdminState) -> std::result::Result<(), &'static str> {
-    let mut cached = state.dependency_probe.lock().await;
-    if let Some((checked_at, result)) = cached.as_ref()
-        && checked_at.elapsed() < DEPENDENCY_PROBE_CACHE_TTL
-    {
-        return *result;
-    }
-
-    let persistence = state.persistence.clone();
-    let cluster_runtime = state.cluster_runtime.clone();
+async fn probe_dependencies(state: &AdminState) -> DependencyProbeResult {
+    let persistence = &state.persistence;
+    let cluster_runtime = &state.cluster_runtime;
     let require_shared_trust =
         state.capture_mode.enabled() && state.config.notary.endpoint.is_none();
-    let result = match tokio::time::timeout(DEPENDENCY_PROBE_TIMEOUT, async move {
-        persistence
-            .metadata
-            .readiness()
-            .await
-            .map_err(|_| "metadata_not_ready")?;
-        persistence
-            .artifacts
-            .readiness()
-            .await
-            .map_err(|_| "artifact_not_ready")?;
-        if !cluster_runtime
-            .metadata()
-            .replica_ready(cluster_runtime.identity())
-            .await
-            .map_err(|_| "replica_lease_not_ready")?
-        {
-            return Err("replica_lease_not_ready");
-        }
-        if require_shared_trust
-            && cluster_runtime
-                .metadata()
-                .registry_snapshot()
+    state
+        .dependency_probe
+        .check(async {
+            persistence
+                .metadata
+                .readiness()
                 .await
-                .map_err(|_| "registry_not_ready")?
-                .is_none()
-        {
-            return Err("registry_not_ready");
-        }
-        Ok(())
-    })
-    .await
-    {
-        Ok(result) => result,
-        Err(_) => Err("dependency_not_ready"),
-    };
-    *cached = Some((Instant::now(), result));
-    result
+                .map_err(|_| "metadata_not_ready")?;
+            persistence
+                .artifacts
+                .readiness()
+                .await
+                .map_err(|_| "artifact_not_ready")?;
+            if !cluster_runtime
+                .metadata()
+                .replica_ready(cluster_runtime.identity())
+                .await
+                .map_err(|_| "replica_lease_not_ready")?
+            {
+                return Err("replica_lease_not_ready");
+            }
+            if require_shared_trust
+                && cluster_runtime
+                    .metadata()
+                    .registry_snapshot()
+                    .await
+                    .map_err(|_| "registry_not_ready")?
+                    .is_none()
+            {
+                return Err("registry_not_ready");
+            }
+            Ok(())
+        })
+        .await
 }
 pub(crate) fn router(state: AdminState) -> Result<Router> {
     let protected = Router::new()
@@ -378,15 +365,13 @@ async fn readiness(State(state): State<AdminState>) -> Result<Json<ReadinessResp
     if state.cluster_runtime.lifecycle() != Lifecycle::Ready {
         return Err(ApiError::service_unavailable("replica_not_ready"));
     }
-    match probe_dependencies(&state).await {
-        Ok(()) => Ok(Json(ReadinessResponse {
-            service: "capture-server".into(),
-            status: "ready".into(),
-            metadata_backend: state.persistence.metadata.backend_name().into(),
-            artifact_backend: state.persistence.artifacts.backend_name().into(),
-        })),
-        Err(code) => Err(ApiError::service_unavailable(code)),
-    }
+    ReadinessResponse::from_probe(
+        "capture-server",
+        probe_dependencies(&state).await,
+        state.persistence.metadata.backend_name(),
+        state.persistence.artifacts.backend_name(),
+    )
+    .map(Json)
 }
 
 #[utoipa::path(get, path = "/openapi.json", summary = "Get the OpenAPI contract", description = "Returns the exact OpenAPI 3.1 contract implemented by this local service.", responses((status = 200, description = "OpenAPI 3.1 document")), tag = "local-admin")]
@@ -507,15 +492,11 @@ fn session_hash(token: &str) -> [u8; 32] {
 
 #[utoipa::path(get, path = "/v1/status", summary = "Get local service status", description = "Returns listener addresses, bounded metadata and artifact-writer readiness, vault and Notary configuration, preview limits, and current Trace counts.", responses((status = 200, body = StatusResponse), (status = 401, body = ErrorEnvelope), (status = 503, body = ErrorEnvelope)), security(("basicAuth" = [])), tag = "local-admin")]
 async fn status(State(state): State<AdminState>) -> Result<Json<StatusResponse>, ApiError> {
-    let metadata = state.persistence.metadata.clone();
-    let probe_state = state.clone();
-    let counts = tokio::time::timeout(DEPENDENCY_PROBE_TIMEOUT, async move {
-        probe_dependencies(&probe_state).await.map_err(|_| ())?;
-        metadata.counts().await.map_err(|_| ())
-    })
-    .await
-    .map_err(|_| ApiError::service_unavailable("dependency_not_ready"))?
-    .map_err(|_| ApiError::service_unavailable("dependency_not_ready"))?;
+    let counts = ready_trace_counts(
+        probe_dependencies(&state),
+        state.persistence.metadata.as_ref(),
+    )
+    .await?;
     let capture_mode = state
         .persistence
         .metadata
@@ -545,7 +526,7 @@ async fn status(State(state): State<AdminState>) -> Result<Json<StatusResponse>,
         }
         .into(),
         preview_chars: state.config.metadata.prompt_preview_chars,
-        counts: TraceCounts::from(counts),
+        counts,
     }))
 }
 
@@ -561,140 +542,19 @@ async fn notaries(State(state): State<AdminState>) -> Result<Json<NotariesRespon
     } else {
         None
     };
-    notaries_response(&state.config, shared)
-        .map(Json)
-        .map_err(|_| ApiError::internal("registry_state_invalid"))
-}
-fn notaries_response(
-    config: &CapturedConfig,
-    shared: Option<crate::metadata::RegistrySnapshot>,
-) -> Result<NotariesResponse> {
-    if let (Some(endpoint), Some(public_key)) =
-        (config.notary_endpoint()?, config.notary_public_key()?)
-    {
-        return Ok(NotariesResponse {
-            source: "explicit_configuration".into(),
-            registry_source: None,
-            generation: None,
-            active_key_id: None,
-            notaries: vec![Notary {
-                name: "Configured notary".into(),
-                operator: "Self-hosted".into(),
-                endpoint: endpoint.to_string(),
-                transport: endpoint.transport.scheme().into(),
-                key_id: key_id(&public_key),
-                verification_key: hex::encode(public_key),
-                lifecycle: "configured".into(),
-                valid_from_unix_ms: None,
-                valid_until_unix_ms: None,
-                notarize_until_unix_ms: None,
-            }],
-        });
-    }
-
-    let Some(pinned) = shared.map(registry_service::PinnedRegistryState::from) else {
-        return Ok(NotariesResponse {
-            source: "registry".into(),
-            registry_source: None,
-            generation: None,
-            active_key_id: None,
-            notaries: Vec::new(),
-        });
-    };
-    Ok(registry_notaries_response(pinned))
-}
-
-fn registry_notaries_response(pinned: registry_service::PinnedRegistryState) -> NotariesResponse {
-    let active_key_id = pinned.active_key_id;
-    let mut records = pinned.records;
-    records.sort_by(|left, right| {
-        notary_record_order(left, &active_key_id)
-            .cmp(&notary_record_order(right, &active_key_id))
-            .then_with(|| right.valid_from_unix_ms.cmp(&left.valid_from_unix_ms))
-            .then_with(|| left.key_id.cmp(&right.key_id))
-    });
-    NotariesResponse {
-        source: "registry".into(),
-        registry_source: pinned.registry_source,
-        generation: Some(pinned.generation),
-        active_key_id: Some(active_key_id),
-        notaries: records.into_iter().map(Notary::from).collect(),
-    }
-}
-
-fn notary_record_order(record: &RegistryRecord, active_key_id: &str) -> u8 {
-    if record.key_id == active_key_id {
-        return 0;
-    }
-    match record.status {
-        NotaryKeyStatus::Active => 1,
-        NotaryKeyStatus::Retiring => 2,
-        NotaryKeyStatus::Retired => 3,
-        NotaryKeyStatus::Revoked => 4,
-    }
+    NotariesResponse::for_config(&state.config, || {
+        Ok(shared.map(registry_service::PinnedRegistryState::from))
+    })
+    .map(Json)
+    .map_err(|_| ApiError::internal("registry_state_invalid"))
 }
 
 #[utoipa::path(get, path = "/v1/providers", summary = "List supported providers", description = "Returns only captured's explicit provider adapters, their pinned upstream hosts, client API styles, proxy base URLs, and configured readiness.", responses((status = 200, body = ProvidersResponse), (status = 401, body = ErrorEnvelope)), security(("basicAuth" = [])), tag = "local-admin")]
 async fn providers(State(state): State<AdminState>) -> Json<ProvidersResponse> {
-    let proxy_origin = &state.proxy_origin;
-    let definitions = [
-        (
-            "openai",
-            "OpenAI",
-            "api.openai.com",
-            "OpenAI Responses and Chat Completions",
-            &state.config.providers.openai,
-            "/v1",
-        ),
-        (
-            "openai_codex",
-            "OpenAI Codex",
-            "chatgpt.com",
-            "OpenAI Responses (Codex)",
-            &state.config.providers.codex,
-            "",
-        ),
-        (
-            "anthropic",
-            "Anthropic",
-            "api.anthropic.com",
-            "Anthropic Messages",
-            &state.config.providers.anthropic,
-            "",
-        ),
-        (
-            "deepseek",
-            "DeepSeek",
-            "api.deepseek.com",
-            "OpenAI-compatible Chat Completions",
-            &state.config.providers.deepseek,
-            "",
-        ),
-        (
-            "openrouter",
-            "OpenRouter",
-            "openrouter.ai",
-            "OpenAI-compatible Chat Completions",
-            &state.config.providers.openrouter,
-            "/api/v1",
-        ),
-    ];
-    Json(ProvidersResponse {
-        providers: definitions
-            .into_iter()
-            .map(
-                |(id, name, host, client_api, config, client_suffix)| Provider {
-                    id: id.into(),
-                    name: name.into(),
-                    host: host.into(),
-                    client_api: client_api.into(),
-                    route_prefix: config.route_prefix.clone(),
-                    proxy_base_url: format!("{proxy_origin}{}{client_suffix}", config.route_prefix),
-                    ready: config.enabled,
-                },
-            )
-            .collect(),
-    })
+    Json(ProvidersResponse::for_config(
+        &state.config,
+        &state.proxy_origin,
+    ))
 }
 
 fn new_secret() -> String {
@@ -762,51 +622,11 @@ fn session_from_headers(headers: &axum::http::HeaderMap) -> Option<&str> {
         .find_map(|pair| pair.strip_prefix(&format!("{SESSION_COOKIE}=")))
 }
 
-fn now_ms() -> Result<u64> {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .context("system clock is before Unix epoch")?
-        .as_millis()
-        .try_into()
-        .context("current time does not fit in u64")
-}
-
 #[derive(Debug, Serialize, ToSchema)]
 pub(crate) struct HealthResponse {
     service: String,
     status: String,
     api_version: String,
-}
-
-#[derive(Debug, Serialize, ToSchema)]
-struct ReadinessResponse {
-    service: String,
-    status: String,
-    metadata_backend: String,
-    artifact_backend: String,
-}
-
-#[derive(Debug, Serialize, ToSchema)]
-struct TraceCounts {
-    captured: u64,
-    notarizing: u64,
-    notarized: u64,
-    needs_attention: u64,
-    capturing: u64,
-    capture_failed: u64,
-}
-
-impl From<crate::metadata::MetadataCounts> for TraceCounts {
-    fn from(value: crate::metadata::MetadataCounts) -> Self {
-        Self {
-            captured: value.captured,
-            notarizing: value.notarizing,
-            notarized: value.notarized,
-            needs_attention: value.needs_attention,
-            capturing: value.capturing,
-            capture_failed: value.capture_failed,
-        }
-    }
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -831,77 +651,6 @@ struct StatusResponse {
     counts: TraceCounts,
 }
 
-#[derive(Debug, Serialize, ToSchema)]
-struct NotariesResponse {
-    /// `registry` for the locally pinned trust store or
-    /// `explicit_configuration` for a self-hosted endpoint and key.
-    source: String,
-    /// Public URL from which the current pinned Registry generation came.
-    registry_source: Option<String>,
-    generation: Option<u64>,
-    /// Selected active Registry key. Explicit configuration has no Registry
-    /// lifecycle selection and therefore leaves this field unset.
-    active_key_id: Option<String>,
-    notaries: Vec<Notary>,
-}
-
-#[derive(Debug, Serialize, ToSchema)]
-struct Notary {
-    name: String,
-    operator: String,
-    endpoint: String,
-    transport: String,
-    key_id: String,
-    verification_key: String,
-    /// One of `active`, `retiring`, `retired`, `revoked`, or `configured`.
-    lifecycle: String,
-    valid_from_unix_ms: Option<u64>,
-    valid_until_unix_ms: Option<u64>,
-    notarize_until_unix_ms: Option<u64>,
-}
-
-#[derive(Debug, Serialize, ToSchema)]
-struct ProvidersResponse {
-    providers: Vec<Provider>,
-}
-
-#[derive(Debug, Serialize, ToSchema)]
-struct Provider {
-    id: String,
-    name: String,
-    host: String,
-    client_api: String,
-    route_prefix: String,
-    proxy_base_url: String,
-    ready: bool,
-}
-
-impl From<RegistryRecord> for Notary {
-    fn from(record: RegistryRecord) -> Self {
-        let endpoint = record
-            .endpoint()
-            .expect("validated pinned notary record has an endpoint")
-            .to_string();
-        Self {
-            name: record.name,
-            operator: record.operator,
-            endpoint,
-            transport: record.transport.scheme().into(),
-            key_id: record.key_id,
-            verification_key: record.public_key,
-            lifecycle: match record.status {
-                NotaryKeyStatus::Active => "active",
-                NotaryKeyStatus::Retiring => "retiring",
-                NotaryKeyStatus::Retired => "retired",
-                NotaryKeyStatus::Revoked => "revoked",
-            }
-            .into(),
-            valid_from_unix_ms: Some(record.valid_from_unix_ms),
-            valid_until_unix_ms: record.valid_until_unix_ms,
-            notarize_until_unix_ms: record.notarize_until_unix_ms,
-        }
-    }
-}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -914,7 +663,7 @@ mod tests {
     use argon2::{PasswordHasher, password_hash::SaltString};
     use axum::{body::Body, http::Request};
     use http_body_util::BodyExt as _;
-    use std::{io::Write as IoWrite, sync::Mutex as StdMutex};
+    use std::{io::Write as IoWrite, sync::Mutex as StdMutex, time::Duration};
     use tower::ServiceExt as _;
     use tracing_subscriber::fmt::MakeWriter;
 
@@ -1007,86 +756,11 @@ mod tests {
         }
     }
 
-    #[test]
-    fn registry_notary_projection_orders_lifecycle_and_retains_revocations() {
-        let active = notary_record(1, NotaryKeyStatus::Active, 100);
-        let retiring = notary_record(2, NotaryKeyStatus::Retiring, 90);
-        let retired = notary_record(3, NotaryKeyStatus::Retired, 80);
-        let revoked = notary_record(4, NotaryKeyStatus::Revoked, 110);
-        let response = registry_notaries_response(registry_service::PinnedRegistryState {
-            registry_source: Some("https://example.test/api/registry".into()),
-            generation: 7,
-            active_key_id: active.key_id.clone(),
-            records: vec![
-                revoked.clone(),
-                retired.clone(),
-                active.clone(),
-                retiring.clone(),
-            ],
-        });
-
-        assert_eq!(response.source, "registry");
-        assert_eq!(response.generation, Some(7));
-        assert_eq!(
-            response.active_key_id.as_deref(),
-            Some(active.key_id.as_str())
-        );
-        assert_eq!(
-            response
-                .notaries
-                .iter()
-                .map(|record| record.lifecycle.as_str())
-                .collect::<Vec<_>>(),
-            ["active", "retiring", "retired", "revoked"]
-        );
-        let revoked_response = response.notaries.last().unwrap();
-        assert_eq!(revoked_response.key_id, revoked.key_id);
-        assert_eq!(revoked_response.endpoint, "tls://notary-4.example:7047");
-    }
-
-    #[test]
-    fn explicit_notary_projection_does_not_claim_registry_membership() {
-        let signing = k256::ecdsa::SigningKey::from_slice(&[9; 32]).unwrap();
-        let public_key = signing.verifying_key().to_sec1_bytes().to_vec();
-        let mut config = CapturedConfig::default();
-        config.notary.endpoint = Some("tcp://127.0.0.1:7047".into());
-        config.notary.public_key = Some(hex::encode(&public_key));
-
-        let response = notaries_response(&config, None).unwrap();
-
-        assert_eq!(response.source, "explicit_configuration");
-        assert_eq!(response.registry_source, None);
-        assert_eq!(response.generation, None);
-        assert_eq!(response.active_key_id, None);
-        assert_eq!(response.notaries.len(), 1);
-        assert_eq!(response.notaries[0].lifecycle, "configured");
-        assert_eq!(response.notaries[0].key_id, key_id(&public_key));
-        assert_eq!(response.notaries[0].endpoint, "tcp://127.0.0.1:7047");
-    }
-
     fn basic_header(username: &str, password: &str) -> String {
         format!(
             "Basic {}",
             BASE64_STANDARD.encode(format!("{username}:{password}"))
         )
-    }
-
-    fn notary_record(seed: u8, status: NotaryKeyStatus, valid_from: u64) -> RegistryRecord {
-        let signing = k256::ecdsa::SigningKey::from_slice(&[seed; 32]).unwrap();
-        let public_key = signing.verifying_key().to_sec1_bytes().to_vec();
-        RegistryRecord {
-            name: format!("Notary {seed}"),
-            operator: "Test operator".to_owned(),
-            host: format!("notary-{seed}.example"),
-            port: 7047,
-            transport: crate::registry::NotaryTransport::Tls,
-            key_id: key_id(&public_key),
-            public_key: hex::encode(public_key),
-            status,
-            valid_from_unix_ms: valid_from,
-            valid_until_unix_ms: Some(valid_from + 1_000),
-            notarize_until_unix_ms: Some(valid_from + 2_000),
-        }
     }
 
     #[tokio::test]
