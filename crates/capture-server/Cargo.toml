@@ -37,7 +37,6 @@ hex = { workspace = true }
 k256 = { workspace = true, features = ["ecdsa"] }
 capture-core = { workspace = true, features = ["cli", "openapi"] }
 capture-engine = { workspace = true }
-capture-updater = { workspace = true }
 mime_guess = "2.0"
 reqwest = { workspace = true, features = ["json", "rustls-tls", "stream"] }
 rust-embed = "8.12"

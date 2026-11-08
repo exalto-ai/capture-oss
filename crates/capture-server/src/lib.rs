@@ -26,18 +26,12 @@ mod persistence;
 mod postgres_metadata_store;
 mod s3_artifact_store;
 mod service;
-pub use capture_updater as update;
 
 #[derive(Parser, Debug)]
 #[command(
     name = "capture-server",
     about = "Run an Exalto Capture server replica",
-    version,
-    long_version = format!(
-        "{} ({})",
-        env!("CARGO_PKG_VERSION"),
-        capture_updater::BUILD_ID
-    )
+    version
 )]
 struct DaemonCli {
     /// Versioned server configuration file. It must configure [cluster],
@@ -207,17 +201,5 @@ mod tests {
             ])
             .is_ok()
         );
-    }
-
-    #[test]
-    fn version_flag_reports_the_exact_build_identity() {
-        let error = DaemonCli::try_parse_from(["capture-server", "--version"]).unwrap_err();
-
-        assert_eq!(error.kind(), clap::error::ErrorKind::DisplayVersion);
-        assert!(error.to_string().contains(&format!(
-            "{} ({})",
-            env!("CARGO_PKG_VERSION"),
-            capture_updater::BUILD_ID
-        )));
     }
 }

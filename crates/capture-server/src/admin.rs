@@ -69,7 +69,6 @@ pub(crate) struct AdminState {
     persistence: Persistence,
     config: Arc<CapturedConfig>,
     pub(crate) work_available: Arc<Notify>,
-    update_status: crate::update::SharedUpdateStatus,
     cluster_runtime: Arc<ClusterRuntime>,
     /// Public origins from `[cluster]`, which server mode requires.
     proxy_origin: String,
@@ -125,7 +124,6 @@ impl AdminState {
             persistence,
             config,
             work_available,
-            update_status: crate::update::background_status_disabled("cluster_managed"),
             cluster_runtime,
             proxy_origin,
             admin_origin,
@@ -308,7 +306,7 @@ fn embedded_dashboard_response(path: &str) -> Response {
     ),
     components(schemas(
         HealthResponse, ReadinessResponse, StatusResponse, CaptureSettingResponse,
-        UpdateCaptureSetting, AutoSealSettingResponse, UpdateAutoSealSetting, TraceCounts, UpdateStatusResponse, NotariesResponse, Notary,
+        UpdateCaptureSetting, AutoSealSettingResponse, UpdateAutoSealSetting, TraceCounts, NotariesResponse, Notary,
         NotaryReadinessResponse, NotaryReadinessPhase,
         ProvidersResponse, Provider, TraceState, TraceOperationalStatus, TracePage, TraceSummary,
         TraceDetail, EvidenceArtifact,
@@ -382,7 +380,6 @@ pub(crate) async fn health() -> Json<HealthResponse> {
         service: "capture-server".into(),
         status: "ok".into(),
         api_version: API_VERSION.into(),
-        build_id: crate::service::BUILD_ID.into(),
     })
 }
 
@@ -535,10 +532,8 @@ async fn status(State(state): State<AdminState>) -> Result<Json<StatusResponse>,
         .capture_mode()
         .await
         .map_err(|_| ApiError::service_unavailable("metadata_not_ready"))?;
-    let update = state.update_status.read().await;
     Ok(Json(StatusResponse {
         version: env!("CARGO_PKG_VERSION").into(),
-        build_id: crate::service::BUILD_ID.into(),
         runtime_profile: "cluster".into(),
         instance_id: Some(state.cluster_runtime.identity().instance_id().to_owned()),
         incarnation_id: Some(state.cluster_runtime.identity().incarnation_id().to_owned()),
@@ -561,14 +556,6 @@ async fn status(State(state): State<AdminState>) -> Result<Json<StatusResponse>,
         .into(),
         preview_chars: state.config.metadata.prompt_preview_chars,
         counts: TraceCounts::from(counts),
-        updates: UpdateStatusResponse {
-            enabled: update.enabled,
-            current_build_id: update.current_build_id.clone(),
-            latest_build_id: update.latest_build_id.clone(),
-            update_available: update.update_available,
-            last_checked_unix_ms: update.last_checked_unix_ms,
-            error_code: update.error_code.clone(),
-        },
     }))
 }
 
@@ -950,7 +937,6 @@ pub(crate) struct HealthResponse {
     service: String,
     status: String,
     api_version: String,
-    build_id: String,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -987,7 +973,6 @@ impl From<crate::metadata::MetadataCounts> for TraceCounts {
 #[derive(Debug, Serialize, ToSchema)]
 struct StatusResponse {
     version: String,
-    build_id: String,
     runtime_profile: String,
     instance_id: Option<String>,
     incarnation_id: Option<String>,
@@ -1005,17 +990,6 @@ struct StatusResponse {
     notary: String,
     preview_chars: usize,
     counts: TraceCounts,
-    updates: UpdateStatusResponse,
-}
-
-#[derive(Debug, Serialize, ToSchema)]
-struct UpdateStatusResponse {
-    enabled: bool,
-    current_build_id: String,
-    latest_build_id: Option<String>,
-    update_available: bool,
-    last_checked_unix_ms: Option<u64>,
-    error_code: Option<String>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]

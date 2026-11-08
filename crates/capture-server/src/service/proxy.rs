@@ -857,10 +857,7 @@ async fn proxy(State(state): State<AppState>, mut request: Request) -> Response 
         let mut response = if request.method() == http::Method::HEAD {
             Response::new(Body::empty())
         } else {
-            Response::new(Body::from(format!(
-                r#"{{"service":"capture-server","status":"ok","build_id":"{}"}}"#,
-                crate::service::BUILD_ID
-            )))
+            Response::new(Body::from(r#"{"service":"capture-server","status":"ok"}"#))
         };
         response.headers_mut().insert(
             http::header::CONTENT_TYPE,

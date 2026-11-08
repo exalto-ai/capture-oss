@@ -1260,7 +1260,6 @@ dependencies = [
  "bytes",
  "capture-core",
  "capture-engine",
- "capture-updater",
  "clap",
  "hex",
  "http",

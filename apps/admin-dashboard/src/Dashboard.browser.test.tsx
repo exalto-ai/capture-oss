@@ -1169,8 +1169,10 @@ describe('Notary admin dashboard', () => {
 
   test('renders cluster administration context without making local-only claims', async () => {
     const fixture = createFixtureApi();
+    // A capture server reports no build and no update status.
+    const { build_id: _build, updates: _updates, ...local } = await fixture.status();
     const clusterStatus = {
-      ...(await fixture.status()),
+      ...local,
       runtime_profile: 'cluster',
       instance_id: 'notary-2',
       proxy_origin: 'https://proxy.notary.example',
@@ -1181,7 +1183,7 @@ describe('Notary admin dashboard', () => {
     };
     const api: LocalApi = {
       ...fixture,
-      status: async () => clusterStatus,
+      status: async () => clusterStatus as never,
       providers: async () => ({
         providers: [
           {
@@ -1207,6 +1209,7 @@ describe('Notary admin dashboard', () => {
       .element(page.getByText('Both listeners are restricted to loopback.', { exact: true }))
       .not.toBeInTheDocument();
     await expect.element(page.getByText('Cluster admin')).toBeVisible();
+    await expect.element(page.getByText('Updates', { exact: true })).not.toBeInTheDocument();
   });
 
   test('keeps admin authentication distinct from the hosted Account setting', async () => {

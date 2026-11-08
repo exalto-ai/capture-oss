@@ -275,17 +275,18 @@ export function StandaloneSettingsView({ status, api }: { status: Status; api: L
       message: 'Use this URL to discover admin routes and request bodies.',
     });
   };
-  const updateState = !status.updates.enabled
-    ? isCluster
-      ? 'Managed by deployment'
-      : 'Disabled for source builds'
-    : status.updates.update_available
-      ? `Available: ${status.updates.latest_build_id}`
-      : status.updates.error_code
-        ? 'Check failed'
-        : status.updates.last_checked_unix_ms
-          ? 'Up to date'
-          : 'Not checked yet';
+  // A capture server is deployed, never self-updated, and reports no build.
+  const updateState = isCluster
+    ? null
+    : !status.updates.enabled
+      ? 'Disabled for source builds'
+      : status.updates.update_available
+        ? `Available: ${status.updates.latest_build_id}`
+        : status.updates.error_code
+          ? 'Check failed'
+          : status.updates.last_checked_unix_ms
+            ? 'Up to date'
+            : 'Not checked yet';
 
   return (
     <div className="view-page settings-page">
@@ -371,8 +372,8 @@ export function StandaloneSettingsView({ status, api }: { status: Status; api: L
             />
             <Fact label="API version" value="v1" />
             <Fact label="Service version" value={status.version} />
-            <Fact label="Build" value={status.build_id} />
-            <Fact label="Updates" value={updateState} />
+            {updateState && <Fact label="Build" value={status.build_id} />}
+            {updateState && <Fact label="Updates" value={updateState} />}
           </dl>
           <Text className="safe-note">
             <ShieldCheck size={15} />{' '}
@@ -380,7 +381,7 @@ export function StandaloneSettingsView({ status, api }: { status: Status; api: L
               ? 'Public traffic uses the configured TLS ingress; provider requests must never be replayed.'
               : 'Both listeners are restricted to loopback.'}
           </Text>
-          {status.updates.update_available && (
+          {!isCluster && status.updates.update_available && (
             <Text>
               Run <code>capture update</code>, then restart the service after active work finishes.
             </Text>

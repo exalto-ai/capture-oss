@@ -1686,14 +1686,10 @@
         "required": [
           "service",
           "status",
-          "api_version",
-          "build_id"
+          "api_version"
         ],
         "properties": {
           "api_version": {
-            "type": "string"
-          },
-          "build_id": {
             "type": "string"
           },
           "service": {
@@ -2070,7 +2066,6 @@
         "type": "object",
         "required": [
           "version",
-          "build_id",
           "runtime_profile",
           "lifecycle",
           "capture_mode",
@@ -2085,8 +2080,7 @@
           "vault",
           "notary",
           "preview_chars",
-          "counts",
-          "updates"
+          "counts"
         ],
         "properties": {
           "admin_listener": {
@@ -2099,9 +2093,6 @@
             "type": "string"
           },
           "artifact_status": {
-            "type": "string"
-          },
-          "build_id": {
             "type": "string"
           },
           "capture_mode": {
@@ -2146,9 +2137,6 @@
           },
           "runtime_profile": {
             "type": "string"
-          },
-          "updates": {
-            "$ref": "#/components/schemas/UpdateStatusResponse"
           },
           "vault": {
             "type": "string"
@@ -2588,45 +2576,6 @@
           }
         },
         "additionalProperties": false
-      },
-      "UpdateStatusResponse": {
-        "type": "object",
-        "required": [
-          "enabled",
-          "current_build_id",
-          "update_available"
-        ],
-        "properties": {
-          "current_build_id": {
-            "type": "string"
-          },
-          "enabled": {
-            "type": "boolean"
-          },
-          "error_code": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "last_checked_unix_ms": {
-            "type": [
-              "integer",
-              "null"
-            ],
-            "format": "int64",
-            "minimum": 0
-          },
-          "latest_build_id": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "update_available": {
-            "type": "boolean"
-          }
-        }
       },
       "VerificationOutcome": {
         "type": "string",
