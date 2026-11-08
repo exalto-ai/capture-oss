@@ -17,8 +17,8 @@ server's admission-policy seam. Self-hosting does not require an Exalto account.
 
 ## Get started
 
-- [Install the CLI and capture your first exchange](https://capture.exalto.ai/docs/getting-started)
-- [Download Exalto Capture for macOS](https://capture.exalto.ai/docs/getting-started)
+- [Build the desktop app and CLI](#build-from-source); signed builds are not published yet
+- [Capture your first exchange](https://capture.exalto.ai/docs/getting-started)
 - [Run your own notary](docs/self-hosting.md)
 - [Read the architecture and trust model](docs/architecture.md)
 - [Understand Trace formats and verification](docs/artifact-formats.md)
