@@ -18,7 +18,7 @@ pub(super) const CAPTURE_STATE_CHANGED_EVENT: &str = "exalto:capture-state-chang
 /// Menu-bar commands the web view carries out: a view name, `new-chat`, or `find`.
 pub(super) const MENU_COMMAND_EVENT: &str = "exalto:menu";
 const GUIDE_URL: &str = "https://capture.exalto.ai/docs";
-const REPORT_URL: &str = "https://github.com/exalto-ai/notary/issues/new";
+const REPORT_URL: &str = "https://github.com/exalto-ai/capture-oss/issues/new";
 const MENU_BAR_CAPTURE_PREFIX: &str = "menu_capture_";
 const TRAY_CAPTURE_PREFIX: &str = "tray_capture_";
 const CAPTURE_MENU_LABEL: &str = "Capture";

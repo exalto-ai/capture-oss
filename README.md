@@ -1,6 +1,6 @@
-# Capture Runtime
+# Exalto Capture, open source
 
-[![Public Runtime CI](https://github.com/exalto-ai/capture-runtime/actions/workflows/ci.yml/badge.svg)](https://github.com/exalto-ai/capture-runtime/actions/workflows/ci.yml)
+[![Public Runtime CI](https://github.com/exalto-ai/capture-oss/actions/workflows/ci.yml/badge.svg)](https://github.com/exalto-ai/capture-oss/actions/workflows/ci.yml)
 [![MIT license](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE-MIT)
 
 The open-source foundation of **Exalto Capture** and the **Exalto Capture Protocol (ECP)**.
@@ -44,8 +44,8 @@ Local capture runs inside the desktop app (below). The CLI and the capture
 server require Rust 1.95.0 and a C toolchain:
 
 ```bash
-git clone https://github.com/exalto-ai/capture-runtime.git
-cd capture-runtime
+git clone https://github.com/exalto-ai/capture-oss.git
+cd capture-oss
 cargo install --locked --path crates/capture --bin capture
 cargo install --locked --path crates/capture-server --bin capture-server
 ```
@@ -80,7 +80,7 @@ npm --prefix apps/desktop ci
 npm --prefix apps/desktop exec -- tauri build --debug --no-bundle
 ```
 
-[Public CI](https://github.com/exalto-ai/capture-runtime/actions/workflows/ci.yml)
+[Public CI](https://github.com/exalto-ai/capture-oss/actions/workflows/ci.yml)
 runs Rust formatting, linting, and tests, builds the dashboard, and builds the
 macOS desktop app from this repository. Run the Runtime tests locally with:
 
@@ -90,20 +90,16 @@ cargo test --locked --workspace --all-targets --all-features
 
 ## Development and feedback
 
-Use [public issues](https://github.com/exalto-ai/capture-runtime/issues) for bugs
+Use [public issues](https://github.com/exalto-ai/capture-oss/issues) for bugs
 and suggestions. Report vulnerabilities privately as described in
 [SECURITY.md](SECURITY.md).
 
-Development currently happens in Exalto’s private monorepo and is exported
-here after validation. Public pull requests can be reviewed here, but accepted
-changes must be imported into that monorepo before export; merging a change
-only into this mirror would allow the next export to overwrite it. Each export
-records its source revision in `.capture-source.json`.
+Development happens in Exalto’s private monorepo, and every change to this
+tree is published here, with its history, once it passes validation there.
+Public pull requests are welcome; an accepted change is applied in the monorepo
+and arrives here through that sync.
 
-[GitHub Releases](https://github.com/exalto-ai/capture-runtime/releases) provide
-change notes and download links. Stable source releases use `vX.Y.Z` tags.
-Official clients use the signed `latest` update channel at `downloads.capture.exalto.ai`; see
-[download verification](docs/releases.md).
+No releases are published yet. Build from source as above.
 
 ## License
 

@@ -1,0 +1,39 @@
+# Secret scanning for this repository. The private repository that publishes it
+# extends this file.
+title = "Capture secret scanning"
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "notary-private-artifact"
+description = "Notary private evidence or local credential artifact"
+path = '''(?i)(^|/)(bundles?|captures?|traces?)(/|$)|(^|/)capture-api\.db$|\.(llmcapture|llmbundle|bundle\.json|key|pem|sqlite)$'''
+tags = ["notary", "private-artifact"]
+
+[[rules.allowlists]]
+description = "Vendored public certificate used by TLS parsing tests"
+paths = ['''(^|/)vendor/tlsn/crates/tls-core/testdata/cert-digicert\.pem$''']
+
+# The CLI crate and the agent skill are named `capture`, so the same directory clause matches
+# them. Only their own sources and documents are exempt.
+[[rules.allowlists]]
+description = "Capture CLI crate and agent skill sources, not captured evidence"
+paths = [
+  '''(^|/)crates/capture/(Cargo\.toml|(src|tests)/.+\.rs)$''',
+  '''(^|/)skills/capture/(SKILL\.md|agents/[^/]+\.yaml|references/[^/]+\.md)$''',
+]
+
+[[allowlists]]
+description = "Exact synthetic credentials and detector literals in Runtime tests"
+regexTarget = "line"
+regexes = [
+  '''authorization: Bearer offline-(server|daemon-e2e)-secret''',
+  '''x-notary-trusted-notary-key: 0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798''',
+  '''"verification_key": "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"''',
+  '''"eyJhbGciOiJIUzI1NiJ9\.eyJzdWIiOiJmaXh0dXJlIn0\.signaturevalue1234"''',
+  '''["']-----BEGIN (OPENSSH )?PRIVATE KEY-----["'] in text''',
+  '''\("-----BEGIN (OPENSSH )?PRIVATE KEY-----", "-----END (OPENSSH )?PRIVATE KEY-----"\),''',
+  '''b"-----begin (rsa |ec )?private key-----",''',
+  '''\("pem", "-----BEGIN PRIVATE KEY-----"\)''',
+]

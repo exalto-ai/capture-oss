@@ -1,6 +1,6 @@
 # Releases and download verification
 
-[GitHub Releases](https://github.com/exalto-ai/capture-runtime/releases) list
+[GitHub Releases](https://github.com/exalto-ai/capture-oss/releases) list
 changes, compatibility notes, and downloads. Tags named `vX.Y.Z` identify the
 public source. Installable clients are hosted separately on Exalto’s download
 service. Links in each release identify an immutable build, so they continue
