@@ -475,8 +475,8 @@ pub async fn run(args: ProxyArgs) -> Result<()> {
     let listener = tokio::net::TcpListener::bind(listen).await?;
     let admin_listener = tokio::net::TcpListener::bind(config.admin.listen).await?;
     // The customer API acts in the same organizations' states as provider
-    // requests, with the operator listener's notary trust, notarization
-    // worker wake-up and Trace lifecycle gate.
+    // requests, with the operator listener's notary trust and notarization
+    // worker wake-up.
     let customer = match customer_api {
         Some((customer_listen, token)) => {
             let app = crate::customer_api::router(CustomerApiState::new(

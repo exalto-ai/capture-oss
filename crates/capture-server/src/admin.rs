@@ -118,7 +118,7 @@ impl AdminState {
                 cluster_runtime.clone(),
             )),
             work_available.clone(),
-            Arc::new(Mutex::new(())),
+            None,
             true,
         );
         Ok(Self {

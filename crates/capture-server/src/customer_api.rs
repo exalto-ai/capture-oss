@@ -70,8 +70,8 @@ pub(crate) struct CustomerApiState {
     /// provider listener.
     organizations: Arc<OrganizationCaptures>,
     /// The operator listener's context, whose notary trust, notarization
-    /// worker wake-up, Trace lifecycle gate and cluster-managed restrictions
-    /// every organization's context shares.
+    /// worker wake-up and cluster-managed restrictions every organization's
+    /// context shares.
     shared: ApiContext,
     cluster_runtime: Arc<ClusterRuntime>,
 }
@@ -233,7 +233,7 @@ mod tests {
     use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
     use capture_engine::admission::NoAdmission;
     use http_body_util::BodyExt as _;
-    use tokio::sync::{Mutex, Notify};
+    use tokio::sync::Notify;
     use tower::ServiceExt as _;
 
     use super::*;
@@ -290,7 +290,7 @@ mod tests {
             operator.mode,
             Arc::new(DaemonNotaryTrust::new(config, cluster_runtime.clone())),
             work_available.clone(),
-            Arc::new(Mutex::new(())),
+            None,
             true,
         );
         let token_file = directory.join("customer_api_token");

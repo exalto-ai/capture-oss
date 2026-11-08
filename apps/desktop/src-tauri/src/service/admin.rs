@@ -111,7 +111,7 @@ impl AdminState {
             capture_mode.clone(),
             Arc::new(LocalNotaryTrust::new(config.clone())),
             work_available.clone(),
-            trace_lifecycle.clone(),
+            Some(trace_lifecycle.clone()),
             false,
         );
         Ok(Self {

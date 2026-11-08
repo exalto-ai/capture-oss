@@ -50,8 +50,9 @@ pub struct ApiContext {
     trust: Arc<dyn NotaryTrust>,
     /// Wakes the notarization worker when an operation is queued.
     work_available: Arc<Notify>,
-    /// Serializes retained-package reads, deletion, and sharing for a host.
-    trace_lifecycle: Arc<Mutex<()>>,
+    /// Keeps Trace deletion from racing sealing, sharing and retained-package
+    /// reads. A cluster cannot delete Traces, so a cluster replica has none.
+    trace_lifecycle: Option<Arc<Mutex<()>>>,
     /// A cluster replica manages auto-seal and Trace deletion itself, so those
     /// routes refuse changes.
     cluster_managed: bool,
@@ -65,7 +66,7 @@ impl ApiContext {
         mode: Arc<dyn CaptureModeSource>,
         trust: Arc<dyn NotaryTrust>,
         work_available: Arc<Notify>,
-        trace_lifecycle: Arc<Mutex<()>>,
+        trace_lifecycle: Option<Arc<Mutex<()>>>,
         cluster_managed: bool,
     ) -> Self {
         Self {
@@ -94,6 +95,13 @@ impl ApiContext {
             cluster_managed: self.cluster_managed,
             #[cfg(feature = "test-support")]
             verification_test_hook: self.verification_test_hook.clone(),
+        }
+    }
+
+    async fn lifecycle_gate(&self) -> Option<tokio::sync::MutexGuard<'_, ()>> {
+        match &self.trace_lifecycle {
+            Some(gate) => Some(gate.lock().await),
+            None => None,
         }
     }
 
@@ -509,7 +517,7 @@ pub async fn delete_trace(
     }
     // Sharing calls hold this gate across their hosted request and metadata
     // update. Deletion therefore cannot strand newly activated public access.
-    let _lifecycle = state.trace_lifecycle.lock().await;
+    let _lifecycle = state.lifecycle_gate().await;
     match delete_local_trace_unlocked(&state, &trace_id).await? {
         LocalTraceDeletion::Deleted => Ok(StatusCode::NO_CONTENT),
         LocalTraceDeletion::Skipped(TraceDeletionSkipReason::CaptureActive) => {
@@ -535,7 +543,7 @@ pub async fn start_notarization(
     validate_id(&trace_id, "trc-")?;
     // Serialize activation with local deletion's safety preflight and artifact
     // cleanup. Existing queued or running work is still rejected by metadata.
-    let _lifecycle = state.trace_lifecycle.lock().await;
+    let _lifecycle = state.lifecycle_gate().await;
     let capture = state
         .storage
         .metadata
@@ -672,7 +680,7 @@ pub async fn verify_trace(
     validate_id(&trace_id, "trc-")?;
     // Retained verification and deletion share one lifecycle gate, so the
     // package cannot disappear between its metadata lookup and verified read.
-    let _lifecycle = state.trace_lifecycle.lock().await;
+    let _lifecycle = state.lifecycle_gate().await;
     #[cfg(feature = "test-support")]
     if let Some(hook) = state.verification_test_hook.as_ref() {
         hook.entered.notify_one();
