@@ -20,11 +20,7 @@ ENTRYPOINT ["capture-server"]
 FROM daemon AS cluster
 
 RUN groupadd --gid 10001 notary \
-    && useradd --uid 10001 --gid 10001 --system --no-create-home notary \
-    && mkdir -p /var/lib/capture/config /var/lib/capture/data \
-    && chown -R 10001:10001 /var/lib/capture
-ENV XDG_CONFIG_HOME=/var/lib/capture/config \
-    XDG_DATA_HOME=/var/lib/capture/data
+    && useradd --uid 10001 --gid 10001 --system --no-create-home notary
 USER 10001:10001
 EXPOSE 8787 8788
 

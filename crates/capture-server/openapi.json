@@ -265,75 +265,6 @@
         ]
       }
     },
-    "/v1/notaries/readiness": {
-      "get": {
-        "tags": [
-          "local-admin"
-        ],
-        "summary": "Probe trusted Notary reachability",
-        "description": "Resolves the endpoint selected by current Registry or explicit key trust, then performs a bounded TCP connection and configured TLS validation. It sends no admission credential and starts no capture, sealing, or billable operation. Ready means the transport is reachable; final admission is still checked when sealing starts.",
-        "operationId": "notary_readiness",
-        "parameters": [
-          {
-            "name": "refresh",
-            "in": "query",
-            "description": "Ignore the short-lived probe cache and check the trusted endpoint now.",
-            "required": false,
-            "schema": {
-              "type": "boolean",
-              "default": false
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/NotaryReadinessResponse"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "500": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "basicAuth": []
-          }
-        ]
-      }
-    },
     "/v1/operations/{operation_id}": {
       "get": {
         "tags": [
@@ -1854,62 +1785,6 @@
           },
           "verification_key": {
             "type": "string"
-          }
-        }
-      },
-      "NotaryReadinessPhase": {
-        "type": "string",
-        "enum": [
-          "trust_unavailable",
-          "unreachable",
-          "ready"
-        ]
-      },
-      "NotaryReadinessResponse": {
-        "type": "object",
-        "required": [
-          "phase",
-          "source",
-          "configured",
-          "trusted",
-          "reachable",
-          "checked_at_unix_ms",
-          "message"
-        ],
-        "properties": {
-          "checked_at_unix_ms": {
-            "type": "integer",
-            "format": "int64",
-            "minimum": 0
-          },
-          "configured": {
-            "type": "boolean",
-            "description": "A trust source is selected in local configuration."
-          },
-          "message": {
-            "type": "string"
-          },
-          "phase": {
-            "$ref": "#/components/schemas/NotaryReadinessPhase"
-          },
-          "reachable": {
-            "type": "boolean",
-            "description": "The endpoint completed TCP connection and, when configured, TLS validation."
-          },
-          "source": {
-            "type": "string",
-            "description": "`registry` or `explicit_configuration`."
-          },
-          "transport": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "`tcp` or `tls` after trusted endpoint resolution."
-          },
-          "trusted": {
-            "type": "boolean",
-            "description": "The current trust source resolved a validated endpoint and key selection."
           }
         }
       },

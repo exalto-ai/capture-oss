@@ -25,7 +25,7 @@ use tokio::sync::watch;
 use tracing::Instrument as _;
 
 use super::{
-    admission::{AccountAdmission, CaptureService, ServerAdmission},
+    admission::{CaptureService, ServerAdmission},
     auth,
     authentication::{self, AuthenticationError, Authenticator, HeaderError},
     http_client_builder,
@@ -47,8 +47,8 @@ use crate::{
 };
 
 pub struct ProxyArgs {
-    /// Versioned server configuration file. Defaults to the standard path.
-    pub(crate) config: Option<PathBuf>,
+    /// Versioned server configuration file.
+    pub(crate) config: PathBuf,
 }
 
 /// The provider listener's state: who a request is, and that organization's
@@ -270,14 +270,10 @@ impl NotaryTrust for DaemonNotaryTrust {
         super::registry::witness_key_from_records(&records, exchange)
     }
 
-    async fn package_key(&self, embedded_key: Vec<u8>, created_at_unix_ms: u64) -> Result<Vec<u8>> {
-        Ok(match self.config.notary_public_key()? {
-            Some(key) => key,
-            None => {
-                super::registry::cached_registry_key_at(&embedded_key, created_at_unix_ms)?;
-                embedded_key
-            }
-        })
+    /// A server never reuses an existing trace package, which is the only
+    /// reason to ask.
+    async fn package_key(&self, _embedded_key: Vec<u8>, _created_at: u64) -> Result<Vec<u8>> {
+        anyhow::bail!("a capture server does not reuse existing trace packages")
     }
 
     async fn sealing_notary(
@@ -294,7 +290,7 @@ impl NotaryTrust for DaemonNotaryTrust {
             }
             (None, None) => {
                 let (registry, source) =
-                    fetch_registry_from(&auth::configured_api_origin()?).await?;
+                    fetch_registry_from(&auth::environment_api_origin()?).await?;
                 let trust = self
                     .cluster_runtime
                     .metadata()
@@ -323,43 +319,31 @@ impl NotaryTrust for DaemonNotaryTrust {
             .map(Some)
     }
 
+    /// `shared` is always given: [`Self::shared_registry`] never returns
+    /// `None`.
     fn registry_key_at(
         &self,
         shared: Option<&RegistrySnapshot>,
         embedded_key: &[u8],
         created_at_unix_ms: u64,
     ) -> Result<(String, String)> {
-        match shared {
-            Some(shared) => {
-                super::registry::registry_key_at(shared, embedded_key, created_at_unix_ms)
-            }
-            None => super::registry::cached_registry_key_at(embedded_key, created_at_unix_ms),
-        }
+        let shared = shared.context("shared Registry is not pinned")?;
+        super::registry::registry_key_at(shared, embedded_key, created_at_unix_ms)
     }
-}
-
-/// Refuses a configuration without `[cluster]`. Server mode needs PostgreSQL
-/// metadata, S3 artifacts and admin authentication, which `[cluster]`
-/// already requires; local capture belongs to the desktop app.
-pub(crate) fn require_server_configuration(config: &CapturedConfig) -> Result<()> {
-    if config.cluster.is_none() {
-        bail!(
-            "capture-server runs only as a server: configure [cluster] with PostgreSQL metadata and S3 storage. For local capture, use the Exalto Capture app"
-        );
-    }
-    Ok(())
 }
 
 pub async fn run(args: ProxyArgs) -> Result<()> {
-    let (config, config_path) = load_captured_config(args.config.as_deref())?;
-    require_server_configuration(&config)?;
-    auth::validate_credential_configuration()?;
+    let (config, config_path) = load_captured_config(Some(&args.config))?;
+    // Server mode needs PostgreSQL metadata, S3 artifacts and admin
+    // authentication, which `[cluster]` validation already requires; local
+    // capture belongs to the desktop app.
+    let Some(cluster) = config.cluster.as_ref() else {
+        bail!(
+            "capture-server runs only as a server: configure [cluster] with PostgreSQL metadata and S3 storage. For local capture, use the Exalto Capture app"
+        );
+    };
     // Provider requests are authenticated as organizations; a bad token file
     // stops startup here.
-    let cluster = config
-        .cluster
-        .as_ref()
-        .context("server mode requires [cluster]")?;
     let authentication_config = &cluster.authentication;
     let authentication_kind = match authentication_config {
         AuthenticationConfig::Hosted { .. } => "hosted",
@@ -378,9 +362,6 @@ pub async fn run(args: ProxyArgs) -> Result<()> {
     let listen = config.proxy.listen;
     let max_frame_bytes = config.notary.max_frame_bytes;
     let max_attestable_http_bytes = config.proxy.max_attestable_http_bytes;
-    if max_attestable_http_bytes == 0 {
-        bail!("maximum attestable HTTP bytes must be non-zero");
-    }
     // Open and validate persistence before notary discovery. A PostgreSQL
     // outage or unmigrated schema therefore fails startup directly.
     let identity = ClusterRuntime::identity_from_environment()?;
@@ -495,7 +476,7 @@ pub async fn run(args: ProxyArgs) -> Result<()> {
         notary = notary.as_ref().map(ToString::to_string).as_deref().unwrap_or("not yet discovered"),
         operator_capture_mode = operator_stored_mode.as_str(),
         authentication = authentication_kind,
-        admission = admission.kind(hosted_admission),
+        admission = admission.kind(),
         config = %config_path.display(),
         providers = ?Provider::ALL,
         "Notary daemon proxy listening"
@@ -683,8 +664,7 @@ pub(crate) fn hosted_admission_required(config: &CapturedConfig) -> bool {
 
 /// Who pays for notary admission. A self-hosted notary needs none. For the
 /// hosted notary, hosted authentication charges each operation to its
-/// organization with the capture service token, and a token file server's
-/// own connected Exalto account pays for every organization.
+/// organization with the capture service token.
 fn server_admission(
     authentication: &AuthenticationConfig,
     hosted_admission: bool,
@@ -700,17 +680,12 @@ fn server_admission(
                 "hosted authentication with the hosted notary requires cluster.authentication.capture_service_token_file",
             )?;
             Ok(ServerAdmission::PerOrganization(Arc::new(
-                CaptureService::load(auth::configured_api_origin()?, token_file)?,
+                CaptureService::load(auth::environment_api_origin()?, token_file)?,
             )))
         }
-        AuthenticationConfig::TokenFile { .. } => {
-            if !auth::api_key_mode_active()? {
-                bail!(
-                    "the hosted notary requires CAPTURE_PLATFORM_API_KEY or CAPTURE_PLATFORM_API_KEY_FILE, whose account pays for every organization's admission"
-                );
-            }
-            Ok(ServerAdmission::Shared(Arc::new(AccountAdmission)))
-        }
+        AuthenticationConfig::TokenFile { .. } => bail!(
+            "token_file authentication needs a self-hosted notary: configure notary.endpoint and notary.public_key"
+        ),
     }
 }
 
@@ -826,7 +801,7 @@ async fn initialize_notary(
         Some(notary) => Ok(notary),
         None => {
             let (registry, registry_source_url) =
-                fetch_registry_from(&super::auth::configured_api_origin()?).await?;
+                fetch_registry_from(&super::auth::environment_api_origin()?).await?;
             let snapshot = cluster_runtime
                 .metadata()
                 .pin_registry(registry, registry_source_url.as_str())
@@ -1067,16 +1042,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn local_configurations_are_refused() {
-        let error = require_server_configuration(&CapturedConfig::default()).unwrap_err();
-        assert!(
-            error
-                .to_string()
-                .starts_with("capture-server runs only as a server")
-        );
-    }
-
-    #[test]
     fn explicit_self_hosted_notaries_never_require_admission_tickets() {
         let mut config = CapturedConfig::default();
         assert!(hosted_admission_required(&config));
@@ -1092,9 +1057,7 @@ mod tests {
         use capture_engine::{
             artifact_store::{ArtifactKind, ArtifactLocator},
             metadata::TraceFilters,
-            metadata_store::{
-                CaptureClaim, ReplicaIdentity, ServerMetadataStore as _, conformance,
-            },
+            metadata_store::{CaptureClaim, ReplicaIdentity, conformance},
         };
         use http_body_util::BodyExt as _;
         use sha2::{Digest as _, Sha256};

@@ -231,14 +231,11 @@ services:
       CAPTURE_SERVER_CLUSTER_INSTANCE_ID: daemon-a
       CAPTURE_SERVER_CLUSTER_VAULT_KEY_FILE: /state/secrets/cluster-vault.key
       CAPTURE_PLATFORM_API_ORIGIN: http://127.0.0.1:9797
-      CAPTURE_PLATFORM_API_KEY: notary_key_11111111111111111111111111111111_2222222222222222222222222222222222222222222222222222222222222222
       CAPTURE_SERVER_E2E_ROOT_CA_DER: /fixtures/ca.der
       CAPTURE_SERVER_E2E_PAUSE_AFTER_NOTARIZED_ARTIFACT_MS: ${DAEMON_E2E_SERVER_NOTARIZATION_PAUSE_MS:-0}
       CAPTURE_SERVER_METADATA_DATABASE_URL: postgresql://daemon_e2e:synthetic-daemon-e2e-password@postgres:5432/daemon_e2e
       CAPTURE_SERVER_ARTIFACT_S3_ACCESS_KEY_ID: daemon-e2e-access-key
       CAPTURE_SERVER_ARTIFACT_S3_SECRET_ACCESS_KEY: synthetic-daemon-e2e-secret-key
-      XDG_CONFIG_HOME: /state/xdg-config
-      XDG_DATA_HOME: /state/xdg-data
     volumes:
       - daemon-state:/state:ro
       - fixture-state:/fixtures:ro
@@ -277,14 +274,11 @@ services:
       CAPTURE_SERVER_CLUSTER_INSTANCE_ID: daemon-b
       CAPTURE_SERVER_CLUSTER_VAULT_KEY_FILE: /state/secrets/cluster-vault.key
       CAPTURE_PLATFORM_API_ORIGIN: http://127.0.0.1:9797
-      CAPTURE_PLATFORM_API_KEY: notary_key_11111111111111111111111111111111_2222222222222222222222222222222222222222222222222222222222222222
       CAPTURE_SERVER_E2E_ROOT_CA_DER: /fixtures/ca.der
       CAPTURE_SERVER_E2E_PAUSE_AFTER_NOTARIZED_ARTIFACT_MS: ${DAEMON_E2E_SERVER_NOTARIZATION_PAUSE_MS:-0}
       CAPTURE_SERVER_METADATA_DATABASE_URL: postgresql://daemon_e2e:synthetic-daemon-e2e-password@postgres:5432/daemon_e2e
       CAPTURE_SERVER_ARTIFACT_S3_ACCESS_KEY_ID: daemon-e2e-access-key
       CAPTURE_SERVER_ARTIFACT_S3_SECRET_ACCESS_KEY: synthetic-daemon-e2e-secret-key
-      XDG_CONFIG_HOME: /state/xdg-config
-      XDG_DATA_HOME: /state/xdg-data
     volumes:
       - daemon-state:/state:ro
       - fixture-state:/fixtures:ro

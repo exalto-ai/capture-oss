@@ -208,11 +208,6 @@ refused_after=$("${compose[@]}" logs --no-color provider | grep -c 'POST /v1/cha
 
 if [[ $profile == full ]]; then
   echo "checking fail-closed server startup profiles"
-  if "${compose[@]}" run --rm --no-deps -e CAPTURE_PLATFORM_API_KEY= daemon-a \
-      --config /state/config-cluster-a.toml >/dev/null 2>&1; then
-    echo "server daemon started without an injected API key" >&2
-    exit 1
-  fi
   if "${compose[@]}" run --rm --no-deps --entrypoint /bin/sh daemon-a -ec \
       'dd if=/dev/zero of=/tmp/wrong-vault.key bs=32 count=1 status=none; chmod 600 /tmp/wrong-vault.key; export CAPTURE_SERVER_CLUSTER_VAULT_KEY_FILE=/tmp/wrong-vault.key; exec capture-server --config /state/config-cluster-a.toml' \
       >/dev/null 2>&1; then

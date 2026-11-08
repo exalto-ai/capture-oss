@@ -2,21 +2,20 @@
 
 use std::{sync::Arc, time::Duration};
 
-use anyhow::{Context as _, Result};
+use anyhow::Result;
 use capture_engine::storage::Storage;
 
 use crate::{
     cluster_runtime::ClusterRuntime,
     config::CapturedConfig,
-    metadata_store::{MetadataStore, ReplicaIdentity, ServerMetadataStore},
+    metadata_store::{MetadataStore, ReplicaIdentity},
     organization::OrganizationId,
     postgres_metadata_store::PostgresMetadataStore,
     s3_artifact_store::{S3ArtifactStore, S3ArtifactStoreCredentials},
-    service::proxy::require_server_configuration,
 };
 
-/// The operator's organization: the admin routes and artifact reconciliation
-/// serve it until operator and customer routes are split. Provider requests
+/// The operator's organization: the admin routes serve it until operator
+/// and customer routes are split. Provider requests
 /// are captured for the organization their credential authenticates.
 pub(crate) fn default_organization() -> OrganizationId {
     OrganizationId::parse("default").expect("the default organization identifier is valid")
@@ -33,12 +32,6 @@ pub(crate) struct Persistence {
 }
 
 impl Persistence {
-    /// Opens the shared stores for an offline maintenance command, without
-    /// joining the replica set.
-    pub(crate) async fn open(config: &CapturedConfig) -> Result<Self> {
-        Ok(Self::open_stores(config).await?.0)
-    }
-
     /// Opens persistence for a replica. The shared server metadata store is
     /// handed to the returned runtime, which records claimed work.
     pub(crate) async fn open_cluster(
@@ -49,9 +42,8 @@ impl Persistence {
         Ok((persistence, ClusterRuntime::new(identity, server_metadata)))
     }
 
-    async fn open_stores(config: &CapturedConfig) -> Result<(Self, Arc<dyn ServerMetadataStore>)> {
+    async fn open_stores(config: &CapturedConfig) -> Result<(Self, Arc<PostgresMetadataStore>)> {
         // `[cluster]` validation already requires PostgreSQL and S3.
-        require_server_configuration(config)?;
         let postgres = &config.metadata.postgres;
         let database_url = config.postgres_runtime_url()?;
         let store = Arc::new(
@@ -74,7 +66,7 @@ impl Persistence {
             .storage
             .s3
             .as_ref()
-            .context("server mode requires storage.s3")?;
+            .expect("cluster validation requires storage.s3");
         let credentials = config.s3_credentials()?;
         let artifacts = S3ArtifactStore::new(
             s3.artifact_store_config()?,
@@ -85,7 +77,7 @@ impl Persistence {
             ),
         )
         .map_err(|_| anyhow::anyhow!("S3 artifact storage configuration is invalid"))?;
-        let server_metadata: Arc<dyn ServerMetadataStore> = store;
+        let server_metadata = store;
         Ok((
             Self {
                 metadata: server_metadata.organization(&default_organization()),

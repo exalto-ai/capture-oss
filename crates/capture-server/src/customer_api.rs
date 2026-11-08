@@ -98,12 +98,10 @@ struct RequestOrganization(OrganizationId);
 
 impl ApiContextSource for CustomerApiState {
     fn api_context(&self, request: &Parts) -> Result<ApiContext, ApiError> {
-        // `authenticate` runs before every engine route. A request without
-        // an organization would be a wiring fault, so it acts for nobody.
-        let Some(RequestOrganization(organization)) = request.extensions.get() else {
-            tracing::error!("a customer API request reached a route without an organization");
-            return Err(ApiError::internal("organization_missing"));
-        };
+        let RequestOrganization(organization) = request
+            .extensions
+            .get()
+            .expect("`authenticate` runs before every engine route");
         let state = self.organizations.organization(organization).map_err(|_| {
             tracing::warn!(
                 organization = %organization,
@@ -483,7 +481,6 @@ mod tests {
         for (method, path) in [
             ("GET", "/v1/status"),
             ("GET", "/v1/notaries"),
-            ("GET", "/v1/notaries/readiness"),
             ("GET", "/v1/providers"),
             ("POST", "/v1/session"),
             ("DELETE", "/v1/session"),
@@ -508,7 +505,7 @@ mod tests {
         use capture_engine::{
             artifact_store::{ArtifactKind, ArtifactLocator},
             metadata::{CaptureMode, TraceFilters},
-            metadata_store::{CaptureClaim, ServerMetadataStore as _, conformance},
+            metadata_store::{CaptureClaim, conformance},
         };
 
         use super::*;

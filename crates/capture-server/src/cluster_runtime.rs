@@ -26,9 +26,9 @@ use crate::{
     metadata::{CaptureCompletion, NewTrace, Operation, TerminalOperationResult},
     metadata_store::{
         CaptureClaim, MetadataResult, MetadataStoreError, NotarizationClaim, ReplicaIdentity,
-        ServerMetadataStore,
     },
     organization::OrganizationId,
+    postgres_metadata_store::PostgresMetadataStore,
     s3_artifact_store::S3ArtifactStore,
     service::admission::ServerAdmission,
     vault::Vault,
@@ -68,7 +68,7 @@ pub(crate) enum Lifecycle {
 pub(crate) struct ClusterRuntime {
     identity: ReplicaIdentity,
     lifecycle: AtomicU8,
-    metadata: Arc<dyn ServerMetadataStore>,
+    metadata: Arc<PostgresMetadataStore>,
 }
 
 impl ClusterRuntime {
@@ -84,7 +84,7 @@ impl ClusterRuntime {
         ReplicaIdentity::new(instance_id)
     }
 
-    pub(crate) fn new(identity: ReplicaIdentity, metadata: Arc<dyn ServerMetadataStore>) -> Self {
+    pub(crate) fn new(identity: ReplicaIdentity, metadata: Arc<PostgresMetadataStore>) -> Self {
         Self {
             identity,
             lifecycle: AtomicU8::new(Lifecycle::Starting as u8),
@@ -92,7 +92,7 @@ impl ClusterRuntime {
         }
     }
 
-    pub(crate) fn metadata(&self) -> &Arc<dyn ServerMetadataStore> {
+    pub(crate) fn metadata(&self) -> &Arc<PostgresMetadataStore> {
         &self.metadata
     }
 

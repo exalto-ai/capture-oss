@@ -64,7 +64,7 @@ pub(crate) trait Authenticator: Send + Sync {
 pub(crate) fn from_config(config: &AuthenticationConfig) -> Result<Arc<dyn Authenticator>> {
     Ok(match config {
         AuthenticationConfig::Hosted { .. } => {
-            Arc::new(HostedAuthenticator::new(auth::configured_api_origin()?)?)
+            Arc::new(HostedAuthenticator::new(auth::environment_api_origin()?)?)
         }
         AuthenticationConfig::TokenFile { path } => Arc::new(TokenFileAuthenticator::load(path)?),
     })
@@ -142,10 +142,6 @@ struct CaptureCredential {
 
 impl HostedAuthenticator {
     pub(crate) fn new(origin: ApiOrigin) -> Result<Self> {
-        Self::with_cache(origin, HOSTED_CACHE_TTL, HOSTED_CACHE_CAPACITY)
-    }
-
-    fn with_cache(origin: ApiOrigin, ttl: Duration, capacity: usize) -> Result<Self> {
         let client = http_client_builder()
             .connect_timeout(HOSTED_CONNECT_TIMEOUT)
             .timeout(HOSTED_REQUEST_TIMEOUT)
@@ -155,7 +151,7 @@ impl HostedAuthenticator {
         Ok(Self {
             origin,
             client,
-            cache: AuthenticationCache::new(ttl, capacity),
+            cache: AuthenticationCache::new(HOSTED_CACHE_TTL, HOSTED_CACHE_CAPACITY),
         })
     }
 
@@ -264,9 +260,6 @@ impl AuthenticationCache {
     }
 
     fn insert(&self, digest: [u8; 32], authenticated: Authenticated, now: Instant) {
-        if self.ttl.is_zero() || self.capacity == 0 {
-            return;
-        }
         let mut entries = self.entries.lock().unwrap_or_else(PoisonError::into_inner);
         if entries.len() >= self.capacity && !entries.contains_key(&digest) {
             entries.retain(|_, (expires_at, _)| *expires_at > now);
@@ -530,15 +523,6 @@ mod tests {
                 "{token} must not be cached"
             );
         }
-
-        // Without a cache lifetime every request asks again, which is how a
-        // revoked credential stops working once its cached answer expires.
-        let uncached =
-            HostedAuthenticator::with_cache(origin, Duration::ZERO, HOSTED_CACHE_CAPACITY).unwrap();
-        let before = calls.load(Ordering::SeqCst);
-        uncached.authenticate("alice-token").await.unwrap();
-        uncached.authenticate("alice-token").await.unwrap();
-        assert_eq!(calls.load(Ordering::SeqCst) - before, 2);
 
         server.abort();
         let _ = server.await;

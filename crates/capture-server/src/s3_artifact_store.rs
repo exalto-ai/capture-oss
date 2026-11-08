@@ -4,7 +4,7 @@
 //! treat the locator as opaque. The configured bucket and endpoint identify
 //! the storage namespace; locators intentionally contain neither.
 
-use std::{collections::HashSet, fmt, io::SeekFrom, path::Path, time::Duration};
+use std::{fmt, io::SeekFrom, path::Path, time::Duration};
 
 use anyhow::{Context as _, anyhow};
 use async_trait::async_trait;
@@ -89,13 +89,6 @@ pub(crate) struct S3ArtifactStore {
     operation_timeout: Duration,
 }
 
-/// Bounded, report-only inventory of the configured managed S3 prefix.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) struct S3ReconciliationInventory {
-    pub scanned_objects: usize,
-    pub unreferenced_candidates: usize,
-}
-
 impl S3ArtifactStore {
     pub(crate) fn new(
         config: S3ArtifactStoreConfig,
@@ -167,93 +160,6 @@ impl S3ArtifactStore {
                 backend(anyhow!(error).context("probing the private S3 artifact prefix"))
             })?;
         Ok(())
-    }
-
-    /// Lists only the daemon-owned prefix and reports old objects which are
-    /// not referenced by the supplied metadata records. This never deletes or
-    /// returns object keys.
-    pub(crate) async fn reconciliation_inventory(
-        &self,
-        referenced: &[ArtifactRecord],
-        page_size: usize,
-        older_than_unix_seconds: i64,
-    ) -> ArtifactResult<S3ReconciliationInventory> {
-        if !(1..=1_000).contains(&page_size) {
-            return Err(invalid(
-                "invalid_reconciliation_page_size",
-                anyhow!("S3 reconciliation page size must be between 1 and 1000"),
-            ));
-        }
-        let mut referenced_keys = HashSet::with_capacity(referenced.len());
-        for record in referenced {
-            // Invalid references are counted separately by the caller. Keep
-            // the report available, but do not let an untrusted locator claim
-            // an object in this configured namespace.
-            if let Ok(key) = self.checked_object_key(record) {
-                referenced_keys.insert(key);
-            }
-        }
-
-        let managed_prefix = self.managed_prefix();
-        let mut inventory = S3ReconciliationInventory::default();
-        let mut continuation_token = None;
-        let mut seen_continuation_tokens = HashSet::new();
-        loop {
-            let page_size =
-                i32::try_from(page_size).expect("bounded S3 reconciliation page size fits in i32");
-            let mut request = self
-                .client
-                .list_objects_v2()
-                .bucket(&self.bucket)
-                .prefix(&managed_prefix)
-                .max_keys(page_size);
-            if let Some(token) = continuation_token.as_deref() {
-                request = request.continuation_token(token);
-            }
-            let page = tokio::time::timeout(self.operation_timeout, request.send())
-                .await
-                .map_err(|_| backend(anyhow!("S3 reconciliation listing timed out")))?
-                .map_err(|error| {
-                    backend(anyhow!(error).context("listing private artifact objects"))
-                })?;
-            for object in page.contents() {
-                inventory.scanned_objects = inventory
-                    .scanned_objects
-                    .checked_add(1)
-                    .ok_or_else(|| backend(anyhow!("S3 reconciliation object count overflow")))?;
-                let is_old = object
-                    .last_modified()
-                    .is_some_and(|modified| modified.secs() <= older_than_unix_seconds);
-                if is_old
-                    && object
-                        .key()
-                        .is_some_and(|key| !referenced_keys.contains(key))
-                {
-                    inventory.unreferenced_candidates = inventory
-                        .unreferenced_candidates
-                        .checked_add(1)
-                        .ok_or_else(|| {
-                            backend(anyhow!("S3 reconciliation candidate count overflow"))
-                        })?;
-                }
-            }
-
-            if !page.is_truncated().unwrap_or(false) {
-                break;
-            }
-            let Some(next_token) = page.next_continuation_token().map(str::to_owned) else {
-                return Err(backend(anyhow!(
-                    "S3 reconciliation listing was truncated without a continuation token"
-                )));
-            };
-            if !seen_continuation_tokens.insert(next_token.clone()) {
-                return Err(backend(anyhow!(
-                    "S3 reconciliation listing repeated a continuation token"
-                )));
-            }
-            continuation_token = Some(next_token);
-        }
-        Ok(inventory)
     }
 
     fn managed_prefix(&self) -> String {
@@ -680,50 +586,33 @@ impl S3ArtifactStore {
     }
 }
 
+/// A server stores each artifact under its claim's commit scope
+/// ([`S3ArtifactStore::put_scoped`], [`S3ArtifactStore::find_scoped`]), never
+/// reuses an existing trace package, and never deletes a Trace's bytes.
+fn server_requires_commit_scope() -> ArtifactStoreError {
+    invalid(
+        "server_requires_commit_scope",
+        anyhow!("a capture server stores artifacts only under a claim's commit scope"),
+    )
+}
+
 #[async_trait]
 impl ArtifactStore for S3ArtifactStore {
     async fn put(
         &self,
-        key: &ArtifactKey,
-        source: ArtifactSource,
-        max_bytes: u64,
+        _key: &ArtifactKey,
+        _source: ArtifactSource,
+        _max_bytes: u64,
     ) -> ArtifactResult<ArtifactRecord> {
-        if source.size_bytes() > max_bytes {
-            return Err(ArtifactStoreError::TooLarge {
-                limit: max_bytes,
-                actual: Some(source.size_bytes()),
-            });
-        }
-        if source.size_bytes() > i64::MAX as u64 {
-            return Err(ArtifactStoreError::TooLarge {
-                limit: i64::MAX as u64,
-                actual: Some(source.size_bytes()),
-            });
-        }
-        let staged = stage_source(source).await?;
-        let object_key = self.object_key(key);
-        let disposition = self.put_staged(key, &object_key, &staged).await?;
-        self.verify_put(key, object_key, &staged, disposition).await
+        Err(server_requires_commit_scope())
     }
 
     async fn find(
         &self,
-        key: &ArtifactKey,
-        max_bytes: u64,
+        _key: &ArtifactKey,
+        _max_bytes: u64,
     ) -> ArtifactResult<Option<ArtifactRecord>> {
-        let object_key = self.object_key(key);
-        let Some(object) = self
-            .download_verified(key, &object_key, max_bytes, None, false)
-            .await?
-        else {
-            return Ok(None);
-        };
-        let expected = ExpectedObject {
-            kind: key.kind(),
-            size_bytes: object.size_bytes,
-            sha256: object.sha256,
-        };
-        self.record(key.clone(), object_key, &expected).map(Some)
+        Err(server_requires_commit_scope())
     }
 
     async fn read_verified(
@@ -763,21 +652,8 @@ impl ArtifactStore for S3ArtifactStore {
         ))
     }
 
-    async fn delete(&self, key: &ArtifactKey) -> ArtifactResult<()> {
-        let object_key = self.object_key(key);
-        let request = self
-            .client
-            .delete_object()
-            .bucket(&self.bucket)
-            .key(object_key)
-            .send();
-        tokio::time::timeout(self.operation_timeout, request)
-            .await
-            .map_err(|_| backend(anyhow!("S3 artifact deletion timed out")))?
-            .map_err(|error| {
-                backend(anyhow!(error).context("deleting private S3 artifact object"))
-            })?;
-        Ok(())
+    async fn delete(&self, _key: &ArtifactKey) -> ArtifactResult<()> {
+        Err(server_requires_commit_scope())
     }
 }
 
@@ -934,7 +810,8 @@ mod tests {
     use url::Url;
 
     use super::*;
-    use crate::artifact_store::conformance;
+
+    const COMMIT: &str = "0f8fad5b-d9cb-469f-a165-70867728950e";
 
     /// Keep in step with the SeaweedFS image in the runtime Compose files.
     const SEAWEEDFS_TAG: &str = "4.47";
@@ -1221,8 +1098,9 @@ mod tests {
         let key = ArtifactKey::new("trc-delayed-commit", ArtifactKind::CaptureCheckpoint).unwrap();
         let bytes = b"delayed immutable commit".to_vec();
         let record = store
-            .put(
+            .put_scoped(
                 &key,
+                COMMIT,
                 ArtifactSource::from_bytes(bytes.clone()),
                 bytes.len() as u64,
             )
@@ -1350,17 +1228,15 @@ mod tests {
             .expect("create SeaweedFS test bucket");
         store.readiness().await.unwrap();
         store.readiness().await.unwrap();
-        conformance::run(Arc::new(store.clone())).await;
-
         // Each organization's objects live under its own prefix, and its
         // store refuses another organization's locators.
         let first = store.for_organization(&OrganizationId::parse("acct-first").unwrap());
         let second = store.for_organization(&OrganizationId::parse("acct-second").unwrap());
-        conformance::run(Arc::new(first.clone())).await;
         let org_key = ArtifactKey::new("trc-org-isolation", ArtifactKind::TracePackage).unwrap();
         let first_record = first
-            .put(
+            .put_scoped(
                 &org_key,
+                COMMIT,
                 ArtifactSource::from_bytes(b"first org".to_vec()),
                 9,
             )
@@ -1368,12 +1244,18 @@ mod tests {
             .unwrap();
         assert!(
             first
-                .object_key(&org_key)
+                .scoped_object_key(&org_key, COMMIT)
+                .unwrap()
                 .contains("organizations/acct-first/trace-packages/")
         );
-        assert!(second.find(&org_key, 9).await.unwrap().is_none());
+        assert!(
+            second
+                .find_scoped(&org_key, COMMIT, 9)
+                .await
+                .unwrap()
+                .is_none()
+        );
         assert!(second.read_verified(&first_record, 9).await.is_err());
-        second.delete(&org_key).await.unwrap();
         assert_eq!(
             first
                 .read_verified(&first_record, 9)
@@ -1437,8 +1319,9 @@ mod tests {
         let missing_key =
             ArtifactKey::new("trc-s3-deleted", ArtifactKind::CaptureCheckpoint).unwrap();
         let missing_record = store
-            .put(
+            .put_scoped(
                 &missing_key,
+                COMMIT,
                 ArtifactSource::from_bytes(b"delete me".to_vec()),
                 9,
             )
@@ -1448,7 +1331,7 @@ mod tests {
             .client
             .delete_object()
             .bucket(&store.bucket)
-            .key(store.object_key(&missing_key))
+            .key(store.scoped_object_key(&missing_key, COMMIT).unwrap())
             .send()
             .await
             .unwrap();
@@ -1459,8 +1342,9 @@ mod tests {
 
         let corrupt_key = ArtifactKey::new("trc-s3-corrupt", ArtifactKind::TracePackage).unwrap();
         let corrupt_record = store
-            .put(
+            .put_scoped(
                 &corrupt_key,
+                COMMIT,
                 ArtifactSource::from_bytes(b"original".to_vec()),
                 8,
             )
@@ -1470,7 +1354,7 @@ mod tests {
             .client
             .put_object()
             .bucket(&store.bucket)
-            .key(store.object_key(&corrupt_key))
+            .key(store.scoped_object_key(&corrupt_key, COMMIT).unwrap())
             .content_length(8)
             .metadata(SHA256_METADATA, &corrupt_record.sha256)
             .metadata(SIZE_METADATA, "8")
@@ -1484,7 +1368,10 @@ mod tests {
             ArtifactStoreError::Integrity { .. }
         ));
         assert!(matches!(
-            store.find(&corrupt_key, 8).await.unwrap_err(),
+            store
+                .find_scoped(&corrupt_key, COMMIT, 8)
+                .await
+                .unwrap_err(),
             ArtifactStoreError::Integrity { .. }
         ));
 
@@ -1495,7 +1382,7 @@ mod tests {
             .client
             .put_object()
             .bucket(&store.bucket)
-            .key(store.object_key(&oversized_key))
+            .key(store.scoped_object_key(&oversized_key, COMMIT).unwrap())
             .content_length(oversized_bytes.len() as i64)
             .metadata(
                 SHA256_METADATA,
@@ -1508,52 +1395,11 @@ mod tests {
             .await
             .unwrap();
         assert!(matches!(
-            store.find(&oversized_key, 4).await.unwrap_err(),
+            store
+                .find_scoped(&oversized_key, COMMIT, 4)
+                .await
+                .unwrap_err(),
             ArtifactStoreError::TooLarge { .. }
         ));
-
-        let inventory_config = config_result(
-            &endpoint,
-            true,
-            "reconciliation-only",
-            "daemon-private-test",
-            "us-east-1",
-        )
-        .unwrap();
-        let inventory_store = S3ArtifactStore::new(inventory_config, credentials()).unwrap();
-        inventory_store.readiness().await.unwrap();
-        inventory_store.readiness().await.unwrap();
-        let referenced_key =
-            ArtifactKey::new("trc-s3-referenced", ArtifactKind::CaptureCheckpoint).unwrap();
-        let referenced_record = inventory_store
-            .put(
-                &referenced_key,
-                ArtifactSource::from_bytes(b"referenced".to_vec()),
-                10,
-            )
-            .await
-            .unwrap();
-        let orphan_key =
-            ArtifactKey::new("trc-s3-unreferenced", ArtifactKind::CaptureCheckpoint).unwrap();
-        inventory_store
-            .put(
-                &orphan_key,
-                ArtifactSource::from_bytes(b"unreferenced".to_vec()),
-                12,
-            )
-            .await
-            .unwrap();
-        let within_grace = inventory_store
-            .reconciliation_inventory(std::slice::from_ref(&referenced_record), 1, 0)
-            .await
-            .unwrap();
-        assert_eq!(within_grace.scanned_objects, 2);
-        assert_eq!(within_grace.unreferenced_candidates, 0);
-        let inventory = inventory_store
-            .reconciliation_inventory(&[referenced_record], 1, i64::MAX)
-            .await
-            .unwrap();
-        assert_eq!(inventory.scanned_objects, 2);
-        assert_eq!(inventory.unreferenced_candidates, 1);
     }
 }

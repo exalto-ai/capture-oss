@@ -380,18 +380,6 @@ impl MetadataStore for SqliteMetadataStore {
             .await
     }
 
-    async fn retry_operation(
-        &self,
-        operation_id: &str,
-        now_unix_ms: u64,
-    ) -> MetadataResult<Option<Operation>> {
-        validate_i64(now_unix_ms, "timestamp_out_of_range")?;
-        validate_operation_id(operation_id)?;
-        let operation_id = operation_id.to_owned();
-        self.blocking(move |metadata| metadata.retry_operation(&operation_id, now_unix_ms))
-            .await
-    }
-
     async fn operation(&self, operation_id: &str) -> MetadataResult<Option<Operation>> {
         validate_operation_id(operation_id)?;
         let operation_id = operation_id.to_owned();

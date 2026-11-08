@@ -31,8 +31,8 @@ use crate::{
     },
     metadata_store::{
         CaptureClaim, CaptureRecoveryClaim, MetadataResult, MetadataStore, MetadataStoreError,
-        NotarizationClaim, ReplicaIdentity, ServerMetadataStore, TraceDeletionOutcome,
-        TraceDeletionPreparation, validate_operation_id, validate_trace_id,
+        NotarizationClaim, ReplicaIdentity, TraceDeletionOutcome, TraceDeletionPreparation,
+        validate_operation_id, validate_trace_id,
     },
     organization::OrganizationId,
     registry::Registry,
@@ -67,7 +67,6 @@ const MIGRATIONS: [(i64, &str, &str); 4] = [
 pub(crate) struct PostgresMetadataStore {
     pool: PgPool,
     full_text_search: bool,
-    cluster_mode: bool,
 }
 
 /// One organization's view of the shared metadata. Every read and write is
@@ -91,10 +90,8 @@ impl PostgresMetadataStore {
     }
 
     /// Opens a runtime pool and verifies, without mutating, the exact daemon
-    /// schema version. Replicas use `connect_server`; the metadata contract
-    /// suite uses this to exercise the store without replica state.
-    #[cfg(test)]
-    pub(crate) async fn connect(
+    /// schema version.
+    pub(crate) async fn connect_server(
         database_url: &str,
         max_connections: u32,
         connect_timeout: Duration,
@@ -102,32 +99,6 @@ impl PostgresMetadataStore {
         ssl_mode: PostgresSslMode,
         full_text_search: bool,
     ) -> MetadataResult<Self> {
-        Self::connect_mode(
-            database_url,
-            max_connections,
-            connect_timeout,
-            acquire_timeout,
-            ssl_mode,
-            full_text_search,
-            false,
-        )
-        .await
-    }
-
-    async fn connect_mode(
-        database_url: &str,
-        max_connections: u32,
-        connect_timeout: Duration,
-        acquire_timeout: Duration,
-        ssl_mode: PostgresSslMode,
-        full_text_search: bool,
-        cluster_mode: bool,
-    ) -> MetadataResult<Self> {
-        if max_connections == 0 {
-            return Err(MetadataStoreError::InvalidInput(
-                "invalid_postgres_pool_size",
-            ));
-        }
         let options = database_url
             .parse::<PgConnectOptions>()
             .map_err(|error| db(anyhow!(error).context("parsing daemon PostgreSQL URL")))?
@@ -139,7 +110,7 @@ impl PostgresMetadataStore {
                 .connect_with(options)
                 .await
                 .map_err(|error| db(anyhow!(error).context("opening daemon PostgreSQL pool")))?;
-            Self::from_pool_mode(pool, full_text_search, cluster_mode).await
+            Self::from_pool(pool, full_text_search).await
         })
         .await
         .map_err(|_| {
@@ -167,56 +138,16 @@ impl PostgresMetadataStore {
                         .ssl_mode(pg_ssl_mode(PostgresSslMode::Disable)),
                 ),
             full_text_search: true,
-            cluster_mode: true,
         }
     }
 
     /// Wraps an existing pool after verifying the daemon-owned migration journal.
-    #[cfg(test)]
     async fn from_pool(pool: PgPool, full_text_search: bool) -> MetadataResult<Self> {
-        Self::from_pool_mode(pool, full_text_search, false).await
-    }
-
-    async fn from_pool_mode(
-        pool: PgPool,
-        full_text_search: bool,
-        cluster_mode: bool,
-    ) -> MetadataResult<Self> {
         require_migrated_schema(&pool).await?;
         Ok(Self {
             pool,
             full_text_search,
-            cluster_mode,
         })
-    }
-
-    /// Opens a runtime pool which rejects every legacy unfenced mutation.
-    pub(crate) async fn connect_server(
-        database_url: &str,
-        max_connections: u32,
-        connect_timeout: Duration,
-        acquire_timeout: Duration,
-        ssl_mode: PostgresSslMode,
-        full_text_search: bool,
-    ) -> MetadataResult<Self> {
-        Self::connect_mode(
-            database_url,
-            max_connections,
-            connect_timeout,
-            acquire_timeout,
-            ssl_mode,
-            full_text_search,
-            true,
-        )
-        .await
-    }
-
-    fn require_local_mutation(&self) -> MetadataResult<()> {
-        if self.cluster_mode {
-            Err(MetadataStoreError::InvalidInput("server_requires_claim"))
-        } else {
-            Ok(())
-        }
     }
 }
 
@@ -526,17 +457,6 @@ fn require_artifact(
     Ok(())
 }
 
-fn validate_operation_state(state: &str) -> MetadataResult<()> {
-    if matches!(
-        state,
-        "queued" | "running" | "interrupted" | "failed" | "succeeded"
-    ) {
-        Ok(())
-    } else {
-        Err(db(anyhow!("operation has an invalid persisted state")))
-    }
-}
-
 fn row_u64(row: &PgRow, name: &str) -> anyhow::Result<u64> {
     Ok(row.try_get::<i64, _>(name)?.try_into()?)
 }
@@ -833,16 +753,9 @@ const DEFAULT_CAPTURE_MODE: CaptureMode = CaptureMode::Notarized;
 /// Whether auto-seal is on for an organization without a stored setting.
 const DEFAULT_AUTO_SEAL_ENABLED: bool = false;
 
-const AUTO_SEAL_ENABLED_EVENT: (&str, &str) = ("auto_seal_enabled", "Auto-seal enabled");
-const AUTO_SEAL_DISABLED_EVENT: (&str, &str) = ("auto_seal_disabled", "Auto-seal disabled");
-
 impl PostgresOrganizationStore {
     fn pool(&self) -> &PgPool {
         &self.store.pool
-    }
-
-    fn require_local_mutation(&self) -> MetadataResult<()> {
-        self.store.require_local_mutation()
     }
 
     /// The organization's stored capture settings, or the defaults when it
@@ -902,6 +815,13 @@ fn settings_from_row(row: &PgRow) -> MetadataResult<(CaptureMode, bool)> {
     let capture_mode = CaptureMode::parse(&capture_mode)
         .ok_or_else(|| db(anyhow!("stored capture mode is unknown")))?;
     Ok((capture_mode, auto_seal_enabled))
+}
+
+/// A server records captures and notarizations only through a replica's
+/// claimed writes, and the cluster manages auto-seal, Trace deletion and
+/// sharing, so the organization view refuses those local mutations.
+fn server_requires_claim() -> MetadataStoreError {
+    MetadataStoreError::InvalidInput("server_requires_claim")
 }
 
 #[async_trait]
@@ -969,380 +889,43 @@ impl MetadataStore for PostgresOrganizationStore {
         Ok(self.settings().await?.1)
     }
 
-    async fn set_auto_seal_enabled(&self, enabled: bool, now_unix_ms: u64) -> MetadataResult<bool> {
-        let now = invalid_i64(now_unix_ms, "timestamp_out_of_range")?;
-        let mut transaction = self.pool().begin().await.map_err(|error| {
-            db(anyhow!(error).context("starting auto_seal_enabled transaction"))
-        })?;
-        let (_, current) = self.lock_settings(&mut transaction).await?;
-        if current != enabled {
-            sqlx::query(
-                "UPDATE captured.organization_settings
-                 SET auto_seal_enabled = $2, updated_at = clock_timestamp()
-                 WHERE organization_id = $1",
-            )
-            .bind(self.organization.as_str())
-            .bind(enabled)
-            .execute(&mut *transaction)
-            .await
-            .map_err(|error| db(anyhow!(error).context("storing auto_seal_enabled")))?;
-            let (event_type, message) = if enabled {
-                AUTO_SEAL_ENABLED_EVENT
-            } else {
-                AUTO_SEAL_DISABLED_EVENT
-            };
-            insert_event(
-                &mut transaction,
-                &self.organization,
-                now,
-                event_type,
-                None,
-                None,
-                "info",
-                message,
-            )
-            .await?;
-        }
-        transaction
-            .commit()
-            .await
-            .map_err(|error| db(anyhow!(error).context("committing auto_seal_enabled")))?;
-        Ok(enabled)
+    async fn set_auto_seal_enabled(
+        &self,
+        _enabled: bool,
+        _now_unix_ms: u64,
+    ) -> MetadataResult<bool> {
+        Err(server_requires_claim())
     }
 
-    async fn begin_capture(&self, capture: NewTrace) -> MetadataResult<()> {
-        self.require_local_mutation()?;
-        validate_trace_id(&capture.trace_id)?;
-        let created_at = invalid_i64(
-            capture.created_at_unix_ms,
-            "capture_created_at_out_of_range",
-        )?;
-        let request_bytes = i64::try_from(capture.request_bytes)
-            .map_err(|_| MetadataStoreError::InvalidInput("request_bytes_out_of_range"))?;
-        sqlx::query(
-            "INSERT INTO captured.traces (
-                trace_id, created_at_unix_ms, provider, operation, requested_model,
-                streaming, request_bytes, prompt_preview, prompt_preview_truncated,
-                config_fingerprint, evidence_kind, capture_status, notarization_status,
-                organization_id
-             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'capturing', 'not_requested', $12)",
-        )
-        .bind(capture.trace_id)
-        .bind(created_at)
-        .bind(capture.provider)
-        .bind(capture.operation)
-        .bind(capture.requested_model)
-        .bind(capture.streaming)
-        .bind(request_bytes)
-        .bind(capture.prompt_preview)
-        .bind(capture.prompt_preview_truncated)
-        .bind(capture.config_fingerprint)
-        .bind(capture.evidence_kind.as_str())
-        .bind(self.organization.as_str())
-        .execute(self.pool())
-        .await
-        .map_err(|error| db(anyhow!(error).context("beginning capture metadata")))?;
-        Ok(())
+    async fn begin_capture(&self, _capture: NewTrace) -> MetadataResult<()> {
+        Err(server_requires_claim())
     }
 
-    async fn mark_capture_failed(&self, trace_id: &str, failure_code: &str) -> MetadataResult<()> {
-        self.require_local_mutation()?;
-        validate_trace_id(trace_id)?;
-        let mut transaction =
-            self.pool().begin().await.map_err(|error| {
-                db(anyhow!(error).context("starting capture failure transaction"))
-            })?;
-        let current = sqlx::query(
-            "SELECT capture_status, failure_code FROM captured.traces
-             WHERE trace_id = $1 AND organization_id = $2 FOR UPDATE",
-        )
-        .bind(trace_id)
-        .bind(self.organization.as_str())
-        .fetch_optional(&mut *transaction)
-        .await
-        .map_err(|error| db(anyhow!(error).context("locking capture for failure")))?
-        .ok_or_else(|| db(anyhow!("capture does not exist")))?;
-        let state: String = current
-            .try_get("capture_status")
-            .map_err(|error| db(anyhow!(error)))?;
-        let current_code: Option<String> = current
-            .try_get("failure_code")
-            .map_err(|error| db(anyhow!(error)))?;
-        if state == "failed" && current_code.as_deref() == Some(failure_code) {
-            return release(transaction, ()).await;
-        }
-        if state != "capturing" {
-            return Err(db(anyhow!("capture is not active")));
-        }
-        let changed = sqlx::query(
-            "UPDATE captured.traces
-             SET capture_status = 'failed', failure_code = $2
-             WHERE trace_id = $1 AND capture_status = 'capturing' AND organization_id = $3",
-        )
-        .bind(trace_id)
-        .bind(failure_code)
-        .bind(self.organization.as_str())
-        .execute(&mut *transaction)
-        .await
-        .map_err(|error| db(anyhow!(error).context("marking capture failed")))?
-        .rows_affected();
-        if changed != 1 {
-            return Err(db(anyhow!("active capture transition was lost")));
-        }
-        transaction
-            .commit()
-            .await
-            .map_err(|error| db(anyhow!(error).context("committing capture failure")))
+    async fn mark_capture_failed(
+        &self,
+        _trace_id: &str,
+        _failure_code: &str,
+    ) -> MetadataResult<()> {
+        Err(server_requires_claim())
     }
 
     async fn prepare_capture_completion(
         &self,
-        completion: CaptureCompletion,
+        _completion: CaptureCompletion,
     ) -> MetadataResult<()> {
-        self.require_local_mutation()?;
-        validate_completion(&completion)?;
-        let mut transaction = self.pool().begin().await.map_err(|error| {
-            db(anyhow!(error).context("starting capture completion preparation"))
-        })?;
-        let current = sqlx::query(
-            "SELECT capture_status, completed_at_unix_ms IS NOT NULL AS prepared
-             FROM captured.traces WHERE trace_id = $1 AND organization_id = $2 FOR UPDATE",
-        )
-        .bind(&completion.trace_id)
-        .bind(self.organization.as_str())
-        .fetch_optional(&mut *transaction)
-        .await
-        .map_err(|error| db(anyhow!(error).context("locking capture completion")))?
-        .ok_or_else(|| db(anyhow!("capture does not exist")))?;
-        let state: String = current
-            .try_get("capture_status")
-            .map_err(|e| db(e.into()))?;
-        let prepared: bool = current.try_get("prepared").map_err(|e| db(e.into()))?;
-        if state != "capturing" && state != "captured" {
-            return Err(db(anyhow!("capture cannot accept completion metadata")));
-        }
-        if prepared {
-            if !completion_matches(&mut transaction, &self.organization, &completion).await? {
-                return Err(db(anyhow!(
-                    "capture completion conflicts with persisted metadata"
-                )));
-            }
-            return release(transaction, ()).await;
-        }
-        if state != "capturing" {
-            return Err(db(anyhow!("capture is not active")));
-        }
-        let changed = sqlx::query(
-            "UPDATE captured.traces SET
-                completed_at_unix_ms = $2, duration_ms = $3, http_status = $4,
-                response_bytes = $5, response_model = $6, output_preview = $7,
-                output_preview_truncated = $8, expected_artifact_size_bytes = $9,
-                expected_artifact_sha256 = $10
-             WHERE trace_id = $1 AND capture_status = 'capturing'
-               AND completed_at_unix_ms IS NULL AND evidence_kind = $11
-               AND organization_id = $12",
-        )
-        .bind(&completion.trace_id)
-        .bind(invalid_i64(
-            completion.completed_at_unix_ms,
-            "capture_completed_at_out_of_range",
-        )?)
-        .bind(invalid_i64(
-            completion.duration_ms,
-            "duration_out_of_range",
-        )?)
-        .bind(i32::from(completion.http_status))
-        .bind(invalid_i64(
-            completion.response_bytes,
-            "response_bytes_out_of_range",
-        )?)
-        .bind(&completion.response_model)
-        .bind(&completion.output_preview)
-        .bind(completion.output_preview_truncated)
-        .bind(invalid_i64(
-            completion.expected_artifact_size_bytes,
-            "artifact_size_out_of_range",
-        )?)
-        .bind(&completion.expected_artifact_sha256)
-        .bind(completion.evidence_kind.as_str())
-        .bind(self.organization.as_str())
-        .execute(&mut *transaction)
-        .await
-        .map_err(|error| db(anyhow!(error).context("preparing capture completion")))?
-        .rows_affected();
-        if changed != 1 {
-            return Err(db(anyhow!("capture completion staging was lost")));
-        }
-        transaction
-            .commit()
-            .await
-            .map_err(|error| db(anyhow!(error).context("committing capture preparation")))
+        Err(server_requires_claim())
     }
 
     async fn complete_capture(
         &self,
-        completion: CaptureCompletion,
-        artifact: ArtifactRecord,
+        _completion: CaptureCompletion,
+        _artifact: ArtifactRecord,
     ) -> MetadataResult<()> {
-        self.require_local_mutation()?;
-        validate_completion(&completion)?;
-        validate_artifact(&artifact)?;
-        require_artifact(&artifact, &completion.trace_id, completion.artifact_kind())?;
-        if artifact.size_bytes != completion.expected_artifact_size_bytes
-            || artifact.sha256 != completion.expected_artifact_sha256
-        {
-            return Err(db(anyhow!(
-                "artifact does not match the staged capture commit"
-            )));
-        }
-        let mut transaction = self
-            .pool()
-            .begin()
-            .await
-            .map_err(|error| db(anyhow!(error).context("starting capture completion")))?;
-        let current = sqlx::query(
-            "SELECT capture_status, completed_at_unix_ms IS NOT NULL AS prepared
-             FROM captured.traces WHERE trace_id = $1 AND organization_id = $2 FOR UPDATE",
-        )
-        .bind(&completion.trace_id)
-        .bind(self.organization.as_str())
-        .fetch_optional(&mut *transaction)
-        .await
-        .map_err(|error| db(anyhow!(error).context("locking capture completion")))?
-        .ok_or_else(|| db(anyhow!("capture does not exist")))?;
-        let state: String = current
-            .try_get("capture_status")
-            .map_err(|e| db(e.into()))?;
-        let prepared: bool = current.try_get("prepared").map_err(|e| db(e.into()))?;
-        if state == "captured" {
-            if completion_matches(&mut transaction, &self.organization, &completion).await?
-                && artifact_exists_exact(&mut transaction, &self.organization, &artifact).await?
-            {
-                return release(transaction, ()).await;
-            }
-            return Err(db(anyhow!(
-                "capture completion conflicts with persisted metadata"
-            )));
-        }
-        if state != "capturing" {
-            return Err(db(anyhow!("capture is not active")));
-        }
-        if prepared
-            && !completion_matches(&mut transaction, &self.organization, &completion).await?
-        {
-            return Err(db(anyhow!(
-                "capture completion conflicts with staged metadata"
-            )));
-        }
-        let changed = sqlx::query(
-            "UPDATE captured.traces SET
-                completed_at_unix_ms = $2, duration_ms = $3, http_status = $4,
-                response_bytes = $5, response_model = $6, output_preview = $7,
-                output_preview_truncated = $8, expected_artifact_size_bytes = $9,
-                expected_artifact_sha256 = $10, capture_status = 'captured', failure_code = NULL,
-                notarization_status = CASE evidence_kind
-                    WHEN 'witnessed' THEN 'succeeded' ELSE notarization_status END
-             WHERE trace_id = $1 AND capture_status = 'capturing' AND evidence_kind = $11
-               AND organization_id = $12",
-        )
-        .bind(&completion.trace_id)
-        .bind(invalid_i64(
-            completion.completed_at_unix_ms,
-            "capture_completed_at_out_of_range",
-        )?)
-        .bind(invalid_i64(
-            completion.duration_ms,
-            "duration_out_of_range",
-        )?)
-        .bind(i32::from(completion.http_status))
-        .bind(invalid_i64(
-            completion.response_bytes,
-            "response_bytes_out_of_range",
-        )?)
-        .bind(&completion.response_model)
-        .bind(&completion.output_preview)
-        .bind(completion.output_preview_truncated)
-        .bind(invalid_i64(
-            completion.expected_artifact_size_bytes,
-            "artifact_size_out_of_range",
-        )?)
-        .bind(&completion.expected_artifact_sha256)
-        .bind(completion.evidence_kind.as_str())
-        .bind(self.organization.as_str())
-        .execute(&mut *transaction)
-        .await
-        .map_err(|error| db(anyhow!(error).context("completing capture")))?
-        .rows_affected();
-        if changed != 1 {
-            return Err(db(anyhow!("active capture transition was lost")));
-        }
-        insert_artifact(&mut transaction, &self.organization, &artifact).await?;
-        index_trace_search(&mut transaction, &self.organization, &completion.trace_id).await?;
-        transaction
-            .commit()
-            .await
-            .map_err(|error| db(anyhow!(error).context("committing capture completion")))
+        Err(server_requires_claim())
     }
 
     async fn incomplete_captures(&self) -> MetadataResult<Vec<IncompleteCapture>> {
-        let rows = sqlx::query(
-            "SELECT trace_id, completed_at_unix_ms, duration_ms, http_status,
-                    response_bytes, response_model, output_preview,
-                    output_preview_truncated, expected_artifact_size_bytes,
-                    expected_artifact_sha256, evidence_kind
-             FROM captured.traces
-             WHERE organization_id = $1 AND capture_status = 'capturing' ORDER BY trace_id",
-        )
-        .bind(self.organization.as_str())
-        .fetch_all(self.pool())
-        .await
-        .map_err(|error| db(anyhow!(error).context("listing active traces")))?;
-        rows.iter()
-            .map(|row| -> anyhow::Result<_> {
-                let trace_id: String = row.try_get("trace_id")?;
-                let completed_at: Option<i64> = row.try_get("completed_at_unix_ms")?;
-                let duration: Option<i64> = row.try_get("duration_ms")?;
-                let http_status: Option<i32> = row.try_get("http_status")?;
-                let response_bytes: Option<i64> = row.try_get("response_bytes")?;
-                let expected_size: Option<i64> = row.try_get("expected_artifact_size_bytes")?;
-                let expected_sha256: Option<String> = row.try_get("expected_artifact_sha256")?;
-                let completion = match (
-                    completed_at,
-                    duration,
-                    http_status,
-                    response_bytes,
-                    expected_size,
-                    expected_sha256,
-                ) {
-                    (
-                        Some(completed_at),
-                        Some(duration),
-                        Some(http_status),
-                        Some(response_bytes),
-                        Some(expected_size),
-                        Some(expected_sha256),
-                    ) => Some(CaptureCompletion {
-                        trace_id: trace_id.clone(),
-                        completed_at_unix_ms: completed_at.try_into()?,
-                        duration_ms: duration.try_into()?,
-                        http_status: http_status.try_into()?,
-                        response_bytes: response_bytes.try_into()?,
-                        response_model: row.try_get("response_model")?,
-                        output_preview: row.try_get("output_preview")?,
-                        output_preview_truncated: row.try_get("output_preview_truncated")?,
-                        expected_artifact_size_bytes: expected_size.try_into()?,
-                        expected_artifact_sha256: expected_sha256,
-                        evidence_kind: stored_evidence_kind(row)?,
-                    }),
-                    _ => None,
-                };
-                Ok(IncompleteCapture {
-                    trace_id,
-                    completion,
-                })
-            })
-            .collect::<anyhow::Result<Vec<_>>>()
-            .map_err(db)
+        Err(server_requires_claim())
     }
 
     async fn traces(&self, filters: TraceFilters) -> MetadataResult<Vec<TraceSummary>> {
@@ -1525,198 +1108,13 @@ impl MetadataStore for PostgresOrganizationStore {
 
     async fn prepare_trace_deletion(
         &self,
-        trace_id: &str,
+        _trace_id: &str,
     ) -> MetadataResult<TraceDeletionPreparation> {
-        self.require_local_mutation()?;
-        validate_trace_id(trace_id)?;
-        let mut transaction = self
-            .pool()
-            .begin()
-            .await
-            .map_err(|error| db(anyhow!(error).context("starting Trace deletion preflight")))?;
-        let row = sqlx::query(
-            "SELECT capture_status, notarization_status
-             FROM captured.traces WHERE trace_id = $1 AND organization_id = $2 FOR UPDATE",
-        )
-        .bind(trace_id)
-        .bind(self.organization.as_str())
-        .fetch_optional(&mut *transaction)
-        .await
-        .map_err(|error| db(anyhow!(error).context("locking Trace for deletion preflight")))?;
-        let Some(row) = row else {
-            return release(transaction, TraceDeletionPreparation::NotFound).await;
-        };
-        let capture_status: String = row
-            .try_get("capture_status")
-            .map_err(|error| db(anyhow!(error).context("reading Trace capture state")))?;
-        let notarization_status: String = row
-            .try_get("notarization_status")
-            .map_err(|error| db(anyhow!(error).context("reading Trace notarization state")))?;
-        if capture_status == "capturing" {
-            return release(transaction, TraceDeletionPreparation::CaptureActive).await;
-        }
-        let active_operation: bool = sqlx::query_scalar(
-            "SELECT EXISTS(
-                SELECT 1 FROM captured.operations
-                WHERE trace_id = $1 AND organization_id = $2
-                  AND state IN ('queued', 'running')
-             )",
-        )
-        .bind(trace_id)
-        .bind(self.organization.as_str())
-        .fetch_one(&mut *transaction)
-        .await
-        .map_err(|error| db(anyhow!(error).context("checking active Trace operations")))?;
-        if matches!(notarization_status.as_str(), "queued" | "running") || active_operation {
-            return release(transaction, TraceDeletionPreparation::NotarizationActive).await;
-        }
-        let active_share: bool = sqlx::query_scalar(
-            "SELECT EXISTS(
-                SELECT 1 FROM captured.trace_shares s
-                JOIN captured.traces t ON t.trace_id = s.trace_id
-                WHERE s.trace_id = $1 AND t.organization_id = $2
-                  AND (s.progress = 'verifying' OR s.access_enabled = TRUE)
-             )",
-        )
-        .bind(trace_id)
-        .bind(self.organization.as_str())
-        .fetch_one(&mut *transaction)
-        .await
-        .map_err(|error| db(anyhow!(error).context("checking active Trace sharing")))?;
-        if active_share {
-            return release(transaction, TraceDeletionPreparation::ShareActive).await;
-        }
-        transaction
-            .commit()
-            .await
-            .map_err(|error| db(anyhow!(error).context("committing Trace deletion preflight")))?;
-        Ok(TraceDeletionPreparation::Ready)
+        Err(server_requires_claim())
     }
 
-    async fn delete_trace(&self, trace_id: &str) -> MetadataResult<TraceDeletionOutcome> {
-        self.require_local_mutation()?;
-        validate_trace_id(trace_id)?;
-        let mut transaction = self
-            .pool()
-            .begin()
-            .await
-            .map_err(|error| db(anyhow!(error).context("starting Trace deletion")))?;
-        let row = sqlx::query(
-            "SELECT capture_status, notarization_status
-             FROM captured.traces WHERE trace_id = $1 AND organization_id = $2 FOR UPDATE",
-        )
-        .bind(trace_id)
-        .bind(self.organization.as_str())
-        .fetch_optional(&mut *transaction)
-        .await
-        .map_err(|error| db(anyhow!(error).context("locking Trace for deletion")))?;
-        let Some(row) = row else {
-            return release(transaction, TraceDeletionOutcome::NotFound).await;
-        };
-        let capture_status: String = row
-            .try_get("capture_status")
-            .map_err(|error| db(anyhow!(error).context("reading Trace capture state")))?;
-        let notarization_status: String = row
-            .try_get("notarization_status")
-            .map_err(|error| db(anyhow!(error).context("reading Trace notarization state")))?;
-        if capture_status == "capturing" {
-            return release(transaction, TraceDeletionOutcome::CaptureActive).await;
-        }
-        let active_operation: bool = sqlx::query_scalar(
-            "SELECT EXISTS(
-                SELECT 1 FROM captured.operations
-                WHERE trace_id = $1 AND organization_id = $2
-                  AND state IN ('queued', 'running')
-             )",
-        )
-        .bind(trace_id)
-        .bind(self.organization.as_str())
-        .fetch_one(&mut *transaction)
-        .await
-        .map_err(|error| db(anyhow!(error).context("checking active Trace operations")))?;
-        if matches!(notarization_status.as_str(), "queued" | "running") || active_operation {
-            return release(transaction, TraceDeletionOutcome::NotarizationActive).await;
-        }
-        let active_share: bool = sqlx::query_scalar(
-            "SELECT EXISTS(
-                SELECT 1 FROM captured.trace_shares s
-                JOIN captured.traces t ON t.trace_id = s.trace_id
-                WHERE s.trace_id = $1 AND t.organization_id = $2
-                  AND (s.progress = 'verifying' OR s.access_enabled = TRUE)
-             )",
-        )
-        .bind(trace_id)
-        .bind(self.organization.as_str())
-        .fetch_one(&mut *transaction)
-        .await
-        .map_err(|error| db(anyhow!(error).context("checking active Trace sharing")))?;
-        if active_share {
-            return release(transaction, TraceDeletionOutcome::ShareActive).await;
-        }
-
-        sqlx::query(
-            "DELETE FROM captured.events
-             WHERE organization_id = $2 AND (trace_id = $1 OR operation_id IN (
-                 SELECT operation_id FROM captured.operations
-                 WHERE trace_id = $1 AND organization_id = $2
-             ))",
-        )
-        .bind(trace_id)
-        .bind(self.organization.as_str())
-        .execute(&mut *transaction)
-        .await
-        .map_err(|error| db(anyhow!(error).context("deleting Trace events")))?;
-        sqlx::query(
-            "DELETE FROM captured.operation_attempts
-             WHERE operation_id IN (
-                 SELECT operation_id FROM captured.operations
-                 WHERE trace_id = $1 AND organization_id = $2
-             )",
-        )
-        .bind(trace_id)
-        .bind(self.organization.as_str())
-        .execute(&mut *transaction)
-        .await
-        .map_err(|error| db(anyhow!(error).context("deleting Trace operation attempts")))?;
-        sqlx::query("DELETE FROM captured.operations WHERE trace_id = $1 AND organization_id = $2")
-            .bind(trace_id)
-            .bind(self.organization.as_str())
-            .execute(&mut *transaction)
-            .await
-            .map_err(|error| db(anyhow!(error).context("deleting Trace operations")))?;
-        for (table, context) in [
-            ("artifacts", "deleting Trace artifact metadata"),
-            ("trace_shares", "deleting stopped Trace sharing metadata"),
-            ("trace_search", "deleting Trace search metadata"),
-        ] {
-            let statement = format!(
-                "DELETE FROM captured.{table} child
-                 USING captured.traces t
-                 WHERE child.trace_id = $1 AND t.trace_id = child.trace_id
-                   AND t.organization_id = $2"
-            );
-            sqlx::query(&statement)
-                .bind(trace_id)
-                .bind(self.organization.as_str())
-                .execute(&mut *transaction)
-                .await
-                .map_err(|error| db(anyhow!(error).context(context)))?;
-        }
-        let deleted =
-            sqlx::query("DELETE FROM captured.traces WHERE trace_id = $1 AND organization_id = $2")
-                .bind(trace_id)
-                .bind(self.organization.as_str())
-                .execute(&mut *transaction)
-                .await
-                .map_err(|error| db(anyhow!(error).context("deleting Trace metadata")))?;
-        if deleted.rows_affected() != 1 {
-            return Err(db(anyhow!("Trace deletion lost its metadata row")));
-        }
-        transaction
-            .commit()
-            .await
-            .map_err(|error| db(anyhow!(error).context("committing Trace deletion")))?;
-        Ok(TraceDeletionOutcome::Deleted)
+    async fn delete_trace(&self, _trace_id: &str) -> MetadataResult<TraceDeletionOutcome> {
+        Err(server_requires_claim())
     }
 
     async fn counts(&self) -> MetadataResult<MetadataCounts> {
@@ -1770,64 +1168,12 @@ impl MetadataStore for PostgresOrganizationStore {
         .map_err(db)
     }
 
-    async fn put_trace_share(&self, share: TraceShareRecord) -> MetadataResult<()> {
-        validate_trace_id(&share.trace_id)?;
-        let expires_at = share
-            .expires_at_unix_ms
-            .map(|value| invalid_i64(value, "timestamp_out_of_range"))
-            .transpose()?;
-        let updated_at = invalid_i64(share.updated_at_unix_ms, "timestamp_out_of_range")?;
-        let stored = sqlx::query(
-            "INSERT INTO captured.trace_shares (
-                trace_id, hosted_trace_id, progress, visibility, access_enabled, password_protected,
-                expires_at_unix_ms, failure_code, share_url, package_url, updated_at_unix_ms
-             )
-             SELECT trace_id, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11
-             FROM captured.traces WHERE trace_id = $1 AND organization_id = $12
-             ON CONFLICT(trace_id) DO UPDATE SET
-                hosted_trace_id = EXCLUDED.hosted_trace_id, progress = EXCLUDED.progress,
-                visibility = EXCLUDED.visibility, access_enabled = EXCLUDED.access_enabled,
-                password_protected = EXCLUDED.password_protected,
-                expires_at_unix_ms = EXCLUDED.expires_at_unix_ms,
-                failure_code = EXCLUDED.failure_code, share_url = EXCLUDED.share_url,
-                package_url = EXCLUDED.package_url,
-                updated_at_unix_ms = EXCLUDED.updated_at_unix_ms",
-        )
-        .bind(&share.trace_id)
-        .bind(&share.hosted_trace_id)
-        .bind(&share.progress)
-        .bind(&share.visibility)
-        .bind(share.access_enabled)
-        .bind(share.password_protected)
-        .bind(expires_at)
-        .bind(&share.failure_code)
-        .bind(&share.share_url)
-        .bind(&share.package_url)
-        .bind(updated_at)
-        .bind(self.organization.as_str())
-        .execute(self.pool())
-        .await
-        .map_err(|error| db(anyhow!(error).context("storing trace share")))?
-        .rows_affected();
-        if stored != 1 {
-            return Err(db(anyhow!("trace share has no capture")));
-        }
-        Ok(())
+    async fn put_trace_share(&self, _share: TraceShareRecord) -> MetadataResult<()> {
+        Err(server_requires_claim())
     }
 
-    async fn delete_trace_share(&self, trace_id: &str) -> MetadataResult<bool> {
-        validate_trace_id(trace_id)?;
-        let result = sqlx::query(
-            "DELETE FROM captured.trace_shares s
-             USING captured.traces t
-             WHERE s.trace_id = $1 AND t.trace_id = s.trace_id AND t.organization_id = $2",
-        )
-        .bind(trace_id)
-        .bind(self.organization.as_str())
-        .execute(self.pool())
-        .await
-        .map_err(|error| db(anyhow!(error).context("deleting trace share")))?;
-        Ok(result.rows_affected() > 0)
+    async fn delete_trace_share(&self, _trace_id: &str) -> MetadataResult<bool> {
+        Err(server_requires_claim())
     }
 
     async fn enqueue_notarization(
@@ -1960,614 +1306,51 @@ impl MetadataStore for PostgresOrganizationStore {
         Ok(Some((operation, false)))
     }
 
-    async fn claim_next_notarization(&self, now_unix_ms: u64) -> MetadataResult<Option<Operation>> {
-        self.require_local_mutation()?;
-        let now = invalid_i64(now_unix_ms, "timestamp_out_of_range")?;
-        let mut transaction = self
-            .pool()
-            .begin()
-            .await
-            .map_err(|error| db(anyhow!(error).context("starting notarization claim")))?;
-        let operation_id: Option<String> = sqlx::query_scalar(
-            "SELECT operation_id FROM captured.operations
-             WHERE organization_id = $1 AND kind = 'notarization' AND state = 'queued'
-             ORDER BY created_at_unix_ms, operation_id
-             FOR UPDATE SKIP LOCKED LIMIT 1",
-        )
-        .bind(self.organization.as_str())
-        .fetch_optional(&mut *transaction)
-        .await
-        .map_err(|error| db(anyhow!(error).context("selecting queued notarization")))?;
-        let Some(operation_id) = operation_id else {
-            return release(transaction, None).await;
-        };
-        let row = sqlx::query(
-            "UPDATE captured.operations SET
-                state = 'running', attempt = attempt + 1, started_at_unix_ms = $2,
-                completed_at_unix_ms = NULL, failure_code = NULL,
-                progress_phase = 'preparing', progress_updated_at_unix_ms = $2,
-                proof_bytes_completed = 0, proof_bytes_total = 0,
-                proof_commitments_completed = 0, proof_commitments_total = 0
-             WHERE operation_id = $1 AND organization_id = $3 AND state = 'queued'
-             RETURNING *",
-        )
-        .bind(&operation_id)
-        .bind(now)
-        .bind(self.organization.as_str())
-        .fetch_one(&mut *transaction)
-        .await
-        .map_err(|error| db(anyhow!(error).context("claiming notarization")))?;
-        let operation = operation_from_row(&row).map_err(db)?;
-        let trace_id = &operation.trace_id;
-        sqlx::query(
-            "UPDATE captured.traces SET notarization_status = 'running'
-             WHERE trace_id = $1 AND organization_id = $2",
-        )
-        .bind(trace_id)
-        .bind(self.organization.as_str())
-        .execute(&mut *transaction)
-        .await
-        .map_err(|error| db(anyhow!(error).context("marking capture notarization running")))?;
-        let recorded = sqlx::query(
-            "INSERT INTO captured.operation_attempts
-             (operation_id, attempt, state, started_at_unix_ms)
-             SELECT operation_id, $2, 'running', $3 FROM captured.operations
-             WHERE operation_id = $1 AND organization_id = $4",
-        )
-        .bind(&operation.operation_id)
-        .bind(i32::try_from(operation.attempt).map_err(|error| db(error.into()))?)
-        .bind(now)
-        .bind(self.organization.as_str())
-        .execute(&mut *transaction)
-        .await
-        .map_err(|error| db(anyhow!(error).context("recording notarization attempt")))?
-        .rows_affected();
-        if recorded != 1 {
-            return Err(db(anyhow!("claimed notarization has no operation")));
-        }
-        insert_event(
-            &mut transaction,
-            &self.organization,
-            now,
-            "notarization_started",
-            Some(trace_id),
-            Some(&operation.operation_id),
-            "info",
-            "Notarization started",
-        )
-        .await?;
-        transaction
-            .commit()
-            .await
-            .map_err(|error| db(anyhow!(error).context("committing notarization claim")))?;
-        Ok(Some(operation))
+    async fn claim_next_notarization(
+        &self,
+        _now_unix_ms: u64,
+    ) -> MetadataResult<Option<Operation>> {
+        Err(server_requires_claim())
     }
 
     async fn update_operation_progress(
         &self,
-        operation_id: &str,
-        phase: NotarizationPhase,
-        now_unix_ms: u64,
+        _operation_id: &str,
+        _phase: NotarizationPhase,
+        _now_unix_ms: u64,
     ) -> MetadataResult<bool> {
-        self.require_local_mutation()?;
-        let now = invalid_i64(now_unix_ms, "timestamp_out_of_range")?;
-        validate_operation_id(operation_id)?;
-        let phase = phase.as_str();
-        let mut transaction = self
-            .pool()
-            .begin()
-            .await
-            .map_err(|error| db(anyhow!(error).context("starting progress update")))?;
-        let trace_id: Option<String> = sqlx::query_scalar(
-            "UPDATE captured.operations
-             SET progress_phase = $2, progress_updated_at_unix_ms = $3
-             WHERE operation_id = $1 AND organization_id = $4
-               AND state = 'running' AND progress_phase <> $2
-             RETURNING trace_id",
-        )
-        .bind(operation_id)
-        .bind(phase)
-        .bind(now)
-        .bind(self.organization.as_str())
-        .fetch_optional(&mut *transaction)
-        .await
-        .map_err(|error| db(anyhow!(error).context("updating notarization progress")))?;
-        let Some(trace_id) = trace_id else {
-            return release(transaction, false).await;
-        };
-        let message = match phase {
-            "proving" => "Generating private proof",
-            "signing" => "Requesting notary signature",
-            "packaging" => "Building verified package",
-            _ => "Notarization advanced",
-        };
-        insert_event(
-            &mut transaction,
-            &self.organization,
-            now,
-            "notarization_progress",
-            Some(&trace_id),
-            Some(operation_id),
-            "info",
-            message,
-        )
-        .await?;
-        transaction
-            .commit()
-            .await
-            .map_err(|error| db(anyhow!(error).context("committing progress update")))?;
-        Ok(true)
+        Err(server_requires_claim())
     }
 
     async fn update_operation_proof_progress(
         &self,
-        operation_id: &str,
-        progress: NotarizationProofProgress,
-        now_unix_ms: u64,
+        _operation_id: &str,
+        _progress: NotarizationProofProgress,
+        _now_unix_ms: u64,
     ) -> MetadataResult<bool> {
-        self.require_local_mutation()?;
-        let now = invalid_i64(now_unix_ms, "timestamp_out_of_range")?;
-        validate_proof(progress)?;
-        validate_operation_id(operation_id)?;
-        let mut transaction = self
-            .pool()
-            .begin()
-            .await
-            .map_err(|error| db(anyhow!(error).context("starting proof progress update")))?;
-        let previous = sqlx::query(
-            "SELECT progress_phase, proof_bytes_completed, proof_bytes_total,
-                    proof_commitments_completed, proof_commitments_total, trace_id
-             FROM captured.operations
-             WHERE operation_id = $1 AND organization_id = $2 AND state = 'running' FOR UPDATE",
-        )
-        .bind(operation_id)
-        .bind(self.organization.as_str())
-        .fetch_optional(&mut *transaction)
-        .await
-        .map_err(|error| db(anyhow!(error).context("locking proof progress")))?;
-        let Some(previous) = previous else {
-            return release(transaction, false).await;
-        };
-        let previous_phase: String = previous
-            .try_get("progress_phase")
-            .map_err(|e| db(e.into()))?;
-        let bytes_completed = row_u64(&previous, "proof_bytes_completed").map_err(db)?;
-        let bytes_total = row_u64(&previous, "proof_bytes_total").map_err(db)?;
-        let commitments_completed =
-            row_u64(&previous, "proof_commitments_completed").map_err(db)?;
-        let commitments_total = row_u64(&previous, "proof_commitments_total").map_err(db)?;
-        if previous_phase == "proving"
-            && bytes_completed == progress.bytes_completed
-            && bytes_total == progress.bytes_total
-            && commitments_completed == progress.commitments_completed
-            && commitments_total == progress.commitments_total
-        {
-            return release(transaction, false).await;
-        }
-        if progress.bytes_completed < bytes_completed
-            || progress.commitments_completed < commitments_completed
-        {
-            return Err(db(anyhow!("proof progress cannot decrease")));
-        }
-        if (bytes_total != 0 && progress.bytes_total != bytes_total)
-            || (commitments_total != 0 && progress.commitments_total != commitments_total)
-        {
-            return Err(db(anyhow!("proof progress total cannot change")));
-        }
-        sqlx::query(
-            "UPDATE captured.operations SET
-                progress_phase = 'proving', progress_updated_at_unix_ms = $2,
-                proof_bytes_completed = $3, proof_bytes_total = $4,
-                proof_commitments_completed = $5, proof_commitments_total = $6
-             WHERE operation_id = $1 AND organization_id = $7 AND state = 'running'",
-        )
-        .bind(operation_id)
-        .bind(now)
-        .bind(i64::try_from(progress.bytes_completed).expect("validated proof progress"))
-        .bind(i64::try_from(progress.bytes_total).expect("validated proof progress"))
-        .bind(i64::try_from(progress.commitments_completed).expect("validated proof progress"))
-        .bind(i64::try_from(progress.commitments_total).expect("validated proof progress"))
-        .bind(self.organization.as_str())
-        .execute(&mut *transaction)
-        .await
-        .map_err(|error| db(anyhow!(error).context("updating proof progress")))?;
-        if previous_phase != "proving" {
-            let trace_id: String = previous.try_get("trace_id").map_err(|e| db(e.into()))?;
-            insert_event(
-                &mut transaction,
-                &self.organization,
-                now,
-                "notarization_progress",
-                Some(&trace_id),
-                Some(operation_id),
-                "info",
-                "Generating private proof",
-            )
-            .await?;
-        }
-        transaction
-            .commit()
-            .await
-            .map_err(|error| db(anyhow!(error).context("committing proof progress")))?;
-        Ok(true)
+        Err(server_requires_claim())
     }
 
     async fn complete_notarization(
         &self,
-        operation_id: &str,
-        artifact: ArtifactRecord,
-        now_unix_ms: u64,
+        _operation_id: &str,
+        _artifact: ArtifactRecord,
+        _now_unix_ms: u64,
     ) -> MetadataResult<TerminalOperationResult> {
-        self.require_local_mutation()?;
-        let now = invalid_i64(now_unix_ms, "timestamp_out_of_range")?;
-        validate_artifact(&artifact)?;
-        validate_operation_id(operation_id)?;
-        let mut transaction = self
-            .pool()
-            .begin()
-            .await
-            .map_err(|error| db(anyhow!(error).context("starting notarization completion")))?;
-        let current = sqlx::query(
-            "SELECT state, trace_id FROM captured.operations
-             WHERE operation_id = $1 AND organization_id = $2 FOR UPDATE",
-        )
-        .bind(operation_id)
-        .bind(self.organization.as_str())
-        .fetch_optional(&mut *transaction)
-        .await
-        .map_err(|error| db(anyhow!(error).context("locking notarization completion")))?;
-        let Some(current) = current else {
-            return release(transaction, TerminalOperationResult::NotFound).await;
-        };
-        let state: String = current.try_get("state").map_err(|e| db(e.into()))?;
-        validate_operation_state(&state)?;
-        let trace_id: String = current.try_get("trace_id").map_err(|e| db(e.into()))?;
-        require_artifact(&artifact, &trace_id, ArtifactKind::TracePackage)?;
-        if state == "succeeded" {
-            if artifact_exists_exact(&mut transaction, &self.organization, &artifact).await? {
-                return release(transaction, TerminalOperationResult::AlreadyApplied).await;
-            }
-            return Err(db(anyhow!(
-                "trace package artifact does not match persisted metadata"
-            )));
-        }
-        if state != "running" {
-            return release(
-                transaction,
-                TerminalOperationResult::Conflict {
-                    current_state: state,
-                },
-            )
-            .await;
-        }
-        insert_artifact(&mut transaction, &self.organization, &artifact).await?;
-        let changed = sqlx::query(
-            "UPDATE captured.operations SET
-                state = 'succeeded', completed_at_unix_ms = $2, failure_code = NULL,
-                progress_phase = 'complete', progress_updated_at_unix_ms = $2
-             WHERE operation_id = $1 AND organization_id = $3 AND state = 'running'",
-        )
-        .bind(operation_id)
-        .bind(now)
-        .bind(self.organization.as_str())
-        .execute(&mut *transaction)
-        .await
-        .map_err(|error| db(anyhow!(error).context("completing notarization operation")))?
-        .rows_affected();
-        if changed != 1 {
-            return Err(db(anyhow!("running operation transition was lost")));
-        }
-        let changed = sqlx::query(
-            "UPDATE captured.operation_attempts
-             SET state = 'succeeded', completed_at_unix_ms = $2, failure_code = NULL
-             WHERE operation_id = $1 AND attempt = (
-                SELECT attempt FROM captured.operations
-                WHERE operation_id = $1 AND organization_id = $3
-             )",
-        )
-        .bind(operation_id)
-        .bind(now)
-        .bind(self.organization.as_str())
-        .execute(&mut *transaction)
-        .await
-        .map_err(|error| db(anyhow!(error).context("completing notarization attempt")))?
-        .rows_affected();
-        if changed != 1 {
-            return Err(db(anyhow!("running operation has no current attempt")));
-        }
-        let changed = sqlx::query(
-            "UPDATE captured.traces SET notarization_status = 'succeeded'
-             WHERE trace_id = $1 AND organization_id = $2",
-        )
-        .bind(&trace_id)
-        .bind(self.organization.as_str())
-        .execute(&mut *transaction)
-        .await
-        .map_err(|error| db(anyhow!(error).context("completing capture notarization")))?
-        .rows_affected();
-        if changed != 1 {
-            return Err(db(anyhow!("notarization operation has no capture")));
-        }
-        insert_event(
-            &mut transaction,
-            &self.organization,
-            now,
-            "notarization_completed",
-            Some(&trace_id),
-            Some(operation_id),
-            "success",
-            "Notarization completed",
-        )
-        .await?;
-        transaction
-            .commit()
-            .await
-            .map_err(|error| db(anyhow!(error).context("committing notarization completion")))?;
-        Ok(TerminalOperationResult::Applied)
+        Err(server_requires_claim())
     }
 
     async fn fail_operation(
         &self,
-        operation_id: &str,
-        now_unix_ms: u64,
-        failure_code: &str,
+        _operation_id: &str,
+        _now_unix_ms: u64,
+        _failure_code: &str,
     ) -> MetadataResult<TerminalOperationResult> {
-        self.require_local_mutation()?;
-        let now = invalid_i64(now_unix_ms, "timestamp_out_of_range")?;
-        validate_operation_id(operation_id)?;
-        let mut transaction = self
-            .pool()
-            .begin()
-            .await
-            .map_err(|error| db(anyhow!(error).context("starting operation failure")))?;
-        let current = sqlx::query(
-            "SELECT state, failure_code, trace_id FROM captured.operations
-             WHERE operation_id = $1 AND organization_id = $2 FOR UPDATE",
-        )
-        .bind(operation_id)
-        .bind(self.organization.as_str())
-        .fetch_optional(&mut *transaction)
-        .await
-        .map_err(|error| db(anyhow!(error).context("locking operation failure")))?;
-        let Some(current) = current else {
-            return release(transaction, TerminalOperationResult::NotFound).await;
-        };
-        let state: String = current.try_get("state").map_err(|e| db(e.into()))?;
-        validate_operation_state(&state)?;
-        let current_code: Option<String> =
-            current.try_get("failure_code").map_err(|e| db(e.into()))?;
-        if state == "failed" && current_code.as_deref() == Some(failure_code) {
-            return release(transaction, TerminalOperationResult::AlreadyApplied).await;
-        }
-        if state != "running" {
-            return release(
-                transaction,
-                TerminalOperationResult::Conflict {
-                    current_state: state,
-                },
-            )
-            .await;
-        }
-        let trace_id: String = current.try_get("trace_id").map_err(|e| db(e.into()))?;
-        let changed = sqlx::query(
-            "UPDATE captured.operations
-             SET state = 'failed', completed_at_unix_ms = $2, failure_code = $3
-             WHERE operation_id = $1 AND organization_id = $4 AND state = 'running'",
-        )
-        .bind(operation_id)
-        .bind(now)
-        .bind(failure_code)
-        .bind(self.organization.as_str())
-        .execute(&mut *transaction)
-        .await
-        .map_err(|error| db(anyhow!(error).context("failing operation")))?
-        .rows_affected();
-        if changed != 1 {
-            return Err(db(anyhow!("running operation transition was lost")));
-        }
-        let changed = sqlx::query(
-            "UPDATE captured.operation_attempts
-             SET state = 'failed', completed_at_unix_ms = $2, failure_code = $3
-             WHERE operation_id = $1 AND attempt = (
-                SELECT attempt FROM captured.operations
-                WHERE operation_id = $1 AND organization_id = $4
-             )",
-        )
-        .bind(operation_id)
-        .bind(now)
-        .bind(failure_code)
-        .bind(self.organization.as_str())
-        .execute(&mut *transaction)
-        .await
-        .map_err(|error| db(anyhow!(error).context("failing operation attempt")))?
-        .rows_affected();
-        if changed != 1 {
-            return Err(db(anyhow!("running operation has no current attempt")));
-        }
-        let changed = sqlx::query(
-            "UPDATE captured.traces SET notarization_status = 'failed'
-             WHERE trace_id = $1 AND organization_id = $2",
-        )
-        .bind(&trace_id)
-        .bind(self.organization.as_str())
-        .execute(&mut *transaction)
-        .await
-        .map_err(|error| db(anyhow!(error).context("failing capture notarization")))?
-        .rows_affected();
-        if changed != 1 {
-            return Err(db(anyhow!("notarization operation has no capture")));
-        }
-        insert_event(
-            &mut transaction,
-            &self.organization,
-            now,
-            "notarization_failed",
-            Some(&trace_id),
-            Some(operation_id),
-            "error",
-            "Notarization failed",
-        )
-        .await?;
-        transaction
-            .commit()
-            .await
-            .map_err(|error| db(anyhow!(error).context("committing operation failure")))?;
-        Ok(TerminalOperationResult::Applied)
+        Err(server_requires_claim())
     }
 
-    async fn interrupt_running_operations(&self, now_unix_ms: u64) -> MetadataResult<usize> {
-        self.require_local_mutation()?;
-        let now = invalid_i64(now_unix_ms, "timestamp_out_of_range")?;
-        let mut transaction = self
-            .pool()
-            .begin()
-            .await
-            .map_err(|error| db(anyhow!(error).context("starting operation interruption")))?;
-        let rows = sqlx::query(
-            "SELECT operation_id, trace_id FROM captured.operations
-             WHERE organization_id = $1 AND state = 'running'
-             ORDER BY operation_id FOR UPDATE SKIP LOCKED",
-        )
-        .bind(self.organization.as_str())
-        .fetch_all(&mut *transaction)
-        .await
-        .map_err(|error| db(anyhow!(error).context("locking running operations")))?;
-        for row in &rows {
-            let operation_id: String = row.try_get("operation_id").map_err(|e| db(e.into()))?;
-            let trace_id: String = row.try_get("trace_id").map_err(|e| db(e.into()))?;
-            sqlx::query(
-                "UPDATE captured.operations
-                 SET state = 'interrupted', completed_at_unix_ms = $2,
-                     failure_code = 'service_restarted'
-                 WHERE operation_id = $1 AND organization_id = $3 AND state = 'running'",
-            )
-            .bind(&operation_id)
-            .bind(now)
-            .bind(self.organization.as_str())
-            .execute(&mut *transaction)
-            .await
-            .map_err(|error| db(anyhow!(error).context("interrupting operation")))?;
-            sqlx::query(
-                "UPDATE captured.operation_attempts
-                 SET state = 'interrupted', completed_at_unix_ms = $2,
-                     failure_code = 'service_restarted'
-                 WHERE operation_id = $1 AND attempt = (
-                    SELECT attempt FROM captured.operations
-                    WHERE operation_id = $1 AND organization_id = $3
-                 )",
-            )
-            .bind(&operation_id)
-            .bind(now)
-            .bind(self.organization.as_str())
-            .execute(&mut *transaction)
-            .await
-            .map_err(|error| db(anyhow!(error).context("interrupting operation attempt")))?;
-            sqlx::query(
-                "UPDATE captured.traces SET notarization_status = 'interrupted'
-                 WHERE trace_id = $1 AND organization_id = $2",
-            )
-            .bind(&trace_id)
-            .bind(self.organization.as_str())
-            .execute(&mut *transaction)
-            .await
-            .map_err(|error| db(anyhow!(error).context("interrupting capture notarization")))?;
-            insert_event(
-                &mut transaction,
-                &self.organization,
-                now,
-                "notarization_interrupted",
-                Some(&trace_id),
-                Some(&operation_id),
-                "warning",
-                "Notarization interrupted by service restart",
-            )
-            .await?;
-        }
-        transaction
-            .commit()
-            .await
-            .map_err(|error| db(anyhow!(error).context("committing operation interruption")))?;
-        Ok(rows.len())
-    }
-
-    async fn retry_operation(
-        &self,
-        operation_id: &str,
-        now_unix_ms: u64,
-    ) -> MetadataResult<Option<Operation>> {
-        let now = invalid_i64(now_unix_ms, "timestamp_out_of_range")?;
-        validate_operation_id(operation_id)?;
-        let mut transaction = self
-            .pool()
-            .begin()
-            .await
-            .map_err(|error| db(anyhow!(error).context("starting operation retry")))?;
-        let current = sqlx::query(
-            "SELECT o.state, o.trace_id, c.http_status
-             FROM captured.operations o
-             JOIN captured.traces c
-               ON c.trace_id = o.trace_id AND c.organization_id = o.organization_id
-             WHERE o.operation_id = $1 AND o.organization_id = $2 FOR UPDATE OF o, c",
-        )
-        .bind(operation_id)
-        .bind(self.organization.as_str())
-        .fetch_optional(&mut *transaction)
-        .await
-        .map_err(|error| db(anyhow!(error).context("locking operation retry")))?;
-        let Some(current) = current else {
-            return release(transaction, None).await;
-        };
-        let state: String = current.try_get("state").map_err(|e| db(e.into()))?;
-        let status: Option<i32> = current.try_get("http_status").map_err(|e| db(e.into()))?;
-        if !matches!(state.as_str(), "failed" | "interrupted")
-            || !status.is_some_and(|status| (200..=299).contains(&status))
-        {
-            return release(transaction, None).await;
-        }
-        let trace_id: String = current.try_get("trace_id").map_err(|e| db(e.into()))?;
-        let row = sqlx::query(
-            "UPDATE captured.operations SET
-                state = 'queued', started_at_unix_ms = NULL, completed_at_unix_ms = NULL,
-                failure_code = NULL, progress_phase = 'queued',
-                progress_updated_at_unix_ms = $2, proof_bytes_completed = 0,
-                proof_bytes_total = 0, proof_commitments_completed = 0,
-                proof_commitments_total = 0
-             WHERE operation_id = $1 AND organization_id = $3
-               AND state IN ('failed', 'interrupted')
-             RETURNING *",
-        )
-        .bind(operation_id)
-        .bind(now)
-        .bind(self.organization.as_str())
-        .fetch_one(&mut *transaction)
-        .await
-        .map_err(|error| db(anyhow!(error).context("retrying operation")))?;
-        sqlx::query(
-            "UPDATE captured.traces SET notarization_status = 'queued'
-             WHERE trace_id = $1 AND organization_id = $2",
-        )
-        .bind(&trace_id)
-        .bind(self.organization.as_str())
-        .execute(&mut *transaction)
-        .await
-        .map_err(|error| db(anyhow!(error).context("retrying capture notarization")))?;
-        insert_event(
-            &mut transaction,
-            &self.organization,
-            now,
-            "notarization_retried",
-            Some(&trace_id),
-            Some(operation_id),
-            "info",
-            "Notarization queued for retry",
-        )
-        .await?;
-        let operation = operation_from_row(&row).map_err(db)?;
-        transaction
-            .commit()
-            .await
-            .map_err(|error| db(anyhow!(error).context("committing operation retry")))?;
-        Ok(Some(operation))
+    async fn interrupt_running_operations(&self, _now_unix_ms: u64) -> MetadataResult<usize> {
+        Err(server_requires_claim())
     }
 
     async fn operation(&self, operation_id: &str) -> MetadataResult<Option<Operation>> {
@@ -2729,27 +1512,22 @@ impl MetadataStore for PostgresOrganizationStore {
     }
 }
 
-#[async_trait]
-impl ServerMetadataStore for PostgresMetadataStore {
-    fn organization(&self, organization: &OrganizationId) -> Arc<dyn MetadataStore> {
+/// Coordination for the multi-replica server: replica leases, claims that
+/// span organizations and carry the organization of the work they claim,
+/// dashboard sessions and the Registry. Everything else goes through
+/// [`Self::organization`], whose every read and write is limited to one
+/// organization.
+impl PostgresMetadataStore {
+    pub(crate) fn organization(&self, organization: &OrganizationId) -> Arc<dyn MetadataStore> {
         Arc::new(self.organization_store(organization))
     }
 
-    async fn register_replica(
+    pub(crate) async fn register_replica(
         &self,
         identity: &ReplicaIdentity,
         compatibility_sha256: &str,
         lease_seconds: u64,
     ) -> MetadataResult<()> {
-        if compatibility_sha256.len() != 64
-            || !compatibility_sha256
-                .bytes()
-                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-        {
-            return Err(MetadataStoreError::InvalidInput(
-                "invalid_server_compatibility",
-            ));
-        }
         let configured = sqlx::query_scalar::<_, String>(
             "SELECT compatibility_sha256
              FROM captured.settings
@@ -2791,7 +1569,7 @@ impl ServerMetadataStore for PostgresMetadataStore {
         Ok(())
     }
 
-    async fn heartbeat_replica(
+    pub(crate) async fn heartbeat_replica(
         &self,
         identity: &ReplicaIdentity,
         lease_seconds: u64,
@@ -2825,7 +1603,7 @@ impl ServerMetadataStore for PostgresMetadataStore {
             .map_err(|error| db(anyhow!(error).context("committing replica heartbeat")))
     }
 
-    async fn replica_ready(&self, identity: &ReplicaIdentity) -> MetadataResult<bool> {
+    pub(crate) async fn replica_ready(&self, identity: &ReplicaIdentity) -> MetadataResult<bool> {
         sqlx::query_scalar(
             "SELECT EXISTS(
                  SELECT 1 FROM captured.replicas
@@ -2840,7 +1618,7 @@ impl ServerMetadataStore for PostgresMetadataStore {
         .map_err(|error| db(anyhow!(error).context("checking replica lease readiness")))
     }
 
-    async fn release_replica(&self, identity: &ReplicaIdentity) -> MetadataResult<()> {
+    pub(crate) async fn release_replica(&self, identity: &ReplicaIdentity) -> MetadataResult<()> {
         sqlx::query(
             "DELETE FROM captured.replicas
              WHERE instance_id = $1 AND incarnation_id = $2::uuid",
@@ -2853,7 +1631,7 @@ impl ServerMetadataStore for PostgresMetadataStore {
         Ok(())
     }
 
-    async fn begin_capture_claimed(
+    pub(crate) async fn begin_capture_claimed(
         &self,
         capture: NewTrace,
         claim: &CaptureClaim,
@@ -2912,7 +1690,7 @@ impl ServerMetadataStore for PostgresMetadataStore {
             .map_err(|error| db(anyhow!(error).context("committing claimed capture")))
     }
 
-    async fn renew_capture_claim(
+    pub(crate) async fn renew_capture_claim(
         &self,
         claim: &CaptureClaim,
         lease_seconds: u64,
@@ -2953,7 +1731,7 @@ impl ServerMetadataStore for PostgresMetadataStore {
         }
     }
 
-    async fn prepare_capture_completion_claimed(
+    pub(crate) async fn prepare_capture_completion_claimed(
         &self,
         completion: CaptureCompletion,
         claim: &CaptureClaim,
@@ -3052,7 +1830,7 @@ impl ServerMetadataStore for PostgresMetadataStore {
         }
     }
 
-    async fn complete_capture_claimed(
+    pub(crate) async fn complete_capture_claimed(
         &self,
         completion: CaptureCompletion,
         artifact: ArtifactRecord,
@@ -3123,7 +1901,7 @@ impl ServerMetadataStore for PostgresMetadataStore {
             .map_err(|error| db(anyhow!(error)))
     }
 
-    async fn fail_capture_claimed(
+    pub(crate) async fn fail_capture_claimed(
         &self,
         claim: &CaptureClaim,
         failure_code: &str,
@@ -3162,7 +1940,7 @@ impl ServerMetadataStore for PostgresMetadataStore {
         }
     }
 
-    async fn claim_next_stale_capture(
+    pub(crate) async fn claim_next_stale_capture(
         &self,
         identity: &ReplicaIdentity,
         claim_fence: &str,
@@ -3210,7 +1988,7 @@ impl ServerMetadataStore for PostgresMetadataStore {
         }))
     }
 
-    async fn claim_next_notarization_claimed(
+    pub(crate) async fn claim_next_notarization_claimed(
         &self,
         identity: &ReplicaIdentity,
         claim_fence: &str,
@@ -3298,7 +2076,7 @@ impl ServerMetadataStore for PostgresMetadataStore {
         }))
     }
 
-    async fn renew_notarization_claim(
+    pub(crate) async fn renew_notarization_claim(
         &self,
         claim: &NotarizationClaim,
         lease_seconds: u64,
@@ -3329,7 +2107,7 @@ impl ServerMetadataStore for PostgresMetadataStore {
         }
     }
 
-    async fn update_operation_progress_claimed(
+    pub(crate) async fn update_operation_progress_claimed(
         &self,
         claim: &NotarizationClaim,
         phase: NotarizationPhase,
@@ -3391,7 +2169,7 @@ impl ServerMetadataStore for PostgresMetadataStore {
         Ok(changed)
     }
 
-    async fn update_operation_proof_progress_claimed(
+    pub(crate) async fn update_operation_proof_progress_claimed(
         &self,
         claim: &NotarizationClaim,
         progress: NotarizationProofProgress,
@@ -3468,7 +2246,7 @@ impl ServerMetadataStore for PostgresMetadataStore {
         Ok(changed)
     }
 
-    async fn complete_notarization_claimed(
+    pub(crate) async fn complete_notarization_claimed(
         &self,
         claim: &NotarizationClaim,
         artifact: ArtifactRecord,
@@ -3549,7 +2327,7 @@ impl ServerMetadataStore for PostgresMetadataStore {
         Ok(TerminalOperationResult::Applied)
     }
 
-    async fn fail_operation_claimed(
+    pub(crate) async fn fail_operation_claimed(
         &self,
         claim: &NotarizationClaim,
         now_unix_ms: u64,
@@ -3596,7 +2374,9 @@ impl ServerMetadataStore for PostgresMetadataStore {
         Ok(TerminalOperationResult::Applied)
     }
 
-    async fn interrupt_next_expired_notarization(&self) -> MetadataResult<Option<String>> {
+    pub(crate) async fn interrupt_next_expired_notarization(
+        &self,
+    ) -> MetadataResult<Option<String>> {
         let mut tx = self
             .pool
             .begin()
@@ -3646,7 +2426,7 @@ impl ServerMetadataStore for PostgresMetadataStore {
         Ok(Some(operation_id))
     }
 
-    async fn create_dashboard_session(
+    pub(crate) async fn create_dashboard_session(
         &self,
         token_hash: &[u8; 32],
         created_at_unix_ms: u64,
@@ -3668,7 +2448,7 @@ impl ServerMetadataStore for PostgresMetadataStore {
         Ok(())
     }
 
-    async fn dashboard_session_valid(
+    pub(crate) async fn dashboard_session_valid(
         &self,
         token_hash: &[u8; 32],
         _now_unix_ms: u64,
@@ -3678,7 +2458,10 @@ impl ServerMetadataStore for PostgresMetadataStore {
             .map_err(|error| db(anyhow!(error).context("checking dashboard session")))
     }
 
-    async fn revoke_dashboard_session(&self, token_hash: &[u8; 32]) -> MetadataResult<()> {
+    pub(crate) async fn revoke_dashboard_session(
+        &self,
+        token_hash: &[u8; 32],
+    ) -> MetadataResult<()> {
         sqlx::query("DELETE FROM captured.sessions WHERE token_hash=$1")
             .bind(token_hash.as_slice())
             .execute(&self.pool)
@@ -3687,7 +2470,7 @@ impl ServerMetadataStore for PostgresMetadataStore {
         Ok(())
     }
 
-    async fn prune_dashboard_sessions(
+    pub(crate) async fn prune_dashboard_sessions(
         &self,
         _now_unix_ms: u64,
         limit: usize,
@@ -3699,7 +2482,7 @@ impl ServerMetadataStore for PostgresMetadataStore {
         usize::try_from(affected).map_err(|error| db(error.into()))
     }
 
-    async fn pin_registry(
+    pub(crate) async fn pin_registry(
         &self,
         registry: Registry,
         registry_source: &str,
@@ -3759,7 +2542,7 @@ impl ServerMetadataStore for PostgresMetadataStore {
         Ok(snapshot)
     }
 
-    async fn registry_snapshot(&self) -> MetadataResult<Option<RegistrySnapshot>> {
+    pub(crate) async fn registry_snapshot(&self) -> MetadataResult<Option<RegistrySnapshot>> {
         let value = sqlx::query_scalar::<_, Vec<u8>>(
             "SELECT registry_json FROM captured.registry WHERE singleton = TRUE",
         )
@@ -3977,13 +2760,7 @@ mod tests {
     const TEST_SERVER_COMPATIBILITY: &str =
         "0000000000000000000000000000000000000000000000000000000000000000";
 
-    use std::{
-        sync::{
-            Arc,
-            atomic::{AtomicUsize, Ordering},
-        },
-        time::Duration,
-    };
+    use std::{sync::Arc, time::Duration};
 
     use sqlx::{Connection as _, PgConnection, postgres::PgPoolOptions};
     use tokio::sync::Barrier;
@@ -3995,8 +2772,7 @@ mod tests {
         metadata::{CaptureMode, EventFilters},
         metadata::{NewTrace, TerminalOperationResult, TraceFilters},
         metadata_store::{
-            CaptureClaim, MetadataStore, MetadataStoreError, ReplicaIdentity, ServerMetadataStore,
-            conformance,
+            CaptureClaim, MetadataStore, MetadataStoreError, ReplicaIdentity, conformance,
         },
         organization::OrganizationId,
         registry::{
@@ -4014,98 +2790,259 @@ mod tests {
         OrganizationId::parse(value).unwrap()
     }
 
-    /// A migrated database opened as a local (unclaimed) store.
-    async fn local_store(
-        server: &TestPostgres,
-        name: &str,
-        full_text_search: bool,
-    ) -> PostgresMetadataStore {
-        let url = server.create_database(name).await;
-        migrate_database(
-            &url,
-            PostgresSslMode::Disable,
-            Duration::from_secs(5),
-            Duration::from_secs(5),
-        )
-        .await
-        .expect("migrate local test database");
-        PostgresMetadataStore::connect(
-            &url,
-            16,
-            Duration::from_secs(5),
-            Duration::from_secs(5),
-            PostgresSslMode::Disable,
-            full_text_search,
-        )
-        .await
-        .expect("open local test store")
+    /// A replica registered on a store configured with
+    /// `TEST_SERVER_COMPATIBILITY`.
+    async fn live_replica(store: &PostgresMetadataStore, name: &str) -> ReplicaIdentity {
+        let replica = ReplicaIdentity::new(name).unwrap();
+        store
+            .register_replica(&replica, TEST_SERVER_COMPATIBILITY, 30)
+            .await
+            .unwrap();
+        replica
     }
 
-    async fn run_conformance(server: &TestPostgres, full_text_search: bool) {
-        let sequence = Arc::new(AtomicUsize::new(0));
-        let admin = server.admin.clone();
-        let base_url = server.base_url.clone();
-        conformance::run(
-            move || {
-                let sequence = sequence.clone();
-                let admin = admin.clone();
-                let base_url = base_url.clone();
-                async move {
-                    let index = sequence.fetch_add(1, Ordering::Relaxed);
-                    let database = format!(
-                        "daemon_{}_{}",
-                        if full_text_search { "fts" } else { "plain" },
-                        index
-                    );
-                    sqlx::query(&format!("CREATE DATABASE {database}"))
-                        .execute(&admin)
-                        .await
-                        .expect("create conformance database");
-                    let url = format!("{base_url}/{database}");
-                    migrate_database(
-                        &url,
-                        PostgresSslMode::Disable,
-                        Duration::from_secs(5),
-                        Duration::from_secs(5),
-                    )
-                    .await
-                    .expect("migrate conformance database");
-                    let store = PostgresMetadataStore::connect(
-                        &url,
-                        16,
-                        Duration::from_secs(5),
-                        Duration::from_secs(5),
-                        PostgresSslMode::Disable,
-                        full_text_search,
-                    )
-                    .await
-                    .expect("open conformance store");
-                    // A non-default organization, so nothing relies on the
-                    // organization that migrated rows were assigned to.
-                    let store = store.organization(&organization("conformance-org"));
-                    assert_eq!(store.backend_name(), "postgres");
-                    store
-                }
-            },
-            full_text_search,
+    /// Records one completed capture for `organization` through `replica`'s
+    /// claimed writes, as a server replica does.
+    async fn completed_capture(
+        store: &PostgresMetadataStore,
+        replica: &ReplicaIdentity,
+        organization: &OrganizationId,
+        trace_id: &str,
+        created_at_unix_ms: u64,
+    ) {
+        let claim = CaptureClaim::new(organization.clone(), trace_id, replica.clone());
+        store
+            .begin_capture_claimed(
+                conformance::new_capture(trace_id, created_at_unix_ms),
+                &claim,
+                30,
+            )
+            .await
+            .unwrap();
+        let mut checkpoint = conformance::artifact(trace_id, ArtifactKind::CaptureCheckpoint, 1);
+        checkpoint.locator = ArtifactLocator::from_stored("artifact/v1/s3/Y2hlY2twb2ludA").unwrap();
+        let checkpoint = checkpoint.with_commit_id(&claim.commit_id).unwrap();
+        let mut completion = conformance::completion(trace_id, created_at_unix_ms + 1, 200);
+        completion.expected_artifact_size_bytes = checkpoint.size_bytes;
+        completion.expected_artifact_sha256 = checkpoint.sha256.clone();
+        store
+            .prepare_capture_completion_claimed(completion.clone(), &claim, 30)
+            .await
+            .unwrap();
+        store
+            .complete_capture_claimed(completion, checkpoint, &claim)
+            .await
+            .unwrap();
+    }
+
+    /// Everything one organization can read back from its metadata view.
+    async fn snapshot(
+        store: &dyn MetadataStore,
+    ) -> (
+        Vec<crate::metadata::TraceSummary>,
+        Vec<crate::metadata::Operation>,
+        crate::metadata::EventSnapshot,
+        crate::metadata::MetadataCounts,
+        CaptureMode,
+    ) {
+        let traces = store
+            .traces(TraceFilters {
+                limit: 201,
+                ..TraceFilters::default()
+            })
+            .await
+            .unwrap();
+        let operations = store
+            .operations(crate::metadata::OperationFilters {
+                limit: 201,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let events = store
+            .events_snapshot(EventFilters {
+                limit: 201,
+                ..EventFilters::default()
+            })
+            .await
+            .unwrap();
+        (
+            traces,
+            operations,
+            events,
+            store.counts().await.unwrap(),
+            store.capture_mode().await.unwrap(),
         )
-        .await;
+    }
+
+    /// One organization can neither see nor change another's metadata, with
+    /// every row written through a replica's claimed writes.
+    async fn organizations_are_isolated(store: &PostgresMetadataStore, full_text_search: bool) {
+        let replica = live_replica(store, "isolation-replica").await;
+        let first_org = organization("acct-first");
+        let first = store.organization(&first_org);
+        let second = store.organization(&organization("acct-second"));
+
+        // The first organization has a failed, a running and a queued
+        // notarization, an active capture and its own capture mode.
+        let (failed, running, queued, active) = (
+            "trc-org-first-failed",
+            "trc-org-first-running",
+            "trc-org-first-queued",
+            "trc-org-first-active",
+        );
+        for (index, id) in [failed, running, queued].into_iter().enumerate() {
+            completed_capture(store, &replica, &first_org, id, index as u64 * 2 + 1).await;
+        }
+        let active_claim = CaptureClaim::new(first_org.clone(), active, replica.clone());
+        store
+            .begin_capture_claimed(conformance::new_capture(active, 7), &active_claim, 30)
+            .await
+            .unwrap();
+        let claim_next = async |id: &str, now: u64| {
+            first.enqueue_notarization(id, now).await.unwrap().unwrap();
+            let claim = store
+                .claim_next_notarization_claimed(&replica, &uuid::Uuid::new_v4().to_string(), 30)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(claim.operation.trace_id, id);
+            assert_eq!(claim.organization, first_org);
+            claim
+        };
+        let failed_claim = claim_next(failed, 8).await;
+        store
+            .fail_operation_claimed(&failed_claim, 9, "fixture_failure")
+            .await
+            .unwrap();
+        let running_claim = claim_next(running, 10).await;
+        let queued_operation = first
+            .enqueue_notarization(queued, 11)
+            .await
+            .unwrap()
+            .unwrap()
+            .0;
+        first.set_capture_mode(CaptureMode::Off, 12).await.unwrap();
+        let before = snapshot(first.as_ref()).await;
+        assert_eq!(before.0.len(), 4);
+        assert_eq!(before.1.len(), 3);
+        assert!(!before.2.events.is_empty());
+        if full_text_search {
+            let found = first
+                .traces(TraceFilters {
+                    query: Some("quarterly".to_owned()),
+                    limit: 20,
+                    ..TraceFilters::default()
+                })
+                .await
+                .unwrap();
+            assert_eq!(found.len(), 3, "completed captures are searchable");
+        }
+
+        // The second organization sees none of it, with default settings.
+        let (traces, operations, events, counts, mode) = snapshot(second.as_ref()).await;
+        assert!(traces.is_empty() && operations.is_empty() && events.events.is_empty());
+        assert_eq!(events.high_water, None);
+        assert_eq!(counts, crate::metadata::MetadataCounts::default());
+        assert_eq!(mode, CaptureMode::Notarized);
+        for id in [failed, running, queued, active] {
+            assert!(second.trace(id).await.unwrap().is_none());
+            assert!(second.artifacts(id).await.unwrap().is_empty());
+            assert!(second.trace_share(id).await.unwrap().is_none());
+        }
+        for operation in [
+            &failed_claim.operation,
+            &running_claim.operation,
+            &queued_operation,
+        ] {
+            assert!(
+                second
+                    .operation(&operation.operation_id)
+                    .await
+                    .unwrap()
+                    .is_none()
+            );
+            assert!(
+                second
+                    .operation_attempts(&operation.operation_id)
+                    .await
+                    .unwrap()
+                    .is_empty()
+            );
+        }
+        if full_text_search {
+            assert!(
+                second
+                    .traces(TraceFilters {
+                        query: Some("quarterly".to_owned()),
+                        limit: 20,
+                        ..TraceFilters::default()
+                    })
+                    .await
+                    .unwrap()
+                    .is_empty()
+            );
+        }
+
+        // Nor can the second organization change any of it.
+        for id in [failed, queued] {
+            assert!(second.enqueue_notarization(id, 13).await.unwrap().is_none());
+        }
+        second
+            .set_capture_mode(CaptureMode::Witnessed, 14)
+            .await
+            .unwrap();
+        assert_eq!(snapshot(first.as_ref()).await, before);
+
+        // The second organization's own work stays its own.
+        let second_org = organization("acct-second");
+        let own = "trc-org-second";
+        completed_capture(store, &replica, &second_org, own, 30).await;
+        let own_operation = second
+            .enqueue_notarization(own, 32)
+            .await
+            .unwrap()
+            .unwrap()
+            .0;
+        let (traces, operations, events, counts, mode) = snapshot(second.as_ref()).await;
+        assert_eq!(traces.len(), 1);
+        assert_eq!(traces[0].trace_id, own);
+        assert_eq!(operations, vec![own_operation.clone()]);
+        assert_eq!(mode, CaptureMode::Witnessed);
+        assert_eq!(counts.captured, 1);
+        assert_eq!(counts.notarizing, 1);
+        let first_event_ids = before
+            .2
+            .events
+            .iter()
+            .map(|event| event.event_id)
+            .collect::<std::collections::HashSet<_>>();
+        assert!(events.events.iter().all(|event| {
+            event.trace_id.as_deref().is_none_or(|trace| trace == own)
+                && !first_event_ids.contains(&event.event_id)
+        }));
+        assert!(first.trace(own).await.unwrap().is_none());
+        assert!(
+            first
+                .operation(&own_operation.operation_id)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(snapshot(first.as_ref()).await, before);
     }
 
     #[tokio::test]
     #[ignore = "requires Docker and a disposable PostgreSQL 17 container"]
-    async fn postgres_17_conforms_with_search_enabled_and_disabled() {
+    async fn organizations_are_isolated_with_search_enabled_and_disabled() {
         let server = TestPostgres::start().await;
-        run_conformance(&server, true).await;
-        run_conformance(&server, false).await;
         for (name, full_text_search) in [("daemon_orgs_fts", true), ("daemon_orgs_plain", false)] {
-            let store = local_store(&server, name, full_text_search).await;
-            conformance::organizations_are_isolated(
-                store.organization(&organization("acct-first")),
-                store.organization(&organization("acct-second")),
-                full_text_search,
-            )
-            .await;
+            let store =
+                super::test_postgres::server_store(&server, name, TEST_SERVER_COMPATIBILITY).await;
+            let store = PostgresMetadataStore::from_pool(store.pool.clone(), full_text_search)
+                .await
+                .unwrap();
+            organizations_are_isolated(&store, full_text_search).await;
         }
     }
 
@@ -4445,13 +3382,13 @@ mod tests {
         ));
         assert!(
             other_store
-                .retry_operation(&operation.operation_id, 13)
+                .enqueue_notarization(&operation.trace_id, 13)
                 .await
                 .unwrap()
                 .is_none()
         );
         org_store
-            .retry_operation(&operation.operation_id, 13)
+            .enqueue_notarization(&operation.trace_id, 13)
             .await
             .unwrap()
             .unwrap();
@@ -4490,7 +3427,6 @@ mod tests {
             "notarization_started",
             "notarization_progress",
             "notarization_interrupted",
-            "notarization_retried",
             "notarization_failed",
         ] {
             assert!(
@@ -4725,7 +3661,7 @@ mod tests {
         let server = TestPostgres::start().await;
         let blank_url = server.create_database("daemon_blank").await;
         assert!(
-            PostgresMetadataStore::connect(
+            PostgresMetadataStore::connect_server(
                 &blank_url,
                 2,
                 Duration::from_secs(5),
@@ -4811,7 +3747,7 @@ mod tests {
             "postgres://daemon_runtime:runtime-test-password@",
             1,
         );
-        let runtime = PostgresMetadataStore::connect(
+        let runtime = PostgresMetadataStore::connect_server(
             &runtime_url,
             2,
             Duration::from_secs(5),
@@ -4854,23 +3790,26 @@ mod tests {
         assert!(exhausted.is_err(), "pool exhaustion must fail readiness");
         drop(held_connection);
 
+        configure_cluster_compatibility(
+            &blank_url,
+            PostgresSslMode::Disable,
+            Duration::from_secs(5),
+            TEST_SERVER_COMPATIBILITY,
+        )
+        .await
+        .unwrap();
         let search_disabled = PostgresMetadataStore::from_pool(pool.clone(), false)
             .await
-            .unwrap()
-            .organization_store(&default_org);
-        let capture = conformance::new_capture("trc-search-toggle", 1);
-        search_disabled.begin_capture(capture).await.unwrap();
-        search_disabled
-            .complete_capture(
-                conformance::completion("trc-search-toggle", 2, 200),
-                conformance::artifact(
-                    "trc-search-toggle",
-                    crate::artifact_store::ArtifactKind::CaptureCheckpoint,
-                    1,
-                ),
-            )
-            .await
             .unwrap();
+        let replica = live_replica(&search_disabled, "search-toggle-replica").await;
+        completed_capture(
+            &search_disabled,
+            &replica,
+            &default_org,
+            "trc-search-toggle",
+            1,
+        )
+        .await;
         let search_enabled = PostgresMetadataStore::from_pool(pool.clone(), true)
             .await
             .unwrap()
@@ -5003,7 +3942,7 @@ mod tests {
             "capture settings moved to organization_settings"
         );
 
-        let store = PostgresMetadataStore::connect(
+        let store = PostgresMetadataStore::connect_server(
             &url,
             2,
             Duration::from_secs(5),
@@ -5059,7 +3998,7 @@ mod tests {
         );
         assert!(
             default_store
-                .retry_operation("op-legacy", 10)
+                .enqueue_notarization("trc-legacy", 10)
                 .await
                 .unwrap()
                 .is_some()

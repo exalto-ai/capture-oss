@@ -8,13 +8,13 @@ use std::{error::Error as StdError, fmt};
 
 use async_trait::async_trait;
 
-use capture_core::{NotarizationPhase, NotarizationProofProgress, registry::Registry};
+use capture_core::{NotarizationPhase, NotarizationProofProgress};
 
 use crate::{
     artifact_store::ArtifactRecord,
     metadata::{
         CaptureCompletion, CaptureMode, EventFilters, EventSnapshot, IncompleteCapture,
-        MetadataCounts, NewTrace, Operation, OperationAttempt, OperationFilters, RegistrySnapshot,
+        MetadataCounts, NewTrace, Operation, OperationAttempt, OperationFilters,
         TerminalOperationResult, TraceFilters, TraceShareRecord, TraceSummary,
     },
     organization::OrganizationId,
@@ -284,144 +284,12 @@ pub trait MetadataStore: Send + Sync {
         failure_code: &str,
     ) -> MetadataResult<TerminalOperationResult>;
     async fn interrupt_running_operations(&self, now_unix_ms: u64) -> MetadataResult<usize>;
-    async fn retry_operation(
-        &self,
-        operation_id: &str,
-        now_unix_ms: u64,
-    ) -> MetadataResult<Option<Operation>>;
     async fn operation(&self, operation_id: &str) -> MetadataResult<Option<Operation>>;
     async fn operations(&self, filters: OperationFilters) -> MetadataResult<Vec<Operation>>;
     async fn operation_attempts(&self, operation_id: &str)
     -> MetadataResult<Vec<OperationAttempt>>;
 
     async fn events_snapshot(&self, filters: EventFilters) -> MetadataResult<EventSnapshot>;
-}
-
-/// Coordination required by the multi-replica server runtime.
-///
-/// This contract is intentionally separate from [`MetadataStore`]. Local
-/// backends cannot be selected for clustered work, and adding a clustered operation
-/// requires the PostgreSQL adapter to implement it at compile time.
-///
-/// The server's metadata is shared by every organization. This contract
-/// covers cluster coordination and claims, which span organizations and
-/// carry the organization of the work they claim; everything else goes
-/// through [`ServerMetadataStore::organization`], whose every read and write
-/// is limited to one organization.
-#[async_trait]
-pub trait ServerMetadataStore: Send + Sync {
-    /// One organization's view of the shared metadata.
-    fn organization(&self, organization: &OrganizationId) -> std::sync::Arc<dyn MetadataStore>;
-    async fn register_replica(
-        &self,
-        identity: &ReplicaIdentity,
-        compatibility_sha256: &str,
-        lease_seconds: u64,
-    ) -> MetadataResult<()>;
-    async fn heartbeat_replica(
-        &self,
-        identity: &ReplicaIdentity,
-        lease_seconds: u64,
-    ) -> MetadataResult<()>;
-    async fn replica_ready(&self, identity: &ReplicaIdentity) -> MetadataResult<bool>;
-    async fn release_replica(&self, identity: &ReplicaIdentity) -> MetadataResult<()>;
-    async fn begin_capture_claimed(
-        &self,
-        capture: NewTrace,
-        claim: &CaptureClaim,
-        lease_seconds: u64,
-    ) -> MetadataResult<()>;
-    async fn prepare_capture_completion_claimed(
-        &self,
-        completion: CaptureCompletion,
-        claim: &CaptureClaim,
-        lease_seconds: u64,
-    ) -> MetadataResult<()>;
-    async fn complete_capture_claimed(
-        &self,
-        completion: CaptureCompletion,
-        artifact: ArtifactRecord,
-        claim: &CaptureClaim,
-    ) -> MetadataResult<()>;
-    async fn fail_capture_claimed(
-        &self,
-        claim: &CaptureClaim,
-        failure_code: &str,
-    ) -> MetadataResult<()>;
-    async fn renew_capture_claim(
-        &self,
-        claim: &CaptureClaim,
-        lease_seconds: u64,
-    ) -> MetadataResult<()>;
-    async fn claim_next_stale_capture(
-        &self,
-        identity: &ReplicaIdentity,
-        claim_fence: &str,
-        lease_seconds: u64,
-    ) -> MetadataResult<Option<CaptureRecoveryClaim>>;
-    async fn claim_next_notarization_claimed(
-        &self,
-        identity: &ReplicaIdentity,
-        claim_fence: &str,
-        lease_seconds: u64,
-    ) -> MetadataResult<Option<NotarizationClaim>>;
-    async fn update_operation_progress_claimed(
-        &self,
-        claim: &NotarizationClaim,
-        phase: NotarizationPhase,
-        now_unix_ms: u64,
-        lease_seconds: u64,
-    ) -> MetadataResult<bool>;
-    async fn renew_notarization_claim(
-        &self,
-        claim: &NotarizationClaim,
-        lease_seconds: u64,
-    ) -> MetadataResult<()>;
-    async fn update_operation_proof_progress_claimed(
-        &self,
-        claim: &NotarizationClaim,
-        progress: NotarizationProofProgress,
-        now_unix_ms: u64,
-        lease_seconds: u64,
-    ) -> MetadataResult<bool>;
-    async fn complete_notarization_claimed(
-        &self,
-        claim: &NotarizationClaim,
-        artifact: ArtifactRecord,
-        now_unix_ms: u64,
-    ) -> MetadataResult<TerminalOperationResult>;
-    async fn fail_operation_claimed(
-        &self,
-        claim: &NotarizationClaim,
-        now_unix_ms: u64,
-        failure_code: &str,
-    ) -> MetadataResult<TerminalOperationResult>;
-    async fn interrupt_next_expired_notarization(&self) -> MetadataResult<Option<String>>;
-
-    async fn create_dashboard_session(
-        &self,
-        token_hash: &[u8; 32],
-        created_at_unix_ms: u64,
-        expires_at_unix_ms: u64,
-    ) -> MetadataResult<()>;
-    async fn dashboard_session_valid(
-        &self,
-        token_hash: &[u8; 32],
-        now_unix_ms: u64,
-    ) -> MetadataResult<bool>;
-    async fn revoke_dashboard_session(&self, token_hash: &[u8; 32]) -> MetadataResult<()>;
-    async fn prune_dashboard_sessions(
-        &self,
-        now_unix_ms: u64,
-        limit: usize,
-    ) -> MetadataResult<usize>;
-
-    async fn pin_registry(
-        &self,
-        registry: Registry,
-        registry_source: &str,
-    ) -> MetadataResult<RegistrySnapshot>;
-    async fn registry_snapshot(&self) -> MetadataResult<Option<RegistrySnapshot>>;
 }
 
 #[cfg(any(test, feature = "test-support"))]

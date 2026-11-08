@@ -69,6 +69,8 @@ impl Vault {
     }
 
     /// Creates one new shared cluster key without overwriting existing data.
+    /// Operators generate the key themselves (`openssl rand 32`); tests use this.
+    #[cfg(any(test, feature = "test-utils"))]
     pub fn init_cluster_key(path: &Path) -> Result<Self> {
         let parent = path
             .parent()

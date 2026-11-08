@@ -1239,46 +1239,6 @@ impl SqliteMetadata {
         Ok(interrupted.len())
     }
 
-    pub fn retry_operation(&self, operation_id: &str, now: u64) -> Result<Option<Operation>> {
-        let connection = self.connection()?;
-        let transaction = connection.unchecked_transaction()?;
-        let changed = transaction.execute(
-            "UPDATE operations
-             SET state = 'queued', started_at_unix_ms = NULL,
-                 completed_at_unix_ms = NULL, failure_code = NULL,
-                 progress_phase = 'queued', progress_updated_at_unix_ms = ?,
-                 proof_bytes_completed = 0, proof_bytes_total = 0,
-                 proof_commitments_completed = 0, proof_commitments_total = 0
-             WHERE operation_id = ? AND state IN ('failed', 'interrupted')
-               AND EXISTS (
-                   SELECT 1 FROM traces
-                   WHERE traces.trace_id = operations.trace_id
-                     AND traces.http_status BETWEEN 200 AND 299
-               )",
-            params![i64::try_from(now)?, operation_id],
-        )?;
-        if changed == 0 {
-            return Ok(None);
-        }
-        transaction.execute("UPDATE traces SET notarization_status = 'queued' WHERE trace_id = (SELECT trace_id FROM operations WHERE operation_id = ?)", params![operation_id])?;
-        let operation = transaction.query_row(
-            "SELECT * FROM operations WHERE operation_id = ?",
-            params![operation_id],
-            operation_from_row,
-        )?;
-        insert_event(
-            &transaction,
-            now,
-            "notarization_retried",
-            Some(&operation.trace_id),
-            Some(operation_id),
-            "info",
-            "Notarization queued for retry",
-        )?;
-        transaction.commit()?;
-        Ok(Some(operation))
-    }
-
     pub fn operation(&self, operation_id: &str) -> Result<Option<Operation>> {
         let connection = self.connection()?;
         connection

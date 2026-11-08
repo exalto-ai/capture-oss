@@ -1,15 +1,12 @@
 //! Who pays for the notary admission tickets a server's operations need.
 //!
 //! A self-hosted notary needs no tickets. The hosted notary admits each
-//! operation with a one-operation ticket from capture-api, charged to:
-//!
-//! - with `token_file` authentication, the server's own connected Exalto
-//!   account (`CAPTURE_PLATFORM_API_KEY[_FILE]`), for every organization;
-//! - with `hosted` authentication, each operation's organization. The server
-//!   presents its own capture service credential to capture-api's capture
-//!   service route and names the organization, so it never holds an
-//!   organization's credential, and the background notarization worker can
-//!   charge an operation's organization long after its request.
+//! operation with a one-operation ticket from capture-api, charged to the
+//! operation's organization. The server presents its own capture service
+//! credential to capture-api's capture service route and names the
+//! organization, so it never holds an organization's credential, and the
+//! background notarization worker can charge an operation's organization
+//! long after its request.
 
 use std::{path::Path, sync::Arc, time::Duration};
 
@@ -26,14 +23,14 @@ use capture_engine::{
 };
 use serde::Serialize;
 
-use super::{auth, http_client_builder, private_token};
+use super::{http_client_builder, private_token};
 use crate::{CaptureCheckpoint, organization::OrganizationId};
 
 /// Who pays for each organization's notary operations on this server.
 #[derive(Clone)]
 pub(crate) enum ServerAdmission {
-    /// One admission for every organization: the server's own Exalto
-    /// account, or none when the notary needs no tickets.
+    /// One admission for every organization: none, as a self-hosted notary
+    /// needs no tickets.
     Shared(Arc<dyn Admission>),
     /// Each organization pays for its own operations through capture-api's
     /// capture service route.
@@ -73,38 +70,11 @@ impl ServerAdmission {
     }
 
     /// Names the payer in startup logs.
-    pub(crate) fn kind(&self, notary_needs_tickets: bool) -> &'static str {
-        match (self, notary_needs_tickets) {
-            (Self::PerOrganization(_), _) => "organization",
-            (Self::Shared(_), true) => "server_account",
-            (Self::Shared(_), false) => "none",
+    pub(crate) fn kind(&self) -> &'static str {
+        match self {
+            Self::PerOrganization(_) => "organization",
+            Self::Shared(_) => "none",
         }
-    }
-}
-
-/// Admission through the server's own connected Exalto account, which pays
-/// for every organization.
-pub(crate) struct AccountAdmission;
-
-#[async_trait::async_trait]
-impl Admission for AccountAdmission {
-    async fn capture(&self) -> Result<Option<AdmissionTicket>> {
-        auth::issue_capture_admission().await.map(Some)
-    }
-
-    async fn witness(&self) -> Result<Option<AdmissionTicket>> {
-        auth::issue_witness_admission().await.map(Some)
-    }
-
-    async fn notarization(
-        &self,
-        checkpoint: &CaptureCheckpoint,
-        max_attestable_http_bytes: usize,
-    ) -> Result<Option<AdmissionTicket>> {
-        let allowance = notarization_allowance(checkpoint, max_attestable_http_bytes)?;
-        auth::issue_notarization_admission(&checkpoint.record_digest_hex(), allowance)
-            .await
-            .map(Some)
     }
 }
 
@@ -164,9 +134,9 @@ impl CaptureService {
         })
     }
 
-    /// Issues a ticket charged to `organization`. Failures are the same
-    /// bounded, user-safe hosted admission errors the server's own account
-    /// gets, so they reach clients and Activity the same way.
+    /// Issues a ticket charged to `organization`. Failures are the bounded,
+    /// user-safe hosted admission errors, so they reach clients and Activity
+    /// the same way as on the desktop.
     async fn issue(
         &self,
         organization: &OrganizationId,
@@ -678,14 +648,13 @@ mod tests {
         );
         assert!(shared.for_claim(&organization("acct-alpha")).is_none());
         assert!(shared.host().witness().await.unwrap().is_none());
-        assert_eq!(shared.kind(false), "none");
-        assert_eq!(shared.kind(true), "server_account");
+        assert_eq!(shared.kind(), "none");
 
         // When organizations pay, nothing without an organization is
         // charged to anyone.
         let api = TestCaptureApi::start(TOKEN, HashMap::new()).await;
         let per_organization = per_organization(&api, TOKEN);
-        assert_eq!(per_organization.kind(true), "organization");
+        assert_eq!(per_organization.kind(), "organization");
         let error = per_organization.host().capture().await.err().unwrap();
         assert_eq!(
             hosted_admission_failure(&error).unwrap().code(),

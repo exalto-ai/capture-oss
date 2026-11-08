@@ -9,7 +9,7 @@ use anyhow::{Context, Result};
 use argon2::{Argon2, PasswordHash, PasswordVerifier};
 use axum::{
     Json, Router,
-    extract::{DefaultBodyLimit, Path, Query, Request, State, rejection::QueryRejection},
+    extract::{DefaultBodyLimit, Path, Request, State},
     http::{HeaderValue, StatusCode, header},
     middleware::{self, Next},
     response::{IntoResponse, Response},
@@ -17,7 +17,7 @@ use axum::{
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use rust_embed::RustEmbed;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use sha2::{Digest as _, Sha256};
 use tokio::sync::{Mutex, Notify};
 use tower_http::{
@@ -25,9 +25,8 @@ use tower_http::{
     sensitive_headers::SetSensitiveRequestHeadersLayer,
     trace::{DefaultOnRequest, DefaultOnResponse, TraceLayer},
 };
-use utoipa::{IntoParams, Modify, OpenApi, ToSchema};
+use utoipa::{Modify, OpenApi, ToSchema};
 
-use capture_core::probe_notary_transport;
 use capture_engine::api::{
     ActivityItem, ActivityPage, ApiContext, ApiError, AutoSealSettingResponse,
     CaptureSettingResponse, ErrorBody, ErrorEnvelope, EvidenceArtifact, NotarizationAttempt,
@@ -51,9 +50,6 @@ const SESSION_COOKIE: &str = "notary_admin_session";
 const SESSION_MAX_AGE_SECONDS: u64 = 43_200;
 const DEPENDENCY_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 const DEPENDENCY_PROBE_CACHE_TTL: Duration = Duration::from_secs(1);
-const NOTARY_TRUST_RESOLUTION_TIMEOUT: Duration = Duration::from_secs(3);
-const NOTARY_TRANSPORT_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
-const NOTARY_READINESS_CACHE_TTL: Duration = Duration::from_secs(15);
 const DASHBOARD_HEADER: &str = "x-notary-request";
 const DASHBOARD_CSP: &str = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'";
 #[derive(RustEmbed)]
@@ -62,7 +58,6 @@ struct DashboardAssets;
 
 type DependencyProbeResult = std::result::Result<(), &'static str>;
 type DependencyProbeCache = Option<(Instant, DependencyProbeResult)>;
-type NotaryReadinessCache = Option<(Instant, NotaryReadinessResponse)>;
 
 #[derive(Clone)]
 pub(crate) struct AdminState {
@@ -74,7 +69,6 @@ pub(crate) struct AdminState {
     proxy_origin: String,
     admin_origin: String,
     dependency_probe: Arc<Mutex<DependencyProbeCache>>,
-    notary_readiness: Arc<Mutex<NotaryReadinessCache>>,
     capture_mode: Arc<crate::service::proxy::CaptureSetting>,
     /// The shared administration routes' context.
     api: ApiContext,
@@ -89,7 +83,7 @@ impl AdminState {
         let cluster = config
             .cluster
             .as_ref()
-            .context("server mode requires [cluster]")?;
+            .expect("capture-server starts only with [cluster]");
         let proxy_origin = cluster.proxy_origin.clone();
         let admin_origin = cluster
             .admin_origin
@@ -128,7 +122,6 @@ impl AdminState {
             proxy_origin,
             admin_origin,
             dependency_probe: Arc::new(Mutex::new(None)),
-            notary_readiness: Arc::new(Mutex::new(None)),
             capture_mode,
             api,
         })
@@ -195,7 +188,6 @@ pub(crate) fn router(state: AdminState) -> Result<Router> {
     let protected = Router::new()
         .route("/v1/status", get(status))
         .route("/v1/notaries", get(notaries))
-        .route("/v1/notaries/readiness", get(notary_readiness))
         .route("/v1/providers", get(providers))
         .route("/v1/session", delete(end_session))
         .merge(capture_engine::api::routes().with_state(state.api.clone()))
@@ -291,7 +283,6 @@ fn embedded_dashboard_response(path: &str) -> Response {
         capture_engine::api::auto_seal_setting,
         capture_engine::api::update_auto_seal_setting,
         notaries,
-        notary_readiness,
         providers,
         capture_engine::api::traces,
         capture_engine::api::trace,
@@ -307,7 +298,6 @@ fn embedded_dashboard_response(path: &str) -> Response {
     components(schemas(
         HealthResponse, ReadinessResponse, StatusResponse, CaptureSettingResponse,
         UpdateCaptureSetting, AutoSealSettingResponse, UpdateAutoSealSetting, TraceCounts, NotariesResponse, Notary,
-        NotaryReadinessResponse, NotaryReadinessPhase,
         ProvidersResponse, Provider, TraceState, TraceOperationalStatus, TracePage, TraceSummary,
         TraceDetail, EvidenceArtifact,
         TechnicalOperation, OperationProgressResponse,
@@ -557,157 +547,6 @@ async fn status(State(state): State<AdminState>) -> Result<Json<StatusResponse>,
         preview_chars: state.config.metadata.prompt_preview_chars,
         counts: TraceCounts::from(counts),
     }))
-}
-
-#[derive(Debug, Default, Deserialize, IntoParams)]
-#[serde(deny_unknown_fields)]
-#[into_params(parameter_in = Query)]
-struct NotaryReadinessQuery {
-    /// Ignore the short-lived probe cache and check the trusted endpoint now.
-    #[param(default = false)]
-    refresh: Option<bool>,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, ToSchema)]
-#[serde(rename_all = "snake_case")]
-enum NotaryReadinessPhase {
-    /// The configured trust source could not currently resolve a trusted endpoint.
-    TrustUnavailable,
-    /// Trust resolved, but the endpoint did not complete its configured transport handshake.
-    Unreachable,
-    /// Trust resolved and the endpoint completed its configured transport handshake.
-    Ready,
-}
-
-#[derive(Clone, Debug, Serialize, ToSchema)]
-struct NotaryReadinessResponse {
-    phase: NotaryReadinessPhase,
-    /// `registry` or `explicit_configuration`.
-    source: String,
-    /// A trust source is selected in local configuration.
-    configured: bool,
-    /// The current trust source resolved a validated endpoint and key selection.
-    trusted: bool,
-    /// The endpoint completed TCP connection and, when configured, TLS validation.
-    reachable: bool,
-    /// `tcp` or `tls` after trusted endpoint resolution.
-    transport: Option<String>,
-    checked_at_unix_ms: u64,
-    message: String,
-}
-
-impl NotaryReadinessResponse {
-    fn trust_unavailable(source: &str, checked_at_unix_ms: u64) -> Self {
-        Self {
-            phase: NotaryReadinessPhase::TrustUnavailable,
-            source: source.into(),
-            configured: true,
-            trusted: false,
-            reachable: false,
-            transport: None,
-            checked_at_unix_ms,
-            message: "The configured trust source could not resolve a trusted sealing endpoint."
-                .into(),
-        }
-    }
-
-    fn for_trusted_endpoint(
-        source: &str,
-        transport: &str,
-        checked_at_unix_ms: u64,
-        reachable: bool,
-    ) -> Self {
-        Self {
-            phase: if reachable {
-                NotaryReadinessPhase::Ready
-            } else {
-                NotaryReadinessPhase::Unreachable
-            },
-            source: source.into(),
-            configured: true,
-            trusted: true,
-            reachable,
-            transport: Some(transport.into()),
-            checked_at_unix_ms,
-            message: if reachable {
-                "The trusted sealing endpoint completed its transport handshake. Final admission is checked when sealing starts."
-            } else {
-                "A trusted sealing endpoint is configured, but its transport handshake did not complete."
-            }
-            .into(),
-        }
-    }
-}
-
-#[utoipa::path(
-    get,
-    path = "/v1/notaries/readiness",
-    summary = "Probe trusted Notary reachability",
-    description = "Resolves the endpoint selected by current Registry or explicit key trust, then performs a bounded TCP connection and configured TLS validation. It sends no admission credential and starts no capture, sealing, or billable operation. Ready means the transport is reachable; final admission is still checked when sealing starts.",
-    params(NotaryReadinessQuery),
-    responses(
-        (status = 200, body = NotaryReadinessResponse),
-        (status = 400, body = ErrorEnvelope),
-        (status = 401, body = ErrorEnvelope),
-        (status = 500, body = ErrorEnvelope)
-    ),
-    security(("basicAuth" = [])),
-    tag = "local-admin"
-)]
-async fn notary_readiness(
-    State(state): State<AdminState>,
-    query: Result<Query<NotaryReadinessQuery>, QueryRejection>,
-) -> Result<Json<NotaryReadinessResponse>, ApiError> {
-    let Query(query) = query.map_err(|_| ApiError::bad_request("invalid_query_parameter"))?;
-    let mut cache = state.notary_readiness.lock().await;
-    if !query.refresh.unwrap_or(false)
-        && let Some((checked_at, response)) = cache.as_ref()
-        && checked_at.elapsed() < NOTARY_READINESS_CACHE_TTL
-    {
-        return Ok(Json(response.clone()));
-    }
-
-    let checked_at_unix_ms = now_ms().map_err(|_| ApiError::internal("clock_unavailable"))?;
-    let source = if state.config.notary.endpoint.is_some() {
-        "explicit_configuration"
-    } else {
-        "registry"
-    };
-    let explicit_trust_is_valid = state.config.notary.endpoint.is_none()
-        || state
-            .config
-            .notary_public_key()
-            .is_ok_and(|key| key.is_some());
-    let endpoint = if explicit_trust_is_valid {
-        Some(
-            tokio::time::timeout(
-                NOTARY_TRUST_RESOLUTION_TIMEOUT,
-                state.capture_mode.trusted_notary(),
-            )
-            .await,
-        )
-    } else {
-        None
-    };
-    let response = match endpoint {
-        Some(Ok(Ok(endpoint))) => {
-            let transport = endpoint.transport.scheme();
-            let reachable = probe_notary_transport(&endpoint, NOTARY_TRANSPORT_PROBE_TIMEOUT)
-                .await
-                .is_ok();
-            NotaryReadinessResponse::for_trusted_endpoint(
-                source,
-                transport,
-                checked_at_unix_ms,
-                reachable,
-            )
-        }
-        Some(Ok(Err(_))) | Some(Err(_)) | None => {
-            NotaryReadinessResponse::trust_unavailable(source, checked_at_unix_ms)
-        }
-    };
-    *cache = Some((Instant::now(), response.clone()));
-    Ok(Json(response))
 }
 
 #[utoipa::path(get, path = "/v1/notaries", summary = "List Notaries", description = "Returns a safe read-only projection of the Registry pinned in shared metadata or the explicitly configured self-hosted endpoint and key. Registry membership describes allowed protocol use and does not report endpoint health.", responses((status = 200, body = NotariesResponse), (status = 401, body = ErrorEnvelope), (status = 500, body = ErrorEnvelope), (status = 503, body = ErrorEnvelope)), security(("basicAuth" = [])), tag = "local-admin")]
@@ -1068,16 +907,12 @@ mod tests {
     use super::*;
     use crate::{
         config::S3ArtifactStoreConfig,
-        metadata::TraceSummary as StoredTraceSummary,
         metadata_store::ReplicaIdentity,
         postgres_metadata_store::test_postgres::{TestPostgres, server_store},
         s3_artifact_store::{S3ArtifactStore, S3ArtifactStoreCredentials},
-        service::auth,
     };
     use argon2::{PasswordHasher, password_hash::SaltString};
     use axum::{body::Body, http::Request};
-    use capture_engine::api::{classify_verification_failure, trace_state_and_status};
-    use capture_engine::notarization::notarization_failure_code;
     use http_body_util::BodyExt as _;
     use std::{io::Write as IoWrite, sync::Mutex as StdMutex};
     use tower::ServiceExt as _;
@@ -1170,161 +1005,6 @@ mod tests {
         fn make_writer(&'writer self) -> Self::Writer {
             SharedLogWriter(self.0.clone())
         }
-    }
-
-    #[test]
-    fn notarization_failures_preserve_hosted_admission_outcomes() {
-        for (rejection, expected) in [
-            (
-                crate::NotaryAdmissionRejection::AdmissionExpired,
-                "hosted_admission_expired",
-            ),
-            (
-                crate::NotaryAdmissionRejection::AdmissionServiceUnavailable,
-                "hosted_admission_unavailable",
-            ),
-            (
-                crate::NotaryAdmissionRejection::NotarizationAllowanceExhausted,
-                "notarization_credits_exhausted",
-            ),
-            (
-                crate::NotaryAdmissionRejection::NotarizationAtCapacity,
-                "notary_capacity",
-            ),
-        ] {
-            let error = anyhow::Error::new(crate::NotaryAdmissionError::test_only(
-                rejection,
-                Duration::from_secs(5),
-            ));
-            assert_eq!(notarization_failure_code(&error), expected);
-        }
-
-        let acquisition = anyhow::Error::new(auth::hosted_admission_denial(
-            "notarization_credits_exhausted",
-        ));
-        assert_eq!(
-            notarization_failure_code(&acquisition),
-            "notarization_credits_exhausted"
-        );
-    }
-
-    #[test]
-    fn notarization_failures_name_a_closed_or_silent_notary() {
-        for (failure, expected) in [
-            (
-                crate::NotaryConnectionFailure::Closed,
-                "notary_connection_closed",
-            ),
-            (crate::NotaryConnectionFailure::TimedOut, "notary_timeout"),
-            (crate::NotaryConnectionFailure::Stalled, "notary_timeout"),
-        ] {
-            let error = anyhow::Error::new(crate::NotaryConnectionError::test_only(failure))
-                .context("notarizing capture checkpoint");
-            assert_eq!(notarization_failure_code(&error), expected);
-        }
-    }
-
-    #[test]
-    fn trace_product_state_covers_every_persisted_lifecycle_condition() {
-        let trace = |capture_status: &str, notarization_status: &str| StoredTraceSummary {
-            evidence_kind: crate::metadata::EvidenceKind::Notarized,
-            trace_id: "trc-state".into(),
-            created_at_unix_ms: 1,
-            completed_at_unix_ms: None,
-            provider: "openai".into(),
-            operation: "responses".into(),
-            requested_model: None,
-            response_model: None,
-            http_status: None,
-            streaming: false,
-            request_bytes: 1,
-            response_bytes: None,
-            duration_ms: None,
-            capture_status: capture_status.into(),
-            notarization_status: notarization_status.into(),
-            prompt_preview: String::new(),
-            prompt_preview_truncated: false,
-            output_preview: String::new(),
-            output_preview_truncated: false,
-            expected_artifact_size_bytes: None,
-            expected_artifact_sha256: None,
-            failure_code: None,
-        };
-        for (capture, notarization, expected_state, expected_status) in [
-            ("capturing", "not_requested", None, Some("capturing")),
-            ("failed", "not_requested", None, Some("capture_failed")),
-            ("captured", "not_requested", Some("captured"), None),
-            ("captured", "queued", Some("captured"), Some("notarizing")),
-            ("captured", "running", Some("captured"), Some("notarizing")),
-            (
-                "captured",
-                "failed",
-                Some("captured"),
-                Some("notarization_failed"),
-            ),
-            (
-                "captured",
-                "interrupted",
-                Some("captured"),
-                Some("notarization_interrupted"),
-            ),
-            ("captured", "succeeded", Some("notarized"), None),
-        ] {
-            let (state, status) = trace_state_and_status(&trace(capture, notarization));
-            assert_eq!(state.map(TraceState::as_str), expected_state);
-            assert_eq!(status.map(TraceOperationalStatus::as_str), expected_status);
-        }
-    }
-
-    #[test]
-    fn verification_failures_name_an_untrusted_notary_key_apart() {
-        for (message, code) in [
-            (
-                "presentation was not signed by the trusted notary key",
-                "untrusted_notary",
-            ),
-            (
-                "witness receipt was not signed by the trusted notary key",
-                "untrusted_notary",
-            ),
-            (
-                "unsupported verified trace package format",
-                "unsupported_trace_package",
-            ),
-            (
-                "capture artifact hashes do not match the manifest",
-                "verification_failed",
-            ),
-        ] {
-            assert_eq!(classify_verification_failure(message).1, code, "{message}");
-        }
-    }
-
-    #[test]
-    fn notary_readiness_requires_both_trust_and_transport_reachability() {
-        let unavailable = NotaryReadinessResponse::trust_unavailable("registry", 10);
-        assert_eq!(unavailable.phase, NotaryReadinessPhase::TrustUnavailable);
-        assert!(unavailable.configured);
-        assert!(!unavailable.trusted);
-        assert!(!unavailable.reachable);
-
-        let unreachable =
-            NotaryReadinessResponse::for_trusted_endpoint("registry", "tls", 11, false);
-        assert_eq!(unreachable.phase, NotaryReadinessPhase::Unreachable);
-        assert!(unreachable.configured);
-        assert!(unreachable.trusted);
-        assert!(!unreachable.reachable);
-        assert_eq!(unreachable.transport.as_deref(), Some("tls"));
-
-        let ready = NotaryReadinessResponse::for_trusted_endpoint(
-            "explicit_configuration",
-            "tcp",
-            12,
-            true,
-        );
-        assert_eq!(ready.phase, NotaryReadinessPhase::Ready);
-        assert!(ready.configured && ready.trusted && ready.reachable);
-        assert!(ready.message.contains("Final admission"));
     }
 
     #[test]
@@ -1675,6 +1355,6 @@ mod tests {
                 documented_operations += 1;
             }
         }
-        assert_eq!(documented_operations, 23);
+        assert_eq!(documented_operations, 22);
     }
 }

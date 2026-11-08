@@ -697,11 +697,7 @@ fn credential_configuration() -> Result<CredentialConfiguration> {
     let stored = credentials_path()?.exists();
     validate_source_combination(direct.is_some(), file.is_some(), stored)?;
 
-    let origin = match env::var(API_ORIGIN_ENV) {
-        Ok(value) => ApiOrigin::parse(&value).context("validating CAPTURE_PLATFORM_API_ORIGIN")?,
-        Err(env::VarError::NotPresent) => ApiOrigin::default_public(),
-        Err(env::VarError::NotUnicode(_)) => bail!("CAPTURE_PLATFORM_API_ORIGIN must be UTF-8"),
-    };
+    let origin = environment_api_origin()?;
     let key = match (direct, file) {
         (Some(value), None) => Some(
             value
@@ -725,6 +721,16 @@ fn credential_configuration() -> Result<CredentialConfiguration> {
         })
     } else {
         Ok(CredentialConfiguration::Anonymous { origin })
+    }
+}
+
+/// The Exalto API origin named by `CAPTURE_PLATFORM_API_ORIGIN`, or the
+/// public origin. Unlike [`configured_api_origin`], it reads no credentials.
+pub fn environment_api_origin() -> Result<ApiOrigin> {
+    match env::var(API_ORIGIN_ENV) {
+        Ok(value) => ApiOrigin::parse(&value).context("validating CAPTURE_PLATFORM_API_ORIGIN"),
+        Err(env::VarError::NotPresent) => Ok(ApiOrigin::default_public()),
+        Err(env::VarError::NotUnicode(_)) => bail!("CAPTURE_PLATFORM_API_ORIGIN must be UTF-8"),
     }
 }
 
