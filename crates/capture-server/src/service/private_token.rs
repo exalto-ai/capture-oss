@@ -11,21 +11,12 @@ pub(crate) const MAX_TOKEN_BYTES: usize = 512;
 /// The token and at most a trailing line ending.
 pub(crate) const MAX_TOKEN_FILE_BYTES: u64 = 1024;
 
-/// Reads `path`, a regular file that group and others cannot access, holding
-/// one token of printable ASCII and at most a trailing line ending. Errors
+/// Reads `path`, a regular file holding one token of printable ASCII and at most a trailing line ending. Errors
 /// describe the file, never its contents; callers add which file it is.
 pub(crate) fn read(path: &Path) -> Result<String> {
     let file = std::fs::File::open(path).context("opening the file")?;
     let metadata = file.metadata().context("inspecting the file")?;
     ensure!(metadata.is_file(), "it is not a regular file");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-        ensure!(
-            metadata.permissions().mode() & 0o077 == 0,
-            "it must not be accessible by group or others"
-        );
-    }
     let mut bytes = Vec::new();
     file.take(MAX_TOKEN_FILE_BYTES + 1)
         .read_to_end(&mut bytes)

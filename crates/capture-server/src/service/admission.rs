@@ -723,21 +723,6 @@ mod tests {
             private_token::MAX_TOKEN_BYTES
         );
 
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt as _;
-            write_private(&path, TOKEN.as_bytes());
-            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o640)).unwrap();
-            let error = format!(
-                "{:#}",
-                CaptureService::load(origin.clone(), &path).err().unwrap()
-            );
-            assert!(
-                error.contains("must not be accessible by group or others"),
-                "{error}"
-            );
-            assert!(!error.contains(TOKEN), "{error}");
-        }
         assert!(CaptureService::load(origin.clone(), directory.path()).is_err());
         assert!(CaptureService::load(origin.clone(), &directory.path().join("missing")).is_err());
 

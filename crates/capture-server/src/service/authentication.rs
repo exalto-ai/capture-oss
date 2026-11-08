@@ -323,15 +323,6 @@ impl TokenFileAuthenticator {
             "token file {} is not a regular file",
             path.display()
         );
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt as _;
-            ensure!(
-                metadata.permissions().mode() & 0o077 == 0,
-                "token file {} must not be accessible by group or others",
-                path.display()
-            );
-        }
         let mut bytes = Vec::new();
         file.take(MAX_TOKEN_FILE_BYTES + 1)
             .read_to_end(&mut bytes)
@@ -655,7 +646,7 @@ mod tests {
     }
 
     #[test]
-    fn token_files_must_be_private_bounded_and_well_formed() {
+    fn token_files_must_be_bounded_and_well_formed() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("capture-tokens.toml");
         let valid = format!(
@@ -665,14 +656,6 @@ mod tests {
         write_private(&path, &valid);
         TokenFileAuthenticator::load(&path).unwrap();
 
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt as _;
-            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o640)).unwrap();
-            let error = TokenFileAuthenticator::load(&path).err().unwrap();
-            assert!(format!("{error:#}").contains("must not be accessible by group or others"));
-            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
-        }
         assert!(TokenFileAuthenticator::load(directory.path()).is_err());
         assert!(TokenFileAuthenticator::load(&directory.path().join("missing.toml")).is_err());
 

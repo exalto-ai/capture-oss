@@ -91,8 +91,11 @@ impl AdminState {
             .cluster
             .as_ref()
             .context("server mode requires [cluster]")?;
-        let (proxy_origin, admin_origin) =
-            (cluster.proxy_origin.clone(), cluster.admin_origin.clone());
+        let proxy_origin = cluster.proxy_origin.clone();
+        let admin_origin = cluster
+            .admin_origin
+            .clone()
+            .unwrap_or_else(|| format!("http://{}", config.admin.listen));
         let capture_mode = match capture_mode {
             Some(capture_mode) => capture_mode,
             None => Arc::new(crate::service::proxy::CaptureSetting::new(
@@ -1131,7 +1134,7 @@ mod tests {
         });
         config.cluster = Some(crate::config::ClusterConfig {
             proxy_origin: "https://proxy.capture.example".to_owned(),
-            admin_origin: "https://admin.capture.example".to_owned(),
+            admin_origin: Some("https://admin.capture.example".to_owned()),
             authentication: crate::config::AuthenticationConfig::Hosted {
                 capture_service_token_file: None,
             },

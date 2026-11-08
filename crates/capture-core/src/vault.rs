@@ -358,16 +358,6 @@ fn read_server_key_file(path: &Path) -> Result<[u8; 32]> {
             path.display()
         );
     }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-        if metadata.permissions().mode() & 0o077 != 0 {
-            bail!(
-                "cluster vault key file {} must not be readable by group or others",
-                path.display()
-            );
-        }
-    }
     if metadata.len() != 32 {
         bail!("cluster vault key file must contain exactly 32 bytes");
     }

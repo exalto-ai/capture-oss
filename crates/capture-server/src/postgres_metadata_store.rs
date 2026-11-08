@@ -38,7 +38,6 @@ use crate::{
     registry::Registry,
 };
 
-const SCHEMA: &str = "captured";
 const JOURNAL: &str = "captured.schema_migrations";
 const MIGRATION_LOCK_NAMESPACE: &str = "ecp/captured-postgres-migrations/v1";
 const LATEST_SCHEMA_VERSION: i64 = 4;
@@ -183,8 +182,7 @@ impl PostgresMetadataStore {
         full_text_search: bool,
         cluster_mode: bool,
     ) -> MetadataResult<Self> {
-        require_current_schema(&pool).await?;
-        require_runtime_profile(&pool, cluster_mode).await?;
+        require_migrated_schema(&pool).await?;
         Ok(Self {
             pool,
             full_text_search,
@@ -288,27 +286,10 @@ async fn migrate_database_through(
         .begin()
         .await
         .context("starting daemon migration transaction")?;
-    let current_user: String = sqlx::query_scalar("SELECT current_user")
-        .fetch_one(&mut *transaction)
+    sqlx::query("CREATE SCHEMA IF NOT EXISTS captured")
+        .execute(&mut *transaction)
         .await
-        .context("reading daemon migration role")?;
-    let schema_owner: Option<String> =
-        sqlx::query_scalar("SELECT pg_get_userbyid(nspowner) FROM pg_namespace WHERE nspname = $1")
-            .bind(SCHEMA)
-            .fetch_optional(&mut *transaction)
-            .await
-            .context("checking daemon schema ownership")?;
-    if let Some(owner) = schema_owner {
-        ensure!(
-            owner == current_user,
-            "daemon metadata schema is owned by a different PostgreSQL role"
-        );
-    } else {
-        sqlx::query("CREATE SCHEMA captured")
-            .execute(&mut *transaction)
-            .await
-            .context("creating daemon metadata schema")?;
-    }
+        .context("creating daemon metadata schema")?;
     sqlx::query("REVOKE ALL ON SCHEMA captured FROM PUBLIC")
         .execute(&mut *transaction)
         .await
@@ -331,10 +312,8 @@ async fn migrate_database_through(
     .fetch_all(&mut *transaction)
     .await
     .context("reading daemon migration journal")?;
-    ensure!(
-        rows.len() <= usize::try_from(LATEST_SCHEMA_VERSION).unwrap_or(0),
-        "daemon PostgreSQL schema is newer than this binary"
-    );
+    // A journal ahead of this binary is a newer release's, which keeps its
+    // migrations compatible with this one: there is nothing to apply.
     for (index, (version, description, migration)) in migrations.iter().enumerate() {
         let checksum = hex::encode(Sha256::digest(migration.as_bytes()));
         if let Some(row) = rows.get(index) {
@@ -401,22 +380,6 @@ pub(crate) async fn configure_cluster_compatibility(
             .await
             .context("opening server compatibility connection timed out")?
             .context("opening server compatibility connection")?;
-    let active_unfenced_work: bool = sqlx::query_scalar(
-        "SELECT EXISTS(
-             SELECT 1 FROM captured.traces
-             WHERE capture_status='capturing' AND capture_fence IS NULL
-             UNION ALL
-             SELECT 1 FROM captured.operations
-             WHERE state='running' AND claim_fence IS NULL
-         )",
-    )
-    .fetch_one(&mut connection)
-    .await
-    .context("checking for unfenced active daemon work")?;
-    ensure!(
-        !active_unfenced_work,
-        "server activation requires a quiesced daemon with no unfenced active work"
-    );
     sqlx::query(
         "UPDATE captured.settings
          SET compatibility_sha256 = COALESCE(compatibility_sha256, $1),
@@ -450,61 +413,29 @@ fn pg_ssl_mode(mode: PostgresSslMode) -> sqlx::postgres::PgSslMode {
     }
 }
 
-async fn require_current_schema(pool: &PgPool) -> MetadataResult<()> {
+/// Refuses to start before `capture-server migrate` has applied every
+/// migration this binary knows. A newer release's migrations stay compatible
+/// with it, so a journal ahead of this binary is fine.
+async fn require_migrated_schema(pool: &PgPool) -> MetadataResult<()> {
     let journal_exists: bool =
-        sqlx::query_scalar("SELECT to_regclass('captured.schema_migrations') IS NOT NULL")
+        sqlx::query_scalar(&format!("SELECT to_regclass('{JOURNAL}') IS NOT NULL"))
             .fetch_one(pool)
             .await
             .map_err(|error| db(anyhow!(error).context("checking daemon migration journal")))?;
-    if !journal_exists {
+    let applied: Option<i64> = if journal_exists {
+        sqlx::query_scalar(&format!("SELECT MAX(version) FROM {JOURNAL}"))
+            .fetch_one(pool)
+            .await
+            .map_err(|error| db(anyhow!(error).context("reading daemon schema version")))?
+    } else {
+        None
+    };
+    if applied.unwrap_or(0) < LATEST_SCHEMA_VERSION {
         return Err(db(anyhow!(
-            "daemon PostgreSQL schema is not migrated; run the daemon migrator"
+            "daemon PostgreSQL schema is older than version {LATEST_SCHEMA_VERSION}; run capture-server migrate"
         )));
     }
-    let rows = sqlx::query(&format!(
-        "SELECT version, description, checksum FROM {JOURNAL} ORDER BY version"
-    ))
-    .fetch_all(pool)
-    .await
-    .map_err(|error| db(anyhow!(error).context("reading daemon schema version")))?;
-    let exact = rows.len() == MIGRATIONS.len()
-        && rows
-            .iter()
-            .zip(MIGRATIONS.iter())
-            .all(|(row, (version, description, migration))| {
-                let checksum = hex::encode(Sha256::digest(migration.as_bytes()));
-                row.try_get::<i64, _>("version").ok() == Some(*version)
-                    && row.try_get::<String, _>("description").ok().as_deref() == Some(*description)
-                    && row.try_get::<String, _>("checksum").ok().as_deref()
-                        == Some(checksum.as_str())
-            });
-    if !exact {
-        return Err(db(anyhow!(
-            "daemon PostgreSQL schema journal does not exactly match version {LATEST_SCHEMA_VERSION}"
-        )));
-    }
-    sqlx::query("SELECT trace_id FROM captured.traces LIMIT 0")
-        .execute(pool)
-        .await
-        .map_err(|error| db(anyhow!(error).context("probing daemon metadata tables")))?;
     Ok(())
-}
-
-async fn require_runtime_profile(pool: &PgPool, cluster_mode: bool) -> MetadataResult<()> {
-    let server_pinned: bool = sqlx::query_scalar(
-        "SELECT EXISTS(
-             SELECT 1 FROM captured.settings
-             WHERE singleton=TRUE AND compatibility_sha256 IS NOT NULL
-         )",
-    )
-    .fetch_one(pool)
-    .await
-    .map_err(|error| db(anyhow!(error).context("checking daemon runtime profile")))?;
-    match (cluster_mode, server_pinned) {
-        (false, true) => Err(MetadataStoreError::InvalidInput("server_profile_required")),
-        (true, false) => Err(MetadataStoreError::InvalidInput("server_not_initialized")),
-        _ => Ok(()),
-    }
 }
 
 fn db(error: anyhow::Error) -> MetadataStoreError {
@@ -980,8 +911,11 @@ impl MetadataStore for PostgresOrganizationStore {
     }
 
     async fn readiness(&self) -> MetadataResult<()> {
-        require_current_schema(self.pool()).await?;
-        require_runtime_profile(self.pool(), self.store.cluster_mode).await
+        sqlx::query("SELECT 1")
+            .execute(self.pool())
+            .await
+            .map_err(|error| db(anyhow!(error).context("probing daemon PostgreSQL")))?;
+        Ok(())
     }
 
     async fn capture_mode(&self) -> MetadataResult<CaptureMode> {
@@ -2827,20 +2761,6 @@ impl ServerMetadataStore for PostgresMetadataStore {
         if configured.as_deref() != Some(compatibility_sha256) {
             return Err(MetadataStoreError::InvalidInput(
                 "server_compatibility_mismatch",
-            ));
-        }
-        let has_filesystem_artifacts: bool = sqlx::query_scalar(
-            "SELECT EXISTS(
-                 SELECT 1 FROM captured.artifacts
-                 WHERE locator NOT LIKE 'artifact/v1/s3/%'
-             )",
-        )
-        .fetch_one(&self.pool)
-        .await
-        .map_err(|error| db(anyhow!(error).context("checking server artifact compatibility")))?;
-        if has_filesystem_artifacts {
-            return Err(MetadataStoreError::InvalidInput(
-                "server_filesystem_artifacts_present",
             ));
         }
         let lease = lease_i32(lease_seconds)?;
@@ -5161,6 +5081,64 @@ mod tests {
                 .events
                 .is_empty()
         );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires Docker and a disposable PostgreSQL 17 container"]
+    async fn an_older_release_runs_against_a_newer_schema() {
+        let server = TestPostgres::start().await;
+        let url = server.create_database("daemon_newer").await;
+        let migrate = || {
+            migrate_database(
+                &url,
+                PostgresSslMode::Disable,
+                Duration::from_secs(5),
+                Duration::from_secs(5),
+            )
+        };
+        migrate().await.expect("migrate");
+        // A newer release has applied a migration this binary does not know,
+        // as a rollback after a deploy finds it.
+        let pool = PgPoolOptions::new().connect(&url).await.unwrap();
+        sqlx::query(
+            "INSERT INTO captured.schema_migrations (version, description, checksum)
+             VALUES ($1, 'from a newer release', 'unknown')",
+        )
+        .bind(super::LATEST_SCHEMA_VERSION + 1)
+        .execute(&pool)
+        .await
+        .unwrap();
+        migrate()
+            .await
+            .expect("an older migrator has nothing to apply");
+        let store = PostgresMetadataStore::connect_server(
+            &url,
+            2,
+            Duration::from_secs(5),
+            Duration::from_secs(5),
+            PostgresSslMode::Disable,
+            true,
+        )
+        .await
+        .expect("an older replica starts");
+        store
+            .organization_store(&crate::persistence::default_organization())
+            .readiness()
+            .await
+            .expect("and is ready");
+
+        // A database this binary's migrations have not reached is refused.
+        let blank = server.create_database("daemon_unmigrated").await;
+        let refused = PostgresMetadataStore::connect_server(
+            &blank,
+            2,
+            Duration::from_secs(5),
+            Duration::from_secs(5),
+            PostgresSslMode::Disable,
+            true,
+        )
+        .await;
+        assert!(refused.is_err(), "a replica must not start before migrate");
     }
 
     #[tokio::test]

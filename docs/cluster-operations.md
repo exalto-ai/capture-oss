@@ -18,6 +18,7 @@ The profile is explicit:
 ```toml
 [cluster]
 proxy_origin = "https://proxy.notary.example"
+# Optional: where operators reach the dashboard, shown in it.
 admin_origin = "https://admin.notary.example"
 
 [cluster.authentication]
@@ -37,7 +38,7 @@ backend = "s3"
 
 For another scheduler, run `capture-server migrate --config /etc/capture/config.toml` once, then start two or more identical replicas. Every replica receives the same config, token file or capture service token, database, S3 namespace, admin password, and exact 32-byte `CAPTURE_SERVER_CLUSTER_VAULT_KEY_FILE`. `CAPTURE_SERVER_CLUSTER_INSTANCE_ID` is optional when the scheduler already provides a useful unique hostname.
 
-Use `GET /healthz` for process liveness and `GET /readyz` for traffic routing. Readiness checks the replica lifecycle, PostgreSQL schema, S3 namespace, shared vault identity, and shared Registry snapshot. On SIGTERM a replica becomes unready, drains admitted streams for a bounded interval, then releases its lease.
+Use `GET /healthz` for process liveness and `GET /readyz` for traffic routing. Readiness checks the replica lease, PostgreSQL, the S3 namespace, and the shared Registry snapshot. On SIGTERM a replica becomes unready, drains admitted streams for a bounded interval, then releases its lease.
 
 Quiesce all replicas for a coordinated PostgreSQL/S3 backup. Preserve the cluster vault key with that backup. After restoring, keep replicas stopped and run `capture-server reconcile-artifacts --config ...` before resuming traffic.
 
@@ -47,7 +48,7 @@ Every provider request authenticates as an organization with `Capture-Authorizat
 
 `[cluster.authentication]` chooses how tokens are checked:
 
-- `kind = "token_file"` (self-hosted): `path` names a private TOML file (mode `0600`, at most 1 MiB) of SHA-256 token digests, never the tokens themselves; `printf %s "$token" | sha256sum` computes one. Replicas read the file at startup, so restart them after changing it.
+- `kind = "token_file"` (self-hosted): `path` names a TOML file (at most 1 MiB) of SHA-256 token digests, never the tokens themselves; `printf %s "$token" | sha256sum` computes one. Replicas read the file at startup, so restart them after changing it.
 
   ```toml
   [[tokens]]
@@ -88,4 +89,4 @@ A self-hosted notary (`notary.endpoint`) needs no admission. The hosted notary a
   capture_service_token_file = "/run/secrets/capture_service_token"
   ```
 
-  The file must be private (mode `0600`) and hold only the token: 32 to 512 printable ASCII characters and at most a trailing newline. It is required with the hosted notary and refused with a self-hosted one. Billing denials such as exhausted credits reach clients as `402` exactly as for the server's own account; a refused service token is logged for the operator and answers `503` until it is fixed.
+  The file holds only the token: 32 to 512 printable ASCII characters and at most a trailing newline. It is required with the hosted notary and unused with a self-hosted one. Billing denials such as exhausted credits reach clients as `402` exactly as for the server's own account; a refused service token is logged for the operator and answers `503` until it is fixed.

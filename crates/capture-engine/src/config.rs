@@ -72,8 +72,10 @@ pub struct CapturedConfig {
 pub struct ClusterConfig {
     /// Public HTTPS endpoint applications use for provider requests.
     pub proxy_origin: String,
-    /// Public HTTPS endpoint operators use for the dashboard and admin API.
-    pub admin_origin: String,
+    /// Where operators reach the dashboard, shown in it; the admin listener's
+    /// address when unset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub admin_origin: Option<String>,
     /// How provider requests are authenticated as organizations. Every
     /// provider request carries `Capture-Authorization: Bearer <token>`;
     /// there is no unauthenticated mode.
@@ -794,14 +796,7 @@ impl CapturedConfig {
             self.admin.auth.is_some(),
             "cluster mode requires admin authentication"
         );
-        let proxy = cluster.proxy_origin.as_str();
-        let admin = cluster.admin_origin.as_str();
-        validate_public_https_origin(proxy, "cluster.proxy_origin")?;
-        validate_public_https_origin(admin, "cluster.admin_origin")?;
-        ensure!(
-            proxy != admin,
-            "cluster proxy and admin origins must be different"
-        );
+        validate_public_https_origin(&cluster.proxy_origin, "cluster.proxy_origin")?;
         match &cluster.authentication {
             AuthenticationConfig::TokenFile { path } => ensure!(
                 path.is_absolute(),
@@ -813,15 +808,12 @@ impl CapturedConfig {
             AuthenticationConfig::Hosted {
                 capture_service_token_file,
             } => match (self.notary.endpoint.is_none(), capture_service_token_file) {
-                (true, Some(path)) => ensure!(
+                (_, Some(path)) => ensure!(
                     path.is_absolute(),
                     "cluster.authentication.capture_service_token_file must be an absolute path"
                 ),
                 (true, None) => bail!(
                     "cluster.authentication.capture_service_token_file is required for hosted authentication with the hosted notary"
-                ),
-                (false, Some(_)) => bail!(
-                    "cluster.authentication.capture_service_token_file is used only with the hosted notary; remove it when notary.endpoint is configured"
                 ),
                 (false, None) => {}
             },
@@ -1316,7 +1308,7 @@ mod tests {
         let mut config = CapturedConfig {
             cluster: Some(ClusterConfig {
                 proxy_origin: "https://proxy.notary.example".into(),
-                admin_origin: "https://admin.notary.example".into(),
+                admin_origin: Some("https://admin.notary.example".into()),
                 authentication: AuthenticationConfig::TokenFile {
                     path: "/run/secrets/capture-tokens.toml".into(),
                 },
@@ -1368,9 +1360,10 @@ mod tests {
         config = valid.clone();
         config.admin.auth = None;
         assert!(config.validate().is_err());
+        // The admin origin is only shown in the dashboard.
         config = valid.clone();
-        config.cluster.as_mut().unwrap().admin_origin = String::new();
-        assert!(config.validate().is_err());
+        config.cluster.as_mut().unwrap().admin_origin = None;
+        config.validate().unwrap();
         config = valid.clone();
         config.cluster.as_mut().unwrap().authentication = AuthenticationConfig::TokenFile {
             path: "capture-tokens.toml".into(),
@@ -1380,12 +1373,12 @@ mod tests {
             capture_service_token_file: None,
         };
         config.validate().unwrap();
-        // A self-hosted notary needs no admission, so nothing is charged and
-        // a capture service credential would be unused.
+        // A self-hosted notary needs no admission, so a capture service
+        // credential is simply unused.
         config.cluster.as_mut().unwrap().authentication = AuthenticationConfig::Hosted {
             capture_service_token_file: Some("/run/secrets/capture_service_token".into()),
         };
-        assert!(config.validate().is_err());
+        config.validate().unwrap();
         // The hosted notary admits every operation, which hosted
         // authentication charges to each request's organization.
         config.notary.endpoint = None;

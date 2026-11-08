@@ -360,17 +360,12 @@ mod tests {
             assert!(!loaded.matches(wrong), "{wrong}");
         }
 
+        // Fly mounts secret files readable by every user in the container.
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt as _;
-            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o640)).unwrap();
-            let error = format!("{:#}", CustomerApiToken::load(&path).err().unwrap());
-            assert!(error.contains("customer API token file"), "{error}");
-            assert!(
-                error.contains("must not be accessible by group or others"),
-                "{error}"
-            );
-            assert!(!error.contains(&token), "{error}");
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+            assert!(CustomerApiToken::load(&path).unwrap().matches(&token));
         }
         for invalid in [token[..31].to_owned(), format!("{token} {token}")] {
             write_private(&path, invalid.as_bytes());
