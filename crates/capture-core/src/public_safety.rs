@@ -97,47 +97,25 @@ struct ScanState {
     high_entropy_override_applied: bool,
 }
 
-/// Validates the exact canonical archive that admission intends to retain.
+/// Validates the exact canonical archive that admission intends to retain,
+/// using provider context authenticated by package verification.
 ///
 /// The archive parser provides the entry, format, size, encoding, and hash
 /// allowlist. The checks below then enforce header redaction, inspect structured
 /// bodies (including nested JSON strings), scan every entry, and finally scan
 /// the serialized ZIP bytes as defense in depth.
-pub fn validate_public_trace_package(
-    bytes: &[u8],
-) -> Result<PublicPackageSafetyResult, PublicPackageSafetyError> {
-    validate_public_trace_package_inner(bytes, None, false)
-}
-
-/// Validates an archive using provider context authenticated by package
-/// verification.
-pub fn validate_public_trace_package_with_context(
-    bytes: &[u8],
-    context: PublicPackageSafetyContext<'_>,
-) -> Result<PublicPackageSafetyResult, PublicPackageSafetyError> {
-    validate_public_trace_package_inner(bytes, Some(context), false)
-}
-
-/// Validates an archive while allowing an explicit sharing decision to
-/// override only unexplained high-entropy values.
 ///
-/// Concrete secret patterns, credential fields and headers, signed credential
-/// queries, malformed archives, and every other safety error remain fatal.
+/// `force` records an explicit sharing decision that overrides only
+/// unexplained high-entropy values. Concrete secret patterns, credential
+/// fields and headers, signed credential queries, malformed archives, and
+/// every other safety error remain fatal.
 pub fn validate_public_trace_package_with_context_and_force(
     bytes: &[u8],
     context: PublicPackageSafetyContext<'_>,
     force: bool,
 ) -> Result<PublicPackageSafetyResult, PublicPackageSafetyError> {
-    validate_public_trace_package_inner(bytes, Some(context), force)
-}
-
-fn validate_public_trace_package_inner(
-    bytes: &[u8],
-    context: Option<PublicPackageSafetyContext<'_>>,
-    allow_high_entropy: bool,
-) -> Result<PublicPackageSafetyResult, PublicPackageSafetyError> {
     let mut scan = ScanState {
-        allow_high_entropy,
+        allow_high_entropy: force,
         ..ScanState::default()
     };
     let archive = read_trace_package_archive(bytes).map_err(|_| {
@@ -258,7 +236,7 @@ fn scan_request_target(head: &[u8]) -> Result<(), PublicPackageSafetyError> {
 fn scan_body(
     bytes: &[u8],
     location: PublicPackageLocation,
-    context: Option<PublicPackageSafetyContext<'_>>,
+    context: PublicPackageSafetyContext<'_>,
     scan: &mut ScanState,
 ) -> Result<(), PublicPackageSafetyError> {
     if bytes
@@ -268,10 +246,10 @@ fn scan_body(
         return Ok(());
     }
     if serde_json::from_slice::<serde_json::Value>(bytes).is_ok() {
-        scan_json_with_context(bytes, location, context, scan)
+        scan_json_with_context(bytes, location, Some(context), scan)
     } else {
         scan_public_bytes(bytes, location)?;
-        if context.is_some() && scan_sse_json(bytes, location, context, scan)? {
+        if scan_sse_json(bytes, location, context, scan)? {
             return Ok(());
         }
         scan_entropy_tokens(bytes, None, false, location, scan)
@@ -284,7 +262,7 @@ fn scan_body(
 fn scan_sse_json(
     bytes: &[u8],
     location: PublicPackageLocation,
-    context: Option<PublicPackageSafetyContext<'_>>,
+    context: PublicPackageSafetyContext<'_>,
     scan: &mut ScanState,
 ) -> Result<bool, PublicPackageSafetyError> {
     let Ok(body) = std::str::from_utf8(bytes) else {
@@ -314,7 +292,7 @@ fn scan_sse_json(
         if serde_json::from_str::<serde_json::Value>(data).is_err() {
             return Ok(false);
         }
-        scan_json_with_context(data.as_bytes(), location, context, scan)?;
+        scan_json_with_context(data.as_bytes(), location, Some(context), scan)?;
         saw_json = true;
     }
     Ok(saw_json)
@@ -810,11 +788,41 @@ fn contains_jwt(bytes: &[u8]) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
-
-    use crate::archive::{PACKAGE_FILES, build_trace_package_archive};
+    use crate::archive::{
+        EvidenceKind, TracePackageArchiveEntries, build_trace_package_archive_from_entries,
+    };
 
     use super::*;
+
+    fn package_of(manifest: &[u8], request: &[u8], response: &[u8], trace: &[u8]) -> Vec<u8> {
+        build_trace_package_archive_from_entries(TracePackageArchiveEntries {
+            kind: EvidenceKind::Notarized,
+            evidence: b"public TLSNotary evidence",
+            manifest_json: manifest,
+            request_disclosed_http: request,
+            response_disclosed_http: response,
+            trace_otlp_json: trace,
+        })
+        .unwrap()
+    }
+
+    fn validate_with(
+        bytes: &[u8],
+        context: PublicPackageSafetyContext<'_>,
+    ) -> Result<PublicPackageSafetyResult, PublicPackageSafetyError> {
+        validate_public_trace_package_with_context_and_force(bytes, context, false)
+    }
+
+    /// Validates under a provider context that earns no protocol-ID exemption.
+    fn validate(bytes: &[u8]) -> Result<PublicPackageSafetyResult, PublicPackageSafetyError> {
+        validate_with(
+            bytes,
+            PublicPackageSafetyContext {
+                provider_host: "provider.example",
+                request_path: "/",
+            },
+        )
+    }
 
     fn package_with(request_body: &str, response_body: &str, trace: serde_json::Value) -> Vec<u8> {
         package_with_path("/v1/responses", request_body, response_body, trace)
@@ -826,24 +834,15 @@ mod tests {
         response_body: &str,
         trace: serde_json::Value,
     ) -> Vec<u8> {
-        let directory = tempfile::tempdir().unwrap();
-        for name in PACKAGE_FILES {
-            let bytes = match name {
-                "manifest.json" => br#"{"format":"ecp/trace-evidence/v1","notary_public_key":"04cafe"}"#.to_vec(),
-                "request.disclosed.http" => format!(
-                    "POST {request_path} HTTP/1.1\r\nAuthorization: \0\0\0\0\r\nContent-Type: \0\0\0\r\n\r\n{request_body}"
-                )
-                .into_bytes(),
-                "response.disclosed.http" => format!(
-                    "HTTP/1.1 200 OK\r\nContent-Type: \0\0\0\r\n\r\n{response_body}"
-                )
-                .into_bytes(),
-                "trace.otlp.json" => serde_json::to_vec(&trace).unwrap(),
-                _ => b"public TLSNotary evidence".to_vec(),
-            };
-            fs::write(directory.path().join(name), bytes).unwrap();
-        }
-        build_trace_package_archive(directory.path()).unwrap()
+        package_of(
+            br#"{"format":"ecp/trace-evidence/v1","notary_public_key":"04cafe"}"#,
+            format!(
+                "POST {request_path} HTTP/1.1\r\nAuthorization: \0\0\0\0\r\nContent-Type: \0\0\0\r\n\r\n{request_body}"
+            )
+            .as_bytes(),
+            format!("HTTP/1.1 200 OK\r\nContent-Type: \0\0\0\r\n\r\n{response_body}").as_bytes(),
+            &serde_json::to_vec(&trace).unwrap(),
+        )
     }
 
     fn openai_context(request_path: &str) -> PublicPackageSafetyContext<'_> {
@@ -894,7 +893,7 @@ mod tests {
             safe_trace(),
         );
         assert_eq!(
-            validate_public_trace_package(&archive).unwrap().version,
+            validate(&archive).unwrap().version,
             PUBLIC_PACKAGE_SAFETY_VERSION
         );
     }
@@ -918,7 +917,7 @@ mod tests {
                 r#"{"ok":true}"#,
                 safe_trace(),
             );
-            let error = validate_public_trace_package(&archive).unwrap_err();
+            let error = validate(&archive).unwrap_err();
             let rendered = error.to_string();
             assert!(
                 !rendered.contains(secret),
@@ -934,28 +933,16 @@ mod tests {
             "messages": [{"role": "tool", "content": "{\"api_key\":\"fixture-value\"}"}]
         });
         let archive = package_with(&nested.to_string(), r#"{"ok":true}"#, safe_trace());
-        assert_eq!(
-            validate_public_trace_package(&archive).unwrap_err().code,
-            "credential_field"
-        );
+        assert_eq!(validate(&archive).unwrap_err().code, "credential_field");
 
-        let directory = tempfile::tempdir().unwrap();
-        for name in PACKAGE_FILES {
-            let bytes = match name {
-                "manifest.json" => br#"{"format":"ecp/trace-evidence/v1"}"#.to_vec(),
-                "request.disclosed.http" => {
-                    b"POST /v1?X-Amz-Signature=fixture HTTP/1.1\r\nAuthorization: \0\0\0\r\n\r\n{}"
-                        .to_vec()
-                }
-                "response.disclosed.http" => b"HTTP/1.1 200 OK\r\n\r\n{}".to_vec(),
-                "trace.otlp.json" => serde_json::to_vec(&safe_trace()).unwrap(),
-                _ => b"evidence".to_vec(),
-            };
-            fs::write(directory.path().join(name), bytes).unwrap();
-        }
-        let signed = build_trace_package_archive(directory.path()).unwrap();
+        let signed = package_of(
+            br#"{"format":"ecp/trace-evidence/v1"}"#,
+            b"POST /v1?X-Amz-Signature=fixture HTTP/1.1\r\nAuthorization: \0\0\0\r\n\r\n{}",
+            b"HTTP/1.1 200 OK\r\n\r\n{}",
+            &serde_json::to_vec(&safe_trace()).unwrap(),
+        );
         assert_eq!(
-            validate_public_trace_package(&signed).unwrap_err().code,
+            validate(&signed).unwrap_err().code,
             "credential_query_value"
         );
     }
@@ -967,7 +954,7 @@ mod tests {
             "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
         });
         let archive = package_with(&public.to_string(), r#"{"ok":true}"#, safe_trace());
-        validate_public_trace_package(&archive).unwrap();
+        validate(&archive).unwrap();
 
         let opaque = "Q2xvdWRDcmVkZW50aWFsX0ZpeHR1cmVfMTIzNDU2Nzg5MC1hYmNkZWY=";
         let archive = package_with(
@@ -975,7 +962,7 @@ mod tests {
             r#"{"ok":true}"#,
             safe_trace(),
         );
-        let error = validate_public_trace_package(&archive).unwrap_err();
+        let error = validate(&archive).unwrap_err();
         assert_eq!(error.code, "high_entropy_value");
         assert!(!error.to_string().contains(opaque));
     }
@@ -997,12 +984,11 @@ mod tests {
                 safe_trace(),
             );
             assert_eq!(
-                validate_public_trace_package(&archive).unwrap_err().code,
+                validate(&archive).unwrap_err().code,
                 "high_entropy_value",
                 "the exemption must require verified context for {request_path}"
             );
-            validate_public_trace_package_with_context(&archive, openai_context(request_path))
-                .unwrap();
+            validate_with(&archive, openai_context(request_path)).unwrap();
         }
     }
 
@@ -1018,8 +1004,7 @@ mod tests {
                 r#"{"id":"resp_7Qx9Za2Bc4De6Fg8Hi0Jk3Lm5Np","output":[]}"#,
                 safe_trace(),
             );
-            validate_public_trace_package_with_context(&archive, codex_context(request_path))
-                .unwrap();
+            validate_with(&archive, codex_context(request_path)).unwrap();
         }
 
         let wrong_path = package_with_path(
@@ -1029,12 +1014,9 @@ mod tests {
             safe_trace(),
         );
         assert_eq!(
-            validate_public_trace_package_with_context(
-                &wrong_path,
-                codex_context("/backend-api/codex/unrelated"),
-            )
-            .unwrap_err()
-            .code,
+            validate_with(&wrong_path, codex_context("/backend-api/codex/unrelated"),)
+                .unwrap_err()
+                .code,
             "high_entropy_value"
         );
     }
@@ -1060,11 +1042,8 @@ mod tests {
             &response.to_string(),
             safe_trace(),
         );
-        assert_eq!(
-            validate_public_trace_package(&archive).unwrap_err().code,
-            "high_entropy_value"
-        );
-        validate_public_trace_package_with_context(&archive, openrouter_chat_context()).unwrap();
+        assert_eq!(validate(&archive).unwrap_err().code, "high_entropy_value");
+        validate_with(&archive, openrouter_chat_context()).unwrap();
     }
 
     #[test]
@@ -1089,11 +1068,8 @@ mod tests {
             &response.to_string(),
             safe_trace(),
         );
-        assert_eq!(
-            validate_public_trace_package(&archive).unwrap_err().code,
-            "high_entropy_value"
-        );
-        validate_public_trace_package_with_context(&archive, anthropic_messages_context()).unwrap();
+        assert_eq!(validate(&archive).unwrap_err().code, "high_entropy_value");
+        validate_with(&archive, anthropic_messages_context()).unwrap();
 
         let wrong_path = package_with_path(
             "/v1/unrelated",
@@ -1102,7 +1078,7 @@ mod tests {
             safe_trace(),
         );
         assert_eq!(
-            validate_public_trace_package_with_context(
+            validate_with(
                 &wrong_path,
                 PublicPackageSafetyContext {
                     provider_host: "api.anthropic.com",
@@ -1131,7 +1107,7 @@ mod tests {
             response,
             safe_trace(),
         );
-        validate_public_trace_package_with_context(&archive, anthropic_messages_context()).unwrap();
+        validate_with(&archive, anthropic_messages_context()).unwrap();
 
         let secret = package_with_path(
             "/v1/messages",
@@ -1140,7 +1116,7 @@ mod tests {
             safe_trace(),
         );
         assert_eq!(
-            validate_public_trace_package_with_context(&secret, anthropic_messages_context())
+            validate_with(&secret, anthropic_messages_context())
                 .unwrap_err()
                 .code,
             "secret_pattern"
@@ -1157,7 +1133,7 @@ mod tests {
             safe_trace(),
         );
         assert_eq!(
-            validate_public_trace_package_with_context(&wrong_path, openrouter_chat_context())
+            validate_with(&wrong_path, openrouter_chat_context())
                 .unwrap_err()
                 .code,
             "high_entropy_value"
@@ -1174,12 +1150,9 @@ mod tests {
             safe_trace(),
         );
         assert_eq!(
-            validate_public_trace_package_with_context(
-                &credential_shaped,
-                openrouter_chat_context()
-            )
-            .unwrap_err()
-            .code,
+            validate_with(&credential_shaped, openrouter_chat_context())
+                .unwrap_err()
+                .code,
             "secret_pattern"
         );
     }
@@ -1234,7 +1207,7 @@ mod tests {
             &response,
             safe_trace(),
         );
-        validate_public_trace_package_with_context(&archive, openrouter_chat_context()).unwrap();
+        validate_with(&archive, openrouter_chat_context()).unwrap();
 
         let opaque = "Q2xvdWRDcmVkZW50aWFsX0ZpeHR1cmVfMTIzNDU2Nzg5MC1hYmNkZWY=";
         let hostile_event = serde_json::json!({"choices": [{"delta": {"content": opaque}}]});
@@ -1245,7 +1218,7 @@ mod tests {
             safe_trace(),
         );
         assert_eq!(
-            validate_public_trace_package_with_context(&hostile, openrouter_chat_context())
+            validate_with(&hostile, openrouter_chat_context())
                 .unwrap_err()
                 .code,
             "high_entropy_value"
@@ -1258,12 +1231,9 @@ mod tests {
             safe_trace(),
         );
         assert_eq!(
-            validate_public_trace_package_with_context(
-                &hostile_metadata,
-                openrouter_chat_context()
-            )
-            .unwrap_err()
-            .code,
+            validate_with(&hostile_metadata, openrouter_chat_context())
+                .unwrap_err()
+                .code,
             "high_entropy_value"
         );
     }
@@ -1299,9 +1269,7 @@ mod tests {
                 safe_trace(),
             );
             assert_eq!(
-                validate_public_trace_package_with_context(&archive, context)
-                    .unwrap_err()
-                    .code,
+                validate_with(&archive, context).unwrap_err().code,
                 "high_entropy_value"
             );
         }
@@ -1313,12 +1281,9 @@ mod tests {
             safe_trace(),
         );
         assert_eq!(
-            validate_public_trace_package_with_context(
-                &wrong_format,
-                openai_context("/v1/responses"),
-            )
-            .unwrap_err()
-            .code,
+            validate_with(&wrong_format, openai_context("/v1/responses"),)
+                .unwrap_err()
+                .code,
             "high_entropy_value"
         );
     }
@@ -1332,12 +1297,9 @@ mod tests {
             safe_trace(),
         );
         assert_eq!(
-            validate_public_trace_package_with_context(
-                &credential_id,
-                openai_context("/v1/chat/completions"),
-            )
-            .unwrap_err()
-            .code,
+            validate_with(&credential_id, openai_context("/v1/chat/completions"),)
+                .unwrap_err()
+                .code,
             "secret_pattern"
         );
 
@@ -1355,12 +1317,9 @@ mod tests {
                 safe_trace(),
             );
             assert_eq!(
-                validate_public_trace_package_with_context(
-                    &archive,
-                    openai_context("/v1/chat/completions"),
-                )
-                .unwrap_err()
-                .code,
+                validate_with(&archive, openai_context("/v1/chat/completions"),)
+                    .unwrap_err()
+                    .code,
                 "high_entropy_value"
             );
         }

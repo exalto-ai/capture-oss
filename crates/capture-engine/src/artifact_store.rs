@@ -24,12 +24,6 @@ const MAX_ARTIFACT_LOCATOR_BYTES: usize = 8 * 1024;
 /// Versioned discriminator for canonical filesystem locators.
 pub const FILESYSTEM_ARTIFACT_LOCATOR_PREFIX: &str = "artifact/v1/filesystem/";
 
-pub fn is_filesystem_artifact_locator(locator: &ArtifactLocator) -> bool {
-    locator
-        .as_stored()
-        .starts_with(FILESYSTEM_ARTIFACT_LOCATOR_PREFIX)
-}
-
 /// The stable type of bytes held by an artifact store.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ArtifactKind {
@@ -1126,7 +1120,6 @@ fn create_private_directory(path: &Path) -> Result<()> {
         cursor = parent;
     }
 
-    #[cfg(unix)]
     {
         use std::os::unix::fs::{DirBuilderExt as _, PermissionsExt as _};
 
@@ -1137,15 +1130,6 @@ fn create_private_directory(path: &Path) -> Result<()> {
             .with_context(|| format!("creating artifact directory {}", path.display()))?;
         fs::set_permissions(path, fs::Permissions::from_mode(0o700))
             .with_context(|| format!("restricting artifact directory {}", path.display()))?;
-    }
-    #[cfg(all(not(unix), not(windows)))]
-    fs::create_dir_all(path)
-        .with_context(|| format!("creating artifact directory {}", path.display()))?;
-    #[cfg(windows)]
-    {
-        fs::create_dir_all(path)
-            .with_context(|| format!("creating artifact directory {}", path.display()))?;
-        restrict_windows_acl(path, "(OI)(CI)F")?;
     }
     // `create_dir_all` can create multiple directory entries. Sync each
     // parent from the top down so a successful first artifact write cannot
@@ -1160,7 +1144,6 @@ fn create_private_directory(path: &Path) -> Result<()> {
     Ok(())
 }
 
-#[cfg(unix)]
 pub fn restrict_file(path: &Path) -> Result<()> {
     use std::os::unix::fs::PermissionsExt as _;
 
@@ -1169,77 +1152,6 @@ pub fn restrict_file(path: &Path) -> Result<()> {
         .with_context(|| format!("restricting artifact {}", path.display()))
 }
 
-#[cfg(windows)]
-pub fn restrict_file(path: &Path) -> Result<()> {
-    restrict_windows_acl(path, "F")
-}
-
-#[cfg(all(not(unix), not(windows)))]
-pub fn restrict_file(_path: &Path) -> Result<()> {
-    Ok(())
-}
-
-#[cfg(windows)]
-fn restrict_windows_acl(path: &Path, permission: &str) -> Result<()> {
-    use std::process::Command;
-
-    let output = Command::new("whoami")
-        .output()
-        .context("determining the current Windows account")?;
-    ensure!(
-        output.status.success(),
-        "could not determine the current Windows account"
-    );
-    let identity = String::from_utf8(output.stdout)
-        .context("current Windows account name is not UTF-8")?
-        .trim()
-        .to_owned();
-    ensure!(
-        !identity.is_empty(),
-        "current Windows account name is empty"
-    );
-    let grant = format!("{identity}:{permission}");
-    let status = Command::new("icacls")
-        .arg(path)
-        .args([
-            "/inheritance:r",
-            "/grant:r",
-            grant.as_str(),
-            "/remove:g",
-            "*S-1-1-0",
-            "*S-1-5-11",
-            "*S-1-5-18",
-            "*S-1-5-32-544",
-            "*S-1-5-32-545",
-            "/Q",
-        ])
-        .status()
-        .with_context(|| format!("restricting artifact permissions on {}", path.display()))?;
-    ensure!(
-        status.success(),
-        "could not restrict artifact permissions on {}",
-        path.display()
-    );
-    Ok(())
-}
-
-#[cfg(unix)]
-fn sync_directory(path: &Path) -> Result<()> {
-    File::open(path)
-        .and_then(|directory| directory.sync_all())
-        .with_context(|| format!("syncing artifact directory {}", path.display()))
-}
-
-#[cfg(windows)]
-fn sync_directory(_path: &Path) -> Result<()> {
-    // Windows exposes FlushFileBuffers for writable file handles, but not a
-    // POSIX-style directory fsync. The artifact file itself is synced before
-    // its atomic rename, so do not turn a successful durable file write into
-    // AccessDenied by attempting to flush a read-only directory handle.
-    Ok(())
-}
-
-#[cfg(all(not(unix), not(windows)))]
 fn sync_directory(path: &Path) -> Result<()> {
     File::open(path)
         .and_then(|directory| directory.sync_all())

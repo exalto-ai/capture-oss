@@ -8,13 +8,9 @@ use std::{
     fmt,
     future::IntoFuture,
     io,
-    net::SocketAddr,
     sync::Arc,
     time::{Duration, Instant},
 };
-
-#[cfg(feature = "cli")]
-use std::{fs, io::Write as _, path::Path};
 
 use anyhow::{Context, Result, anyhow, bail};
 use bytes::Bytes;
@@ -992,10 +988,8 @@ impl CaptureCheckpoint {
         vault.encrypt(&bytes)
     }
 
-    /// Decrypts, deserializes, and validates a pending checkpoint.
-    ///
-    /// This applies the same format, identifier, provider, checkpoint, and
-    /// receipt-binding checks as [`Self::load`].
+    /// Decrypts, deserializes, and validates a pending checkpoint's format,
+    /// identifier, provider, checkpoint, and receipt binding.
     #[cfg(feature = "cli")]
     pub fn from_encrypted_bytes(encrypted: &[u8], vault: &crate::vault::Vault) -> Result<Self> {
         let checkpoint: Self = bincode::deserialize(&vault.decrypt(encrypted)?)
@@ -1010,48 +1004,6 @@ impl CaptureCheckpoint {
         validate_provider_name(&checkpoint.provider_name, checkpoint.receipt.server_name())?;
         checkpoint.checkpoint()?;
         Ok(checkpoint)
-    }
-
-    /// Writes this pending checkpoint encrypted with the local vault.
-    #[cfg(feature = "cli")]
-    pub fn save(&self, path: &Path, vault: &crate::vault::Vault) -> Result<()> {
-        if path.exists() {
-            bail!(
-                "refusing to overwrite existing checkpoint: {}",
-                path.display()
-            );
-        }
-        let parent = path
-            .parent()
-            .filter(|parent| !parent.as_os_str().is_empty())
-            .unwrap_or_else(|| Path::new("."));
-        fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
-        let file_name = path
-            .file_name()
-            .ok_or_else(|| anyhow!("checkpoint path has no file name"))?
-            .to_string_lossy();
-        let staging = parent.join(format!(
-            ".{file_name}.{}.{:016x}.partial",
-            std::process::id(),
-            rand::random::<u64>()
-        ));
-        let encrypted = self.to_encrypted_bytes(vault)?;
-        let result = (|| -> Result<()> {
-            write_private_file(&staging, &encrypted)?;
-            fs::rename(&staging, path)
-                .with_context(|| format!("completing encrypted checkpoint {}", path.display()))
-        })();
-        if result.is_err() {
-            let _ = fs::remove_file(&staging);
-        }
-        result
-    }
-
-    /// Reads and decrypts a pending checkpoint.
-    #[cfg(feature = "cli")]
-    pub fn load(path: &Path, vault: &crate::vault::Vault) -> Result<Self> {
-        let encrypted = fs::read(path).with_context(|| format!("reading {}", path.display()))?;
-        Self::from_encrypted_bytes(&encrypted, vault)
     }
 }
 
@@ -1153,60 +1105,18 @@ async fn complete_captured_response<F>(
     let _ = checkpoint_sender.send(seal.await);
 }
 
-/// Streams one provider request and returns a client-held capture checkpoint at
-/// end-of-stream without running the expensive private proof.
-pub async fn capture_streaming_request(
-    notary_addr: SocketAddr,
-    server_name: &str,
-    capture: CaptureConfig,
-    request: Request<HttpRequestBody>,
-) -> Result<CapturedStreamResponse> {
-    let endpoint = NotaryEndpoint::new(
-        notary_addr.ip().to_string(),
-        notary_addr.port(),
-        NotaryTransport::Tcp,
-    )?;
-    capture_streaming_request_to(&endpoint, server_name, capture, request).await
-}
-
 /// Streams one provider request through a raw-TCP or public-CA TLS notary
-/// endpoint, retaining the endpoint hostname for TLS SNI validation.
-pub async fn capture_streaming_request_to(
-    notary: &NotaryEndpoint,
-    server_name: &str,
-    capture: CaptureConfig,
-    request: Request<HttpRequestBody>,
-) -> Result<CapturedStreamResponse> {
-    capture_streaming_request_to_with_admission(notary, server_name, capture, request, None).await
-}
-
-/// Runs an admitted capture after placing one bounded opaque value in the
-/// outer notary prelude. The value is never included in evidence.
-pub async fn capture_streaming_request_to_admitted(
-    notary: &NotaryEndpoint,
-    server_name: &str,
-    capture: CaptureConfig,
-    request: Request<HttpRequestBody>,
-    admission_value: &str,
-) -> Result<CapturedStreamResponse> {
-    capture_streaming_request_to_with_admission(
-        notary,
-        server_name,
-        capture,
-        request,
-        Some(admission_value),
-    )
-    .await
-}
-
-async fn capture_streaming_request_to_with_admission(
+/// endpoint and returns a client-held capture checkpoint at end-of-stream
+/// without running the expensive private proof. An admitted capture places one
+/// bounded opaque value in the outer notary prelude; it is never included in
+/// evidence.
+pub async fn capture_streaming_request(
     notary: &NotaryEndpoint,
     server_name: &str,
     capture: CaptureConfig,
     request: Request<HttpRequestBody>,
     admission_value: Option<&str>,
 ) -> Result<CapturedStreamResponse> {
-    validate_notary_frame_limit(capture.max_frame_bytes)?;
     let mut attestable_budget = AttestableHttpBudget::new(capture.max_attestable_http_bytes)?;
     attestable_budget.reserve(
         attestable_request_header_bytes(request.method(), request.uri(), request.headers())?,
@@ -1316,95 +1226,11 @@ async fn capture_streaming_request_to_with_admission(
     })
 }
 
-/// Completes the expensive private proof for a previously captured checkpoint and
-/// returns ordinary TLSNotary evidence suitable for deterministic OTLP
-/// normalization.
+/// Completes the expensive private proof for a previously captured checkpoint
+/// through a raw-TCP or public-CA TLS notary endpoint, reports stable
+/// proof-pipeline milestones, and returns ordinary TLSNotary evidence suitable
+/// for deterministic OTLP normalization.
 pub async fn notarize_capture_checkpoint(
-    notary_addr: SocketAddr,
-    checkpoint: &CaptureCheckpoint,
-    trusted_notary_key: &[u8],
-    max_attestable_http_bytes: usize,
-    max_frame_bytes: usize,
-) -> Result<LocalProof> {
-    let endpoint = NotaryEndpoint::new(
-        notary_addr.ip().to_string(),
-        notary_addr.port(),
-        NotaryTransport::Tcp,
-    )?;
-    notarize_capture_checkpoint_to(
-        &endpoint,
-        checkpoint,
-        trusted_notary_key,
-        max_attestable_http_bytes,
-        max_frame_bytes,
-    )
-    .await
-}
-
-/// Completes a notarization proof through a raw-TCP or public-CA TLS notary
-/// endpoint.
-pub async fn notarize_capture_checkpoint_to(
-    notary: &NotaryEndpoint,
-    checkpoint: &CaptureCheckpoint,
-    trusted_notary_key: &[u8],
-    max_attestable_http_bytes: usize,
-    max_frame_bytes: usize,
-) -> Result<LocalProof> {
-    notarize_capture_checkpoint_to_with_progress(
-        notary,
-        checkpoint,
-        trusted_notary_key,
-        max_attestable_http_bytes,
-        max_frame_bytes,
-        &|_| {},
-    )
-    .await
-}
-
-/// Completes a notarization proof and reports stable proof-pipeline milestones.
-pub async fn notarize_capture_checkpoint_to_with_progress(
-    notary: &NotaryEndpoint,
-    checkpoint: &CaptureCheckpoint,
-    trusted_notary_key: &[u8],
-    max_attestable_http_bytes: usize,
-    max_frame_bytes: usize,
-    progress: NotarizationProgressObserver<'_>,
-) -> Result<LocalProof> {
-    notarize_capture_checkpoint_to_with_admission(
-        notary,
-        checkpoint,
-        trusted_notary_key,
-        max_attestable_http_bytes,
-        max_frame_bytes,
-        None,
-        progress,
-    )
-    .await
-}
-
-/// Completes an admitted notarization proof and reports stable milestones.
-pub async fn notarize_capture_checkpoint_to_admitted_with_progress(
-    notary: &NotaryEndpoint,
-    checkpoint: &CaptureCheckpoint,
-    trusted_notary_key: &[u8],
-    max_attestable_http_bytes: usize,
-    max_frame_bytes: usize,
-    admission_value: &str,
-    progress: NotarizationProgressObserver<'_>,
-) -> Result<LocalProof> {
-    notarize_capture_checkpoint_to_with_admission(
-        notary,
-        checkpoint,
-        trusted_notary_key,
-        max_attestable_http_bytes,
-        max_frame_bytes,
-        Some(admission_value),
-        progress,
-    )
-    .await
-}
-
-async fn notarize_capture_checkpoint_to_with_admission(
     notary: &NotaryEndpoint,
     checkpoint: &CaptureCheckpoint,
     trusted_notary_key: &[u8],
@@ -1440,8 +1266,6 @@ async fn notarize_capture_checkpoint_within(
     progress: NotarizationProgressObserver<'_>,
     deadlines: NotarizationDeadlines,
 ) -> Result<LocalProof> {
-    validate_notary_frame_limit(max_frame_bytes)?;
-    AttestableHttpBudget::new(max_attestable_http_bytes)?;
     checkpoint.receipt.verify(trusted_notary_key)?;
     let state = checkpoint.checkpoint()?;
     let transcript_commit =
@@ -1529,7 +1353,8 @@ async fn notarize_capture_checkpoint_within(
         .await
 }
 
-/// Dispatches one versioned notary control connection.
+/// Dispatches one versioned notary control connection without an admission
+/// policy.
 pub async fn run_notary_session(
     mut socket: TcpStream,
     signing_key: Arc<SigningKey>,
@@ -1537,18 +1362,23 @@ pub async fn run_notary_session(
     max_total_private_chunk_bytes: usize,
     max_frame_bytes: usize,
 ) -> Result<()> {
-    validate_notary_frame_limit(max_frame_bytes)?;
     let prelude = read_notary_session_prelude(&mut socket).await?;
-    write_notary_admission(&mut socket, &prelude, Ok(())).await?;
-    run_notary_session_after_prelude(
+    write_notary_admission(&mut socket, Ok(())).await?;
+    run_notary_session_with_limits(
         socket,
         prelude.mode(),
         signing_key,
         allowed_hosts,
         max_total_private_chunk_bytes,
+        witness::DEFAULT_MAX_WITNESS_BYTES,
         max_frame_bytes,
+        None,
+        None,
+        None,
     )
     .await
+    .map(|_| ())
+    .map_err(anyhow::Error::new)
 }
 
 /// Reads and validates the current session prelude. Its optional opaque
@@ -1567,23 +1397,10 @@ pub async fn read_notary_session_prelude(socket: &mut TcpStream) -> Result<Notar
     })
 }
 
-/// Reads a prelude that requires an opaque admission value. This rejects
-/// legacy clients before any TLSNotary work begins.
-pub async fn read_required_admission_prelude(
-    socket: &mut TcpStream,
-) -> Result<NotarySessionPrelude> {
-    let prelude = read_notary_session_prelude(socket).await?;
-    if prelude.admission_value.is_none() {
-        bail!("a notary admission value is required");
-    }
-    Ok(prelude)
-}
-
 /// Sends a typed admission response after the server has applied its cheap
 /// policy and capacity checks.
 pub async fn write_notary_admission(
     socket: &mut TcpStream,
-    _prelude: &NotarySessionPrelude,
     result: Result<(), NotaryAdmissionRejection>,
 ) -> Result<()> {
     match result {
@@ -1599,32 +1416,6 @@ pub async fn write_notary_admission(
     }
     socket.flush().await?;
     Ok(())
-}
-
-/// Runs a notary session after its prelude has been validated and consumed.
-pub async fn run_notary_session_after_prelude(
-    socket: TcpStream,
-    mode: NotarySessionMode,
-    signing_key: Arc<SigningKey>,
-    allowed_hosts: Arc<Vec<String>>,
-    max_total_private_chunk_bytes: usize,
-    max_frame_bytes: usize,
-) -> Result<()> {
-    run_notary_session_with_limits(
-        socket,
-        mode,
-        signing_key,
-        allowed_hosts,
-        max_total_private_chunk_bytes,
-        witness::DEFAULT_MAX_WITNESS_BYTES,
-        max_frame_bytes,
-        None,
-        None,
-        None,
-    )
-    .await
-    .map(|_| ())
-    .map_err(anyhow::Error::new)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -2126,7 +1917,7 @@ pub fn test_http_exchange(sent_bytes: usize, received_bytes: usize) -> (Vec<u8>,
     )
 }
 
-/// Mirrors the commitment layout in `notarize_capture_checkpoint_to_with_admission`.
+/// Mirrors the commitment layout in `notarize_capture_checkpoint_within`.
 #[cfg(any(test, feature = "test-utils"))]
 fn client_proof_request(transcript: &Transcript) -> Result<tlsn::config::prove::ProveRequest> {
     let transcript_commit =
@@ -2344,38 +2135,6 @@ fn validate_provider_name(provider_name: &str, host: &str) -> Result<()> {
             "provider name {provider_name:?} does not match authenticated host {host:?}; expected {expected:?}"
         );
     }
-    Ok(())
-}
-
-#[cfg(feature = "cli")]
-fn write_private_file(path: &Path, bytes: &[u8]) -> Result<()> {
-    let mut options = fs::OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    let mut file = options
-        .open(path)
-        .with_context(|| format!("creating private artifact {}", path.display()))?;
-    file.write_all(bytes)
-        .with_context(|| format!("writing private artifact {}", path.display()))?;
-    file.sync_all()
-        .with_context(|| format!("syncing private artifact {}", path.display()))?;
-    restrict_file(path)
-}
-
-#[cfg(all(feature = "cli", unix))]
-fn restrict_file(path: &Path) -> Result<()> {
-    use std::os::unix::fs::PermissionsExt;
-
-    fs::set_permissions(path, fs::Permissions::from_mode(0o600))
-        .with_context(|| format!("restricting capture artifact {}", path.display()))
-}
-
-#[cfg(all(feature = "cli", not(unix)))]
-fn restrict_file(_path: &Path) -> Result<()> {
     Ok(())
 }
 
@@ -2670,8 +2429,6 @@ fn validate_frame_length(length: usize, max_frame_bytes: usize) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[cfg(feature = "cli")]
-    use std::time::{SystemTime, UNIX_EPOCH};
     use tls_server_fixture::{CA_CERT_DER, SERVER_CERT_DER, SERVER_DOMAIN, SERVER_KEY_DER};
     use tlsn::rangeset::ops::Set;
     use tokio::net::{TcpListener, TcpStream};
@@ -2710,9 +2467,7 @@ mod tests {
         let server = tokio::spawn(async move {
             let (mut socket, _) = listener.accept().await.unwrap();
             let prelude = read_notary_session_prelude(&mut socket).await.unwrap();
-            write_notary_admission(&mut socket, &prelude, Ok(()))
-                .await
-                .unwrap();
+            write_notary_admission(&mut socket, Ok(())).await.unwrap();
             run_notary_session_with_limits_after_prelude(
                 socket,
                 prelude.mode(),
@@ -2749,7 +2504,6 @@ mod tests {
             assert_eq!(prelude.mode(), NotarySessionMode::Capture);
             write_notary_admission(
                 &mut socket,
-                &prelude,
                 Err(NotaryAdmissionRejection::CaptureAtCapacity),
             )
             .await
@@ -2812,15 +2566,13 @@ mod tests {
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(async move {
             let (mut socket, _) = listener.accept().await.unwrap();
-            let prelude = read_required_admission_prelude(&mut socket).await.unwrap();
+            let prelude = read_notary_session_prelude(&mut socket).await.unwrap();
             assert_eq!(prelude.mode(), NotarySessionMode::Capture);
             assert_eq!(prelude.admission_value(), Some("one-time-ticket"));
             let debug = format!("{prelude:?}");
             assert!(debug.contains("<redacted>"));
             assert!(!debug.contains("one-time-ticket"));
-            write_notary_admission(&mut socket, &prelude, Ok(()))
-                .await
-                .unwrap();
+            write_notary_admission(&mut socket, Ok(())).await.unwrap();
         });
 
         let mut client = TcpStream::connect(address).await.unwrap();
@@ -2832,19 +2584,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn required_admission_reader_rejects_legacy_and_oversize_values() {
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let address = listener.local_addr().unwrap();
-        let server = tokio::spawn(async move {
-            let (mut socket, _) = listener.accept().await.unwrap();
-            assert!(read_required_admission_prelude(&mut socket).await.is_err());
-        });
-        let mut client = TcpStream::connect(address).await.unwrap();
-        write_notary_prelude(&mut client, NOTARY_MODE_CAPTURE)
-            .await
-            .unwrap();
-        server.await.unwrap();
-
+    async fn prelude_rejects_oversize_admission_values() {
         let mut sink = tokio::io::sink();
         assert!(
             write_selected_notary_prelude(
@@ -3848,11 +3588,18 @@ mod tests {
             within(
                 "the tampered-key client",
                 notarize_capture_checkpoint(
-                    tampered_notary_addr,
+                    &NotaryEndpoint::new(
+                        tampered_notary_addr.ip().to_string(),
+                        tampered_notary_addr.port(),
+                        NotaryTransport::Tcp,
+                    )
+                    .unwrap(),
                     &key_tampered,
                     &trusted_public_key,
                     DEFAULT_MAX_ATTESTABLE_HTTP_BYTES,
                     DEFAULT_NOTARY_MAX_FRAME_BYTES,
+                    None,
+                    &|_| {},
                 ),
             )
             .await
@@ -3954,10 +3701,8 @@ mod tests {
             let (held_sender, held_receiver) = oneshot::channel();
             let fake_notary = tokio::spawn(async move {
                 let (mut socket, _) = listener.accept().await.unwrap();
-                let prelude = read_notary_session_prelude(&mut socket).await.unwrap();
-                write_notary_admission(&mut socket, &prelude, Ok(()))
-                    .await
-                    .unwrap();
+                read_notary_session_prelude(&mut socket).await.unwrap();
+                write_notary_admission(&mut socket, Ok(())).await.unwrap();
                 read_tokio_frame(&mut socket, DEFAULT_NOTARY_MAX_FRAME_BYTES)
                     .await
                     .unwrap();
@@ -4026,12 +3771,13 @@ mod tests {
         };
         let proof = within(
             "the fresh-notary client",
-            notarize_capture_checkpoint_to_with_progress(
+            notarize_capture_checkpoint(
                 &endpoint,
                 &checkpoint,
                 &trusted_public_key,
                 DEFAULT_MAX_ATTESTABLE_HTTP_BYTES,
                 DEFAULT_NOTARY_MAX_FRAME_BYTES,
+                None,
                 &record_progress,
             ),
         )
@@ -4102,159 +3848,121 @@ mod tests {
         assert!(!request.contains("fixture-cookie"));
         assert!(response.contains(r#""model":"fixture""#));
 
-        #[cfg(feature = "cli")]
-        {
-            let root = std::env::temp_dir().join(format!(
-                "notary-package-test-{}-{}",
-                std::process::id(),
-                SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap()
-                    .as_nanos()
-            ));
-            fs::create_dir_all(&root).unwrap();
-            let valid = root.join("valid.llmtrace");
-            crate::notarization::write_trace_package_with_provider(
+        let build = || {
+            crate::notarization::build_trace_package_bytes_with_provider(
                 &capture,
-                &valid,
                 &trusted_public_key,
                 &crypto_provider,
             )
-            .unwrap();
-            let repeated = root.join("repeated.llmtrace");
-            crate::notarization::write_trace_package_with_provider(
-                &capture,
-                &repeated,
-                &trusted_public_key,
-                &crypto_provider,
-            )
-            .unwrap();
-            assert_eq!(
-                fs::read(&valid).unwrap(),
-                fs::read(&repeated).unwrap(),
-                "identical notarized inputs must produce identical .llmtrace bytes"
-            );
-            let package_bytes = fs::read(&valid).unwrap();
-            if let Some(output) = std::env::var_os("CAPTURE_TEST_PACKAGE_FIXTURE_OUT") {
-                use base64::{Engine as _, engine::general_purpose::STANDARD};
-                fs::write(output, format!("{}\n", STANDARD.encode(&package_bytes))).unwrap();
-            }
-            for secret in [
-                b"fixture-secret".as_slice(),
-                b"fixture-cookie".as_slice(),
-                b"request-fixture-private".as_slice(),
-                b"organization-fixture-private".as_slice(),
-                b"project-fixture-private".as_slice(),
-            ] {
-                assert!(
-                    !package_bytes
-                        .windows(secret.len())
-                        .any(|window| window == secret),
-                    "notarized .llmtrace bytes must not retain header secrets"
-                );
-            }
-            crate::notarization::verify_trace_package_with_provider(
-                &valid,
-                &trusted_public_key,
-                &crypto_provider,
-            )
-            .unwrap();
-
-            fn unpack_package(source: &Path, destination: &Path) {
-                crate::archive::extract_trace_package_archive(
-                    &fs::read(source).unwrap(),
-                    destination,
-                )
-                .unwrap();
-            }
-
-            fn archive_package(source: &Path, destination: &Path) {
-                fs::write(
-                    destination,
-                    crate::archive::build_trace_package_archive(source).unwrap(),
-                )
-                .unwrap();
-            }
-
-            for name in [
-                "evidence.tlsn",
-                "request.disclosed.http",
-                "response.disclosed.http",
-                "trace.otlp.json",
-            ] {
-                let directory = root.join(format!("tampered-{}-dir", name.replace('.', "-")));
-                let tampered = root.join(format!("tampered-{}.llmtrace", name.replace('.', "-")));
-                unpack_package(&valid, &directory);
-                let path = directory.join(name);
-                let mut bytes = fs::read(&path).unwrap();
-                bytes.push(b' ');
-                fs::write(path, bytes).unwrap();
-                archive_package(&directory, &tampered);
-                assert!(
-                    crate::notarization::verify_trace_package_with_provider(
-                        &tampered,
-                        &trusted_public_key,
-                        &crypto_provider,
-                    )
-                    .is_err(),
-                    "tampered {name} must be rejected"
-                );
-            }
-
-            for (label, mutate) in [
-                (
-                    "source",
-                    Box::new(|manifest: &mut serde_json::Value| {
-                        manifest["source"]["trace_id"] = serde_json::json!("trc-forged");
-                    }) as Box<dyn Fn(&mut serde_json::Value)>,
-                ),
-                (
-                    "trace-hash",
-                    Box::new(|manifest: &mut serde_json::Value| {
-                        manifest["trace_sha256"] = serde_json::json!("00");
-                    }),
-                ),
-                (
-                    "normalizer-version",
-                    Box::new(|manifest: &mut serde_json::Value| {
-                        manifest["normalizer_version"] = serde_json::json!("unsupported");
-                    }),
-                ),
-            ] {
-                let directory = root.join(format!("tampered-{label}-dir"));
-                let tampered = root.join(format!("tampered-{label}.llmtrace"));
-                unpack_package(&valid, &directory);
-                let manifest_path = directory.join("manifest.json");
-                let mut manifest: serde_json::Value =
-                    serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
-                mutate(&mut manifest);
-                fs::write(
-                    &manifest_path,
-                    serde_json::to_vec_pretty(&manifest).unwrap(),
-                )
-                .unwrap();
-                archive_package(&directory, &tampered);
-                assert!(
-                    crate::notarization::verify_trace_package_with_provider(
-                        &tampered,
-                        &trusted_public_key,
-                        &crypto_provider,
-                    )
-                    .is_err(),
-                    "tampered {label} must be rejected"
-                );
-            }
-
-            assert!(
-                crate::notarization::verify_trace_package_with_provider(
-                    &valid,
-                    wrong_key.verifying_key().to_sec1_bytes().as_ref(),
-                    &crypto_provider,
-                )
-                .is_err(),
-                "a package must reject the wrong trusted notary key"
-            );
-            fs::remove_dir_all(root).unwrap();
+            .unwrap()
+        };
+        let package_bytes = build();
+        assert_eq!(
+            package_bytes,
+            build(),
+            "identical notarized inputs must produce identical .llmtrace bytes"
+        );
+        if let Some(output) = std::env::var_os("CAPTURE_TEST_PACKAGE_FIXTURE_OUT") {
+            use base64::{Engine as _, engine::general_purpose::STANDARD};
+            std::fs::write(output, format!("{}\n", STANDARD.encode(&package_bytes))).unwrap();
         }
+        for secret in [
+            b"fixture-secret".as_slice(),
+            b"fixture-cookie".as_slice(),
+            b"request-fixture-private".as_slice(),
+            b"organization-fixture-private".as_slice(),
+            b"project-fixture-private".as_slice(),
+        ] {
+            assert!(
+                !package_bytes
+                    .windows(secret.len())
+                    .any(|window| window == secret),
+                "notarized .llmtrace bytes must not retain header secrets"
+            );
+        }
+        let verify = |bytes: &[u8], key: &[u8]| {
+            crate::notarization::verify_trace_package_bytes_with_provider(
+                bytes,
+                key,
+                &crypto_provider,
+            )
+        };
+        verify(&package_bytes, &trusted_public_key).unwrap();
+
+        let unpack = || {
+            crate::archive::read_trace_package_archive(&package_bytes)
+                .unwrap()
+                .into_files()
+        };
+        let repack = |files: &std::collections::BTreeMap<String, Vec<u8>>| {
+            crate::archive::build_trace_package_archive_from_entries(
+                crate::archive::TracePackageArchiveEntries {
+                    kind: crate::archive::EvidenceKind::Notarized,
+                    evidence: &files["evidence.tlsn"],
+                    manifest_json: &files["manifest.json"],
+                    request_disclosed_http: &files["request.disclosed.http"],
+                    response_disclosed_http: &files["response.disclosed.http"],
+                    trace_otlp_json: &files["trace.otlp.json"],
+                },
+            )
+            .unwrap()
+        };
+
+        for name in [
+            "evidence.tlsn",
+            "request.disclosed.http",
+            "response.disclosed.http",
+            "trace.otlp.json",
+        ] {
+            let mut files = unpack();
+            files.get_mut(name).unwrap().push(b' ');
+            assert!(
+                verify(&repack(&files), &trusted_public_key).is_err(),
+                "tampered {name} must be rejected"
+            );
+        }
+
+        for (label, mutate) in [
+            (
+                "source",
+                Box::new(|manifest: &mut serde_json::Value| {
+                    manifest["source"]["trace_id"] = serde_json::json!("trc-forged");
+                }) as Box<dyn Fn(&mut serde_json::Value)>,
+            ),
+            (
+                "trace-hash",
+                Box::new(|manifest: &mut serde_json::Value| {
+                    manifest["trace_sha256"] = serde_json::json!("00");
+                }),
+            ),
+            (
+                "normalizer-version",
+                Box::new(|manifest: &mut serde_json::Value| {
+                    manifest["normalizer_version"] = serde_json::json!("unsupported");
+                }),
+            ),
+        ] {
+            let mut files = unpack();
+            let mut manifest: serde_json::Value =
+                serde_json::from_slice(&files["manifest.json"]).unwrap();
+            mutate(&mut manifest);
+            files.insert(
+                "manifest.json".to_owned(),
+                serde_json::to_vec_pretty(&manifest).unwrap(),
+            );
+            assert!(
+                verify(&repack(&files), &trusted_public_key).is_err(),
+                "tampered {label} must be rejected"
+            );
+        }
+
+        assert!(
+            verify(
+                &package_bytes,
+                wrong_key.verifying_key().to_sec1_bytes().as_ref(),
+            )
+            .is_err(),
+            "a package must reject the wrong trusted notary key"
+        );
     }
 }

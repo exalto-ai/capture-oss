@@ -634,39 +634,13 @@ pub struct WitnessedStreamResponse {
     pub exchange: oneshot::Receiver<Result<WitnessedExchange>>,
 }
 
-/// Streams one provider request through a Witnessed notary session.
+/// Streams one provider request through a Witnessed notary session. An
+/// admitted session places one bounded opaque value in the outer notary
+/// prelude.
 ///
 /// The request, including its credentials, is sent to the notary. Outer TLS
 /// is therefore required unless the notary is on loopback.
-pub async fn witness_streaming_request_to(
-    notary: &NotaryEndpoint,
-    server_name: &str,
-    config: WitnessConfig,
-    request: Request<HttpRequestBody>,
-) -> Result<WitnessedStreamResponse> {
-    witness_streaming_request_to_with_admission(notary, server_name, config, request, None).await
-}
-
-/// Runs an admitted Witnessed session after placing one bounded opaque value
-/// in the outer notary prelude.
-pub async fn witness_streaming_request_to_admitted(
-    notary: &NotaryEndpoint,
-    server_name: &str,
-    config: WitnessConfig,
-    request: Request<HttpRequestBody>,
-    admission_value: &str,
-) -> Result<WitnessedStreamResponse> {
-    witness_streaming_request_to_with_admission(
-        notary,
-        server_name,
-        config,
-        request,
-        Some(admission_value),
-    )
-    .await
-}
-
-async fn witness_streaming_request_to_with_admission(
+pub async fn witness_streaming_request(
     notary: &NotaryEndpoint,
     server_name: &str,
     config: WitnessConfig,
@@ -1159,13 +1133,14 @@ mod tests {
             crate::registry::NotaryTransport::Tcp,
         )
         .unwrap();
-        let error = witness_streaming_request_to(
+        let error = witness_streaming_request(
             &notary,
             "api.openai.com",
             WitnessConfig {
                 provider_name: "openai".to_owned(),
             },
             fixture_request(b"{}"),
+            None,
         )
         .await
         .err()

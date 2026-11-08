@@ -116,17 +116,6 @@ impl Provider {
         }
     }
 
-    #[cfg(test)]
-    pub fn default_path_prefix(self) -> &'static str {
-        match self {
-            Self::Openai => "/openai",
-            Self::OpenaiCodex => "/codex",
-            Self::Anthropic => "/anthropic",
-            Self::Deepseek => "/deepseek",
-            Self::Openrouter => "/openrouter",
-        }
-    }
-
     fn config(self, providers: &ProvidersConfig) -> &ProviderConfig {
         match self {
             Self::Openai => &providers.openai,
@@ -196,10 +185,8 @@ mod tests {
     fn provider_adapters_pin_their_authenticated_hosts() {
         assert_eq!(Provider::Openrouter.host(), "openrouter.ai");
         assert_eq!(Provider::Openrouter.name(), "openrouter");
-        assert_eq!(Provider::Openrouter.default_path_prefix(), "/openrouter");
         assert_eq!(Provider::OpenaiCodex.host(), "chatgpt.com");
         assert_eq!(Provider::OpenaiCodex.name(), "openai");
-        assert_eq!(Provider::OpenaiCodex.default_path_prefix(), "/codex");
         assert_eq!(
             Provider::OpenaiCodex.upstream_path_prefix(),
             "/backend-api/codex"

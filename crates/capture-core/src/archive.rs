@@ -8,7 +8,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
     io::{Cursor, Read, Seek, SeekFrom, Write},
-    path::{Path, PathBuf},
+    path::Path,
 };
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -323,11 +323,6 @@ fn archive_capacity(package_size: u64, manifest_size: u64) -> Result<u64> {
     Ok(capacity)
 }
 
-/// Validates a transport archive without writing any attacker-controlled path.
-pub fn validate_trace_package_archive(bytes: &[u8]) -> Result<TracePackageArchiveManifest> {
-    Ok(read_trace_package_archive(bytes)?.manifest)
-}
-
 /// Parses and validates all `.llmtrace` entries in memory without creating an
 /// attacker-controlled path.
 pub fn read_trace_package_archive(bytes: &[u8]) -> Result<ValidatedTracePackageArchive> {
@@ -338,88 +333,6 @@ pub fn read_trace_package_archive(bytes: &[u8]) -> Result<ValidatedTracePackageA
         bail!("trace package archive does not start at the canonical ZIP offset");
     }
     read_validated_archive(bytes)
-}
-
-/// Validates and extracts a transport archive for server-side admission.
-///
-/// All entries are held in memory and authenticated against the archive
-/// manifest before the destination directory is created.
-pub fn extract_trace_package_archive(
-    bytes: &[u8],
-    output_dir: &Path,
-) -> Result<TracePackageArchiveManifest> {
-    let validated = read_validated_archive(bytes)?;
-    if output_dir.exists() {
-        bail!(
-            "refusing to overwrite extracted trace package: {}",
-            output_dir.display()
-        );
-    }
-    let staging = create_staging_directory(output_dir)?;
-    let result = (|| -> Result<()> {
-        for name in validated.kind.package_files() {
-            fs::write(
-                staging.join(name),
-                validated
-                    .files
-                    .get(name)
-                    .expect("validated archive contains every package file"),
-            )
-            .with_context(|| format!("extracting archive entry {name}"))?;
-        }
-        fs::rename(&staging, output_dir)
-            .with_context(|| format!("completing extraction {}", output_dir.display()))
-    })();
-    if result.is_err() {
-        let _ = fs::remove_dir_all(&staging);
-    }
-    result?;
-    Ok(validated.manifest)
-}
-
-/// Creates a unique staging directory beside an output directory.
-///
-/// Callers must remove it if writing or sharing fails.
-pub(crate) fn create_staging_directory(output_dir: &Path) -> Result<PathBuf> {
-    let parent = output_dir
-        .parent()
-        .filter(|parent| !parent.as_os_str().is_empty())
-        .unwrap_or_else(|| Path::new("."));
-    fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
-    let output_name = output_dir
-        .file_name()
-        .ok_or_else(|| anyhow!("output path has no directory name"))?
-        .to_string_lossy();
-
-    for _ in 0..16 {
-        let staging = parent.join(format!(
-            ".{output_name}.{}.{:016x}.partial",
-            std::process::id(),
-            rand::random::<u64>()
-        ));
-        #[cfg(unix)]
-        let builder = {
-            use std::os::unix::fs::DirBuilderExt as _;
-            let mut builder = fs::DirBuilder::new();
-            builder.mode(0o700);
-            builder
-        };
-        #[cfg(not(unix))]
-        let builder = fs::DirBuilder::new();
-        match builder.create(&staging) {
-            Ok(()) => return Ok(staging),
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(error) => {
-                return Err(error)
-                    .with_context(|| format!("creating staging directory {}", staging.display()));
-            }
-        }
-    }
-
-    bail!(
-        "could not create a unique staging directory beside {}",
-        output_dir.display()
-    )
 }
 
 fn read_validated_archive(bytes: &[u8]) -> Result<ValidatedTracePackageArchive> {
@@ -755,18 +668,42 @@ mod tests {
         }
     }
 
-    fn fixture_package() -> TestDir {
-        fixture_package_of(EvidenceKind::Notarized)
+    fn fixture_files(kind: EvidenceKind, format: &str) -> BTreeMap<String, Vec<u8>> {
+        kind.package_files()
+            .into_iter()
+            .map(|name| {
+                let bytes = if name == "manifest.json" {
+                    format!(r#"{{"format":"{format}"}}"#).into_bytes()
+                } else {
+                    format!("fixture:{name}").into_bytes()
+                };
+                (name.to_owned(), bytes)
+            })
+            .collect()
     }
 
-    fn fixture_package_of(kind: EvidenceKind) -> TestDir {
+    fn build(kind: EvidenceKind, files: &BTreeMap<String, Vec<u8>>) -> Result<Vec<u8>> {
+        build_trace_package_archive_from_entries(TracePackageArchiveEntries {
+            kind,
+            evidence: &files[kind.evidence_entry()],
+            manifest_json: &files["manifest.json"],
+            request_disclosed_http: &files["request.disclosed.http"],
+            response_disclosed_http: &files["response.disclosed.http"],
+            trace_otlp_json: &files["trace.otlp.json"],
+        })
+    }
+
+    fn fixture_archive_of(kind: EvidenceKind) -> Vec<u8> {
+        build(kind, &fixture_files(kind, kind.evidence_format())).unwrap()
+    }
+
+    fn fixture_archive() -> Vec<u8> {
+        fixture_archive_of(EvidenceKind::Notarized)
+    }
+
+    fn fixture_package() -> TestDir {
         let directory = TestDir::new("package");
-        for name in kind.package_files() {
-            let bytes = if name == "manifest.json" {
-                format!(r#"{{"format":"{}"}}"#, kind.evidence_format()).into_bytes()
-            } else {
-                format!("fixture:{name}").into_bytes()
-            };
+        for (name, bytes) in fixture_files(EvidenceKind::Notarized, TRACE_EVIDENCE_FORMAT) {
             fs::write(directory.0.join(name), bytes).unwrap();
         }
         directory
@@ -804,29 +741,20 @@ mod tests {
     }
 
     #[test]
-    fn archive_is_reproducible_and_extracts_exact_files() {
-        let package = fixture_package();
-        let first = build_trace_package_archive(&package.0).unwrap();
-        let second = build_trace_package_archive(&package.0).unwrap();
-        assert_eq!(first, second);
-        let manifest = validate_trace_package_archive(&first).unwrap();
-        assert_eq!(manifest.format, TRACE_PACKAGE_FORMAT);
-
-        let output_parent = TestDir::new("extract-parent");
-        let output = output_parent.0.join("package");
-        extract_trace_package_archive(&first, &output).unwrap();
-        for name in PACKAGE_FILES {
-            assert_eq!(
-                fs::read(output.join(name)).unwrap(),
-                fs::read(package.0.join(name)).unwrap()
-            );
-        }
+    fn archive_is_reproducible_and_reads_back_exact_files() {
+        let first = fixture_archive();
+        assert_eq!(first, fixture_archive());
+        let archive = read_trace_package_archive(&first).unwrap();
+        assert_eq!(archive.manifest.format, TRACE_PACKAGE_FORMAT);
+        assert_eq!(
+            archive.into_files(),
+            fixture_files(EvidenceKind::Notarized, TRACE_EVIDENCE_FORMAT)
+        );
     }
 
     #[test]
     fn witnessed_archive_round_trips_with_its_own_entry_set_and_format() {
-        let package = fixture_package_of(EvidenceKind::Witnessed);
-        let bytes = build_trace_package_archive(&package.0).unwrap();
+        let bytes = fixture_archive_of(EvidenceKind::Witnessed);
         let archive = read_trace_package_archive(&bytes).unwrap();
         assert_eq!(archive.evidence_kind(), EvidenceKind::Witnessed);
         assert_eq!(archive.manifest.package_format, WITNESS_EVIDENCE_FORMAT);
@@ -838,18 +766,10 @@ mod tests {
     fn evidence_entry_and_format_must_name_the_same_kind() {
         // A Witnessed entry set whose manifests claim the Notarized format
         // must not validate as either kind.
-        let directory = TestDir::new("mixed");
-        for name in WITNESSED_PACKAGE_FILES {
-            let bytes = if name == "manifest.json" {
-                format!(r#"{{"format":"{TRACE_EVIDENCE_FORMAT}"}}"#).into_bytes()
-            } else {
-                format!("fixture:{name}").into_bytes()
-            };
-            fs::write(directory.0.join(name), bytes).unwrap();
-        }
-        assert!(build_trace_package_archive(&directory.0).is_err());
+        let mixed = fixture_files(EvidenceKind::Witnessed, TRACE_EVIDENCE_FORMAT);
+        assert!(build(EvidenceKind::Witnessed, &mixed).is_err());
 
-        let notarized = build_trace_package_archive(&fixture_package().0).unwrap();
+        let notarized = fixture_archive();
         let renamed = archive_entries(&notarized)
             .into_iter()
             .map(|(name, bytes, symlink)| {
@@ -869,23 +789,7 @@ mod tests {
         let package = fixture_package();
 
         let from_directory = build_trace_package_archive(&package.0).unwrap();
-        let evidence = fs::read(package.0.join("evidence.tlsn")).unwrap();
-        let manifest = fs::read(package.0.join("manifest.json")).unwrap();
-        let request = fs::read(package.0.join("request.disclosed.http")).unwrap();
-        let response = fs::read(package.0.join("response.disclosed.http")).unwrap();
-        let trace = fs::read(package.0.join("trace.otlp.json")).unwrap();
-        let from_memory = build_trace_package_archive_from_entries(TracePackageArchiveEntries {
-            kind: EvidenceKind::Notarized,
-            evidence: &evidence,
-            manifest_json: &manifest,
-            request_disclosed_http: &request,
-            response_disclosed_http: &response,
-            trace_otlp_json: &trace,
-        })
-        .unwrap();
-
-        assert_eq!(from_memory, from_directory);
-        validate_trace_package_archive(&from_memory).unwrap();
+        assert_eq!(fixture_archive(), from_directory);
     }
 
     #[test]
@@ -938,13 +842,12 @@ mod tests {
 
     #[test]
     fn archive_rejects_traversal_absolute_duplicates_symlinks_and_undeclared_files() {
-        let package = fixture_package();
-        let valid = build_trace_package_archive(&package.0).unwrap();
+        let valid = fixture_archive();
 
         for bad_name in ["../trace.otlp.json", "/trace.otlp.json", "extra.txt"] {
             let mut entries = archive_entries(&valid);
             entries[5].0 = bad_name.to_owned();
-            assert!(validate_trace_package_archive(&rewrite_archive(entries)).is_err());
+            assert!(read_trace_package_archive(&rewrite_archive(entries)).is_err());
         }
 
         // zip's writer refuses duplicate names, so mutate the equal-length
@@ -969,7 +872,7 @@ mod tests {
             }
         }
         assert_eq!(replacements, 2);
-        assert!(validate_trace_package_archive(&duplicate).is_err());
+        assert!(read_trace_package_archive(&duplicate).is_err());
 
         let mut symlink = archive_entries(&valid);
         symlink[5] = (
@@ -977,43 +880,41 @@ mod tests {
             b"manifest.json".to_vec(),
             true,
         );
-        assert!(validate_trace_package_archive(&rewrite_archive(symlink)).is_err());
+        assert!(read_trace_package_archive(&rewrite_archive(symlink)).is_err());
     }
 
     #[test]
     fn archive_rejects_file_and_package_hash_mismatches() {
-        let package = fixture_package();
-        let valid = build_trace_package_archive(&package.0).unwrap();
+        let valid = fixture_archive();
 
         let mut file_mismatch = archive_entries(&valid);
         file_mismatch[5].1.push(b'!');
-        assert!(validate_trace_package_archive(&rewrite_archive(file_mismatch)).is_err());
+        assert!(read_trace_package_archive(&rewrite_archive(file_mismatch)).is_err());
 
         let mut package_mismatch = archive_entries(&valid);
         let mut manifest: serde_json::Value =
             serde_json::from_slice(&package_mismatch[0].1).unwrap();
         manifest["package_sha256"] = serde_json::Value::String("0".repeat(64));
         package_mismatch[0].1 = serde_json::to_vec(&manifest).unwrap();
-        assert!(validate_trace_package_archive(&rewrite_archive(package_mismatch)).is_err());
+        assert!(read_trace_package_archive(&rewrite_archive(package_mismatch)).is_err());
     }
 
     #[test]
     fn archive_rejects_noncanonical_outer_zip_bytes() {
-        let package = fixture_package();
-        let valid = build_trace_package_archive(&package.0).unwrap();
+        let valid = fixture_archive();
 
         let mut prefixed = b"not-part-of-the-zip".to_vec();
         prefixed.extend_from_slice(&valid);
         assert!(ZipArchive::new(Cursor::new(&prefixed)).is_ok());
-        assert!(validate_trace_package_archive(&prefixed).is_err());
+        assert!(read_trace_package_archive(&prefixed).is_err());
 
         let mut trailing = valid.clone();
         trailing.extend_from_slice(b"not-part-of-the-zip");
-        assert!(validate_trace_package_archive(&trailing).is_err());
+        assert!(read_trace_package_archive(&trailing).is_err());
 
         let mut entries = archive_entries(&valid);
         let manifest: serde_json::Value = serde_json::from_slice(&entries[0].1).unwrap();
         entries[0].1 = serde_json::to_vec_pretty(&manifest).unwrap();
-        assert!(validate_trace_package_archive(&rewrite_archive(entries)).is_err());
+        assert!(read_trace_package_archive(&rewrite_archive(entries)).is_err());
     }
 }

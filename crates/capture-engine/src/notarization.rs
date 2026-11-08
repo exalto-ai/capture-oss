@@ -17,8 +17,7 @@ use capture_core::{
     NotaryConnectionError,
     archive::MAX_ARCHIVE_WIRE_BYTES,
     notarization::{
-        notarize_capture_checkpoint_admitted_bytes_with_progress,
-        notarize_capture_checkpoint_bytes_with_progress, trace_package_created_at_unix_ms_bytes,
+        notarize_capture_checkpoint_bytes, trace_package_created_at_unix_ms_bytes,
         trace_package_notary_key_bytes, verify_trace_package_bytes,
     },
     notary_admission_error, notary_connection_error,
@@ -520,35 +519,29 @@ async fn notarize_operation(
     let admission = notarization
         .admission()
         .unwrap_or_else(|| ctx.admission.clone());
-    let package_result = match admission
+    let admission = admission
         .notarization(&checkpoint, ctx.max_attestable_http_bytes)
-        .await?
-    {
-        Some(admission) => {
-            notarize_capture_checkpoint_admitted_bytes_with_progress(
-                &checkpoint,
-                &key,
-                &endpoint,
-                ctx.max_attestable_http_bytes
-                    .min(admission.max_attestable_http_bytes),
-                ctx.max_frame_bytes.min(admission.max_frame_bytes),
-                &admission.ticket,
-                &report_progress,
-            )
-            .await
-        }
-        None => {
-            notarize_capture_checkpoint_bytes_with_progress(
-                &checkpoint,
-                &key,
-                &endpoint,
-                ctx.max_attestable_http_bytes,
-                ctx.max_frame_bytes,
-                &report_progress,
-            )
-            .await
-        }
+        .await?;
+    let (max_attestable_http_bytes, max_frame_bytes) = match &admission {
+        Some(admission) => (
+            ctx.max_attestable_http_bytes
+                .min(admission.max_attestable_http_bytes),
+            ctx.max_frame_bytes.min(admission.max_frame_bytes),
+        ),
+        None => (ctx.max_attestable_http_bytes, ctx.max_frame_bytes),
     };
+    let package_result = notarize_capture_checkpoint_bytes(
+        &checkpoint,
+        &key,
+        &endpoint,
+        max_attestable_http_bytes,
+        max_frame_bytes,
+        admission
+            .as_ref()
+            .map(|admission| admission.ticket.as_str()),
+        &report_progress,
+    )
+    .await;
     drop(progress_sender);
     progress_recorder
         .await

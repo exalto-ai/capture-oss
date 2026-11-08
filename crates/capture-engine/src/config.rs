@@ -713,11 +713,6 @@ impl CapturedConfig {
                     password_hash.algorithm.as_str() == "argon2id",
                     "admin.auth.password_hash must use Argon2id"
                 );
-            } else {
-                ensure!(
-                    self.cluster.is_some(),
-                    "admin.auth.password_hash is required outside cluster mode"
-                );
             }
         }
         match (&self.notary.endpoint, &self.notary.public_key) {

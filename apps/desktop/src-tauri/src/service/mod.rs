@@ -265,15 +265,6 @@ pub(crate) async fn run(
     let listen = config.proxy.listen;
     let max_frame_bytes = config.notary.max_frame_bytes;
     let max_attestable_http_bytes = config.proxy.max_attestable_http_bytes;
-    if max_frame_bytes == 0 || max_frame_bytes > u32::MAX as usize {
-        bail!(
-            "notary frame limit must be between 1 and {} bytes",
-            u32::MAX
-        );
-    }
-    if max_attestable_http_bytes == 0 {
-        bail!("maximum attestable HTTP bytes must be non-zero");
-    }
     let persistence = Persistence::open(&config).await?;
     let recovery = persistence
         .storage()

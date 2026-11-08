@@ -22,8 +22,8 @@ use axum::{
 use bytes::{Bytes, BytesMut};
 use capture_core::{
     CaptureCheckpoint, CaptureConfig, NotaryAdmissionRejection, attestable_request_header_bytes,
-    capture_streaming_request_to, capture_streaming_request_to_admitted, chunked_request_body,
-    notary_admission_error, registry::NotaryEndpoint, vault::Vault, witness::WitnessedExchange,
+    capture_streaming_request, chunked_request_body, notary_admission_error,
+    registry::NotaryEndpoint, vault::Vault, witness::WitnessedExchange,
 };
 use http_body_util::BodyExt as _;
 use sha2::{Digest as _, Sha256};
@@ -513,19 +513,16 @@ async fn handle_inner(ctx: CaptureContext, request: Request) -> Result<Response>
         max_attestable_http_bytes: effective_attestable_http_bytes,
         max_frame_bytes: effective_frame_bytes,
     };
-    let upstream = match admission {
-        Some(admission) => {
-            capture_streaming_request_to_admitted(
-                &notary,
-                host,
-                capture,
-                outbound,
-                &admission.ticket,
-            )
-            .await
-        }
-        None => capture_streaming_request_to(&notary, host, capture, outbound).await,
-    };
+    let upstream = capture_streaming_request(
+        &notary,
+        host,
+        capture,
+        outbound,
+        admission
+            .as_ref()
+            .map(|admission| admission.ticket.as_str()),
+    )
+    .await;
     let upstream = match upstream {
         Ok(upstream) => upstream,
         Err(error) => {
@@ -806,27 +803,16 @@ async fn witnessed_provider_request(
     let witness_config = capture_core::witness::WitnessConfig {
         provider_name: provider.name().to_owned(),
     };
-    let upstream = match &admission {
-        Some(admission) => {
-            capture_core::witness::witness_streaming_request_to_admitted(
-                &notary,
-                host,
-                witness_config,
-                outbound,
-                &admission.ticket,
-            )
-            .await
-        }
-        None => {
-            capture_core::witness::witness_streaming_request_to(
-                &notary,
-                host,
-                witness_config,
-                outbound,
-            )
-            .await
-        }
-    };
+    let upstream = capture_core::witness::witness_streaming_request(
+        &notary,
+        host,
+        witness_config,
+        outbound,
+        admission
+            .as_ref()
+            .map(|admission| admission.ticket.as_str()),
+    )
+    .await;
     let upstream = match upstream {
         Ok(upstream) => upstream,
         Err(error) => {

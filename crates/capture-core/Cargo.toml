@@ -11,7 +11,6 @@ cli = [
     "dep:chacha20poly1305",
     "dep:directories",
     "dep:keyring",
-    "dep:rpassword",
 ]
 # Compile-time gate for the isolated Docker E2E trust root. Normal binaries do
 # not enable this, so the corresponding environment variable is inert there.
@@ -37,7 +36,6 @@ hyper-util = { version = "0.1", features = ["tokio"] }
 k256 = { workspace = true, features = ["ecdsa"] }
 keyring = { version = "3.6", optional = true, features = [
     "apple-native",
-    "windows-native",
     "linux-native-sync-persistent",
     "crypto-rust",
     "vendored",
@@ -49,7 +47,6 @@ opentelemetry = "0.32.0"
 opentelemetry-otlp = { version = "0.32.0", default-features = false, features = ["trace", "http-proto", "reqwest-client"] }
 opentelemetry_sdk = "0.32.1"
 rand = "0.9"
-rpassword = { workspace = true, optional = true }
 rustls = "0.23"
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }

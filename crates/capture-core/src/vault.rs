@@ -25,7 +25,6 @@ const KEY_CHECK_PLAINTEXT: &[u8] = b"notary vault key check";
 const SERVICE: &str = "ai.exalto.capture";
 /// Separates organization vault keys from every other use of the cluster key.
 const ORGANIZATION_VAULT_LABEL: &[u8] = b"ecp/organization-vault/v1\0";
-const PASSPHRASE_FILE_ENV: &str = "CAPTURE_VAULT_PASSPHRASE_FILE";
 /// Private 32-byte key file shared by every replica in cluster mode.
 pub const CLUSTER_KEY_FILE_ENV: &str = "CAPTURE_SERVER_CLUSTER_VAULT_KEY_FILE";
 
@@ -47,7 +46,6 @@ enum VaultMode {
 /// Local checkpoint-encryption key material.
 pub struct Vault {
     key: [u8; 32],
-    config_path: PathBuf,
     server_key: bool,
 }
 
@@ -58,33 +56,6 @@ impl Drop for Vault {
 }
 
 impl Vault {
-    /// Opens a vault, prompting for a passphrase only when that mode was
-    /// explicitly configured.
-    pub fn open_interactive() -> Result<Self> {
-        let config = read_config(&config_path()?)?;
-        match config.mode {
-            VaultMode::Os => Self::open(None),
-            VaultMode::Passphrase => {
-                let passphrase = match passphrase_from_file_env()? {
-                    Some(passphrase) => passphrase,
-                    None => rpassword::prompt_password("Notary vault passphrase: ")?,
-                };
-                Self::open(Some(&passphrase))
-            }
-        }
-    }
-
-    /// Opens an existing vault or creates an OS-vault-backed one.
-    pub fn open_or_init_interactive() -> Result<Self> {
-        if config_path()?.exists() {
-            Self::open_interactive()
-        } else if let Some(passphrase) = passphrase_from_file_env()? {
-            Self::init_passphrase(&passphrase)
-        } else {
-            Self::init_os()
-        }
-    }
-
     /// Opens the shared cluster vault without prompting or local key setup.
     pub fn open_cluster() -> Result<Self> {
         let path = env::var_os(CLUSTER_KEY_FILE_ENV)
@@ -93,7 +64,6 @@ impl Vault {
         let key = read_server_key_file(&path)?;
         Ok(Self {
             key,
-            config_path: path,
             server_key: true,
         })
     }
@@ -128,7 +98,6 @@ impl Vault {
         }
         Ok(Self {
             key,
-            config_path: path.to_owned(),
             server_key: true,
         })
     }
@@ -151,7 +120,6 @@ impl Vault {
             .map_err(|_| anyhow::anyhow!("deriving the organization vault key failed"))?;
         Ok(Self {
             key,
-            config_path: self.config_path.clone(),
             server_key: false,
         })
     }
@@ -190,7 +158,6 @@ impl Vault {
         }
         Ok(Self {
             key: *key,
-            config_path: config_path.to_owned(),
             server_key: false,
         })
     }
@@ -214,7 +181,6 @@ impl Vault {
         )?;
         Ok(Self {
             key,
-            config_path,
             server_key: false,
         })
     }
@@ -252,7 +218,6 @@ impl Vault {
         }
         Ok(Self {
             key: *key,
-            config_path: config_path.to_owned(),
             server_key: false,
         })
     }
@@ -284,11 +249,6 @@ impl Vault {
             .map_err(|_| anyhow::anyhow!("could not decrypt checkpoint with this local vault"))
     }
 
-    /// Returns where the local vault configuration is stored.
-    pub fn config_path(&self) -> &Path {
-        &self.config_path
-    }
-
     /// Returns the platform-default vault configuration path without opening
     /// the vault or reading key material.
     pub fn configuration_path() -> Result<PathBuf> {
@@ -302,51 +262,6 @@ impl Vault {
             VaultMode::Passphrase => Ok("passphrase vault"),
         }
     }
-}
-
-/// Reads an automation passphrase from the configured private file, if any.
-///
-/// This is deliberately file-based rather than an environment variable so a
-/// CI runner does not expose the vault key in process listings or command
-/// output.  Interactive commands retain their prompt when it is unset.
-/// Returns an automation passphrase from the configured private file, if any.
-pub fn passphrase_from_file_env() -> Result<Option<String>> {
-    let Some(path) = env::var_os(PASSPHRASE_FILE_ENV) else {
-        return Ok(None);
-    };
-    let path = PathBuf::from(path);
-    read_passphrase_file(&path).map(Some)
-}
-
-fn read_passphrase_file(path: &Path) -> Result<String> {
-    let metadata = fs::metadata(path)
-        .with_context(|| format!("reading vault passphrase file {}", path.display()))?;
-    if !metadata.is_file() {
-        bail!(
-            "vault passphrase path {} is not a regular file",
-            path.display()
-        );
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-        if metadata.permissions().mode() & 0o077 != 0 {
-            bail!(
-                "vault passphrase file {} must not be readable by group or others",
-                path.display()
-            );
-        }
-    }
-    let value = String::from_utf8(
-        fs::read(path)
-            .with_context(|| format!("reading vault passphrase file {}", path.display()))?,
-    )
-    .context("vault passphrase file is not UTF-8")?;
-    let value = value.trim_end_matches(['\r', '\n']).to_owned();
-    if value.contains('\0') {
-        bail!("vault passphrase file contains a NUL byte");
-    }
-    Ok(value)
 }
 
 fn read_server_key_file(path: &Path) -> Result<[u8; 32]> {
@@ -510,7 +425,6 @@ impl Vault {
     pub fn test_only() -> Self {
         Self {
             key: [7; 32],
-            config_path: PathBuf::from("test-vault"),
             server_key: false,
         }
     }
@@ -519,7 +433,6 @@ impl Vault {
     pub(crate) fn test_only_with_key(key: [u8; 32]) -> Self {
         Self {
             key,
-            config_path: PathBuf::from("test-vault"),
             server_key: false,
         }
     }
@@ -528,23 +441,6 @@ impl Vault {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[cfg(unix)]
-    #[test]
-    fn automation_passphrase_file_must_be_private() {
-        use std::os::unix::fs::PermissionsExt;
-
-        let mut file = tempfile::NamedTempFile::new().unwrap();
-        file.write_all(b"test passphrase\n").unwrap();
-        fs::set_permissions(file.path(), fs::Permissions::from_mode(0o600)).unwrap();
-        assert_eq!(
-            read_passphrase_file(file.path()).unwrap(),
-            "test passphrase"
-        );
-
-        fs::set_permissions(file.path(), fs::Permissions::from_mode(0o640)).unwrap();
-        assert!(read_passphrase_file(file.path()).is_err());
-    }
 
     #[test]
     fn server_key_is_exact_private_and_never_overwritten() {
@@ -566,7 +462,6 @@ mod tests {
 
         let reopened = Vault {
             key: read_server_key_file(&path).unwrap(),
-            config_path: path,
             server_key: true,
         };
         assert_eq!(reopened.cluster_identity_sha256().unwrap(), identity);
@@ -593,7 +488,6 @@ mod tests {
         // Another replica with the same cluster key derives the same key.
         let reopened = Vault {
             key: read_server_key_file(&path).unwrap(),
-            config_path: path,
             server_key: true,
         };
         assert_eq!(
@@ -622,7 +516,6 @@ mod tests {
 
         let other = Vault {
             key: [8; 32],
-            config_path: PathBuf::from("other-test-vault"),
             server_key: false,
         };
         assert!(other.decrypt(&encrypted).is_err());

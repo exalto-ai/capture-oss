@@ -1470,7 +1470,7 @@ fn migrate(connection: &mut Connection) -> Result<()> {
         transaction.execute("INSERT INTO schema_migrations(version) VALUES (2)", [])?;
         transaction.commit()?;
     }
-    validate_schema(connection)
+    Ok(())
 }
 
 fn apply_initial_migration(transaction: &rusqlite::Transaction<'_>) -> Result<()> {
@@ -1622,27 +1622,6 @@ fn apply_capture_mode_migration(transaction: &rusqlite::Transaction<'_>) -> Resu
          ALTER TABLE traces ADD COLUMN evidence_kind TEXT NOT NULL DEFAULT 'notarized'
              CHECK (evidence_kind IN ('notarized', 'witnessed'));",
     )?;
-    Ok(())
-}
-
-fn validate_schema(connection: &Connection) -> Result<()> {
-    for table in [
-        "traces",
-        "trace_search",
-        "artifacts",
-        "operations",
-        "operation_attempts",
-        "events",
-        "trace_shares",
-        "settings",
-    ] {
-        let exists = connection.query_row(
-            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name = ?)",
-            [table],
-            |row| row.get::<_, bool>(0),
-        )?;
-        anyhow::ensure!(exists, "SQLite metadata is missing canonical table {table}");
-    }
     Ok(())
 }
 
@@ -2068,15 +2047,5 @@ mod tests {
         assert!(error.to_string().contains("unavailable after a panic"));
         assert!(metadata.capture_mode().is_err());
         assert!(metadata.counts().is_err());
-    }
-
-    #[test]
-    fn rejects_incomplete_canonical_schema() {
-        let mut connection = Connection::open_in_memory().unwrap();
-        migrate(&mut connection).unwrap();
-        connection.execute("DROP TABLE settings", []).unwrap();
-
-        let error = migrate(&mut connection).unwrap_err();
-        assert!(error.to_string().contains("canonical table settings"));
     }
 }

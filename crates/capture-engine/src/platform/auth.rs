@@ -1085,19 +1085,6 @@ fn keychain_delete() -> Result<()> {
     Ok(())
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
-fn keychain_store(_token: &str) -> Result<()> {
-    bail!("OS keychain unavailable")
-}
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
-fn keychain_load() -> Result<Option<String>> {
-    Ok(None)
-}
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
-fn keychain_delete() -> Result<()> {
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

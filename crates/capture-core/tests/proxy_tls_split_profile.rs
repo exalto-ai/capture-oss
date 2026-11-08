@@ -19,6 +19,7 @@ use anyhow::{Context, Result};
 use capture_core::{
     CaptureConfig, DEFAULT_MAX_ATTESTABLE_HTTP_BYTES, DEFAULT_NOTARY_MAX_FRAME_BYTES,
     capture_streaming_request, chunked_request_body, notarize_capture_checkpoint,
+    registry::{NotaryEndpoint, NotaryTransport},
 };
 use http::Request;
 use hyper::body::Bytes;
@@ -63,6 +64,11 @@ async fn profiles_capture_and_notarization_in_a_separate_notary_container() -> R
         .ok_or_else(|| {
             anyhow::anyhow!("TLSN_NOTARY_ADDR {notary_endpoint} resolved to no addresses")
         })?;
+    let notary = NotaryEndpoint::new(
+        notary_addr.ip().to_string(),
+        notary_addr.port(),
+        NotaryTransport::Tcp,
+    )?;
     let request = Request::builder()
         .method("POST")
         .uri("/v1/responses")
@@ -74,7 +80,7 @@ async fn profiles_capture_and_notarization_in_a_separate_notary_container() -> R
 
     let capture_started = Instant::now();
     let mut response = capture_streaming_request(
-        notary_addr,
+        &notary,
         OPENAI_PROFILE_HOST,
         CaptureConfig {
             trace_id: "profile-capture".to_owned(),
@@ -85,6 +91,7 @@ async fn profiles_capture_and_notarization_in_a_separate_notary_container() -> R
             max_frame_bytes: DEFAULT_NOTARY_MAX_FRAME_BYTES,
         },
         request,
+        None,
     )
     .await?;
     let provider_status = response.status;
@@ -97,11 +104,13 @@ async fn profiles_capture_and_notarization_in_a_separate_notary_container() -> R
 
     let notarization_started = Instant::now();
     let proof = notarize_capture_checkpoint(
-        notary_addr,
+        &notary,
         &checkpoint,
         &notary_public_key()?,
         DEFAULT_MAX_ATTESTABLE_HTTP_BYTES,
         DEFAULT_NOTARY_MAX_FRAME_BYTES,
+        None,
+        &|_| {},
     )
     .await?;
     let notarization_ms = notarization_started.elapsed().as_millis();

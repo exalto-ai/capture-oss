@@ -1,10 +1,5 @@
 //! Capture checkpoint notarization and offline-verifiable trace packages.
 
-#[cfg(test)]
-use std::{fs, path::Path};
-#[cfg(all(feature = "cli", test))]
-use std::{fs::OpenOptions, io::Write as _, path::PathBuf};
-
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use sha2::Digest as _;
@@ -21,8 +16,7 @@ use crate::{
     },
     configured_crypto_provider, make_trace_evidence,
     normalize::{render_public_trace, verified_inference_from_capture},
-    notarize_capture_checkpoint_to_admitted_with_progress,
-    notarize_capture_checkpoint_to_with_progress,
+    notarize_capture_checkpoint,
     public::NORMALIZER_VERSION,
     registry::NotaryEndpoint,
     sha256_hex, validate_disclosed_http_redactions, validate_provider_name, validate_trace_id,
@@ -96,47 +90,19 @@ pub fn trace_package_created_at_unix_ms_bytes(bytes: &[u8]) -> Result<u64> {
     Ok(trace_manifest_from_archive(&read_trace_package_archive(bytes)?)?.created_at_unix_ms())
 }
 
-/// Completes a decoded capture checkpoint, reports milestones, and returns the
-/// canonical `.llmtrace` bytes.
-pub async fn notarize_capture_checkpoint_bytes_with_progress(
-    checkpoint: &CaptureCheckpoint,
-    trusted_notary_key: &[u8],
-    notary: &NotaryEndpoint,
-    max_attestable_http_bytes: usize,
-    max_frame_bytes: usize,
-    progress: NotarizationProgressObserver<'_>,
-) -> Result<Vec<u8>> {
-    let proof = notarize_capture_checkpoint_to_with_progress(
-        notary,
-        checkpoint,
-        trusted_notary_key,
-        max_attestable_http_bytes,
-        max_frame_bytes,
-        progress,
-    )
-    .await?;
-    progress(NotarizationProgress::Phase(NotarizationPhase::Packaging));
-    let capture = make_trace_evidence(
-        &proof,
-        checkpoint.trace_id().to_owned(),
-        checkpoint.provider_name().to_owned(),
-    )?;
-    build_trace_package_bytes(&capture, trusted_notary_key)
-}
-
-/// Completes admitted notarization from a decoded private checkpoint, reports
-/// milestones, and returns the canonical `.llmtrace` bytes.
+/// Completes a decoded capture checkpoint, optionally under an admission
+/// value, reports milestones, and returns the canonical `.llmtrace` bytes.
 #[allow(clippy::too_many_arguments)]
-pub async fn notarize_capture_checkpoint_admitted_bytes_with_progress(
+pub async fn notarize_capture_checkpoint_bytes(
     checkpoint: &CaptureCheckpoint,
     trusted_notary_key: &[u8],
     notary: &NotaryEndpoint,
     max_attestable_http_bytes: usize,
     max_frame_bytes: usize,
-    admission_value: &str,
+    admission_value: Option<&str>,
     progress: NotarizationProgressObserver<'_>,
 ) -> Result<Vec<u8>> {
-    let proof = notarize_capture_checkpoint_to_admitted_with_progress(
+    let proof = notarize_capture_checkpoint(
         notary,
         checkpoint,
         trusted_notary_key,
@@ -166,19 +132,7 @@ fn build_trace_package_bytes(
     )
 }
 
-#[cfg(all(feature = "cli", test))]
-pub(crate) fn write_trace_package_with_provider(
-    capture: &TraceEvidence,
-    output_path: &Path,
-    trusted_notary_key: &[u8],
-    crypto_provider: &CryptoProvider,
-) -> Result<PathBuf> {
-    let bytes =
-        build_trace_package_bytes_with_provider(capture, trusted_notary_key, crypto_provider)?;
-    write_trace_package_bytes(output_path, &bytes)
-}
-
-fn build_trace_package_bytes_with_provider(
+pub(crate) fn build_trace_package_bytes_with_provider(
     capture: &TraceEvidence,
     trusted_notary_key: &[u8],
     crypto_provider: &CryptoProvider,
@@ -305,90 +259,6 @@ fn verify_witnessed_value(
     ))
 }
 
-#[cfg(all(feature = "cli", test))]
-fn write_trace_package_bytes(output_path: &Path, bytes: &[u8]) -> Result<PathBuf> {
-    if output_path.exists() {
-        bail!(
-            "refusing to overwrite existing trace package: {}",
-            output_path.display()
-        );
-    }
-    write_atomic_trace(output_path, bytes)?;
-    Ok(output_path.to_path_buf())
-}
-
-#[cfg(all(feature = "cli", test))]
-fn write_atomic_trace(output_path: &Path, bytes: &[u8]) -> Result<()> {
-    let parent = output_path
-        .parent()
-        .filter(|parent| !parent.as_os_str().is_empty())
-        .unwrap_or_else(|| Path::new("."));
-    fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
-    let file_name = output_path
-        .file_name()
-        .ok_or_else(|| anyhow::anyhow!("trace package output has no file name"))?
-        .to_string_lossy();
-    for _ in 0..16 {
-        let partial = parent.join(format!(
-            ".{file_name}.{}.{:016x}.partial",
-            std::process::id(),
-            rand::random::<u64>()
-        ));
-        let mut options = OpenOptions::new();
-        options.write(true).create_new(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt as _;
-            options.mode(0o600);
-        }
-        let mut file = match options.open(&partial) {
-            Ok(file) => file,
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(error) => {
-                return Err(error).with_context(|| format!("creating {}", partial.display()));
-            }
-        };
-        let result = (|| -> Result<()> {
-            file.write_all(bytes)
-                .with_context(|| format!("writing {}", partial.display()))?;
-            file.sync_all()
-                .with_context(|| format!("syncing {}", partial.display()))?;
-            drop(file);
-            fs::hard_link(&partial, output_path).with_context(|| {
-                format!(
-                    "atomically committing trace package {}",
-                    output_path.display()
-                )
-            })?;
-            fs::remove_file(&partial)
-                .with_context(|| format!("removing staging file {}", partial.display()))?;
-            #[cfg(unix)]
-            fs::File::open(parent)
-                .and_then(|directory| directory.sync_all())
-                .with_context(|| format!("syncing trace package directory {}", parent.display()))?;
-            Ok(())
-        })();
-        if result.is_err() {
-            let _ = fs::remove_file(&partial);
-        }
-        return result;
-    }
-    bail!(
-        "could not create a unique staging file beside {}",
-        output_path.display()
-    )
-}
-
-#[cfg(all(test, feature = "cli"))]
-pub(crate) fn verify_trace_package_with_provider(
-    path: &Path,
-    trusted_notary_key: &[u8],
-    crypto_provider: &CryptoProvider,
-) -> Result<VerifiedTracePackage> {
-    let bytes = read_trace_package_file(path)?;
-    verify_trace_package_bytes_with_provider(&bytes, trusted_notary_key, crypto_provider)
-}
-
 /// Verifies exact `.llmtrace` bytes without retaining or extracting them.
 pub fn verify_trace_package_bytes(
     bytes: &[u8],
@@ -403,8 +273,8 @@ pub fn verify_trace_package_bytes(
     )
 }
 
-#[cfg(all(test, feature = "cli"))]
-fn verify_trace_package_bytes_with_provider(
+#[cfg(test)]
+pub(crate) fn verify_trace_package_bytes_with_provider(
     bytes: &[u8],
     trusted_notary_key: &[u8],
     crypto_provider: &CryptoProvider,
@@ -540,43 +410,4 @@ pub fn trace_manifest_from_archive(
         bail!("unsupported verified trace package format or normalizer version");
     }
     Ok(manifest)
-}
-
-#[cfg(test)]
-fn read_trace_package_file(path: &Path) -> Result<Vec<u8>> {
-    if path
-        .extension()
-        .is_some_and(|extension| extension == "llmcapture" || extension == "llmbundle")
-    {
-        bail!(
-            "encrypted capture files are private retry state and cannot be verified as trace packages"
-        );
-    }
-    let metadata = fs::symlink_metadata(path)
-        .with_context(|| format!("reading trace package {}", path.display()))?;
-    if metadata.file_type().is_symlink() || !metadata.is_file() {
-        bail!(
-            "verified trace package must be one regular .llmtrace file: {}",
-            path.display()
-        );
-    }
-    fs::read(path).with_context(|| format!("reading trace package {}", path.display()))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn encrypted_checkpoint_is_never_accepted_as_a_verified_package() {
-        let directory = tempfile::tempdir().unwrap();
-        for name in ["capture.llmcapture", "capture.llmbundle"] {
-            let checkpoint = directory.path().join(name);
-            fs::write(&checkpoint, b"encrypted private retry state").unwrap();
-
-            let error = read_trace_package_file(&checkpoint).unwrap_err();
-
-            assert!(error.to_string().contains("private retry state"));
-        }
-    }
 }
