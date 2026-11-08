@@ -5,9 +5,10 @@ import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import { page, userEvent } from 'vitest/browser';
 import { exaltoTheme } from '../../admin-dashboard/src/theme';
 import { BuiltinChat } from './BuiltinChat';
-import { getDesktopState, localApi } from './bridge';
+import { type DesktopState, localApi } from './bridge';
 import * as bridge from './builtinBridge';
 import { ProviderConnections } from './ProviderConnections';
+import { states } from './testStates';
 import './styles.css';
 
 // The desktop palette keys off this, which App sets at load.
@@ -29,7 +30,6 @@ vi.mock('./builtinBridge', () => ({
 type TraceDetail = Awaited<ReturnType<typeof localApi.trace>>;
 
 beforeEach(() => {
-  window.history.replaceState({}, '', '/?screen=capture-on');
   // No local service in these tests unless one says otherwise.
   vi.spyOn(localApi, 'trace').mockRejectedValue(new Error('The local service is off.'));
   vi.mocked(bridge.listConnections).mockResolvedValue([{ id: 'openai', status: 'saved' }]);
@@ -51,23 +51,24 @@ afterEach(() => {
   vi.resetAllMocks();
   vi.restoreAllMocks();
   localStorage.clear();
-  window.history.replaceState({}, '', '/');
 });
 
 function renderWithTheme(view: ReactNode) {
   return render(<MantineProvider theme={exaltoTheme}>{view}</MantineProvider>);
 }
 
-async function renderChat(open: (id: string) => void = () => undefined) {
-  const state = await getDesktopState();
+async function renderChat(
+  open: (id: string) => void = () => undefined,
+  state: DesktopState = states.captureOn,
+) {
   return renderWithTheme(
     <BuiltinChat state={state} refresh={async () => undefined} onOpenTrace={open} />,
   );
 }
 
-async function chat() {
+async function chat(state?: DesktopState) {
   const open = vi.fn();
-  await renderChat(open);
+  await renderChat(open, state);
   await expect
     .element(page.getByRole('button', { name: 'Model: Test model, OpenAI API' }))
     .toBeEnabled();
@@ -224,7 +225,6 @@ test('the ledger line moves from Sending to Responding to Captured', async () =>
 });
 
 test('names the evidence kind beside Sealed for a Witnessed trace', async () => {
-  window.history.replaceState({}, '', '/?screen=capture-witnessed');
   vi.mocked(bridge.sendChat).mockResolvedValue({
     status: 'complete',
     traces: [{ id: 'trc-witnessed-0001-abcdef', captured: true }],
@@ -234,7 +234,7 @@ test('names the evidence kind beside Sealed for a Witnessed trace', async () => 
     state: 'notarized',
     evidence_kind: 'witnessed',
   } as TraceDetail);
-  await chat();
+  await chat(states.captureWitnessed);
   await expect.element(page.getByText('Capture on · Witnessed')).toBeVisible();
   await userEvent.fill(page.getByLabelText('Message'), 'Question');
   await userEvent.click(page.getByRole('button', { name: 'Send', exact: true }));
@@ -264,10 +264,9 @@ test('keeps a Captured Notarized trace distinct from a Sealed one', async () => 
 });
 
 test('shows the local service refusal of a request it did not send', async () => {
-  window.history.replaceState({}, '', '/?screen=capture-witnessed');
   const refusal = 'Capture is off. Enable capture before sending.';
   vi.mocked(bridge.sendChat).mockResolvedValue({ status: refusal, traces: [] });
-  await chat();
+  await chat(states.captureWitnessed);
   await userEvent.fill(page.getByLabelText('Message'), 'Question');
   await userEvent.click(page.getByRole('button', { name: 'Send', exact: true }));
   await expect.element(page.getByRole('alert')).toHaveTextContent(refusal);
@@ -475,8 +474,7 @@ test('a connection that needs reconnecting offers Reconnect in Connections', asy
 });
 
 test('with capture off the composer offers to turn it on and does not send', async () => {
-  window.history.replaceState({}, '', '/?screen=capture-off');
-  await chat();
+  await chat(states.captureOff);
   await expect.element(page.getByText('Capture off')).toBeVisible();
   await expect
     .element(page.getByRole('button', { name: 'Turn on Notarized capture' }))

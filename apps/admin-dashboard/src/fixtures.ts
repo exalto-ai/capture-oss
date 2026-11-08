@@ -700,10 +700,8 @@ function traceForCapture(capture: TraceSummary): TraceContent {
 }
 
 export function createFixtureApi({
-  nowUnixMs = Date.now(),
   initialShare,
 }: {
-  nowUnixMs?: number;
   initialShare?: {
     traceId: string;
     visibility: ShareVisibility;
@@ -714,7 +712,7 @@ export function createFixtureApi({
     failureCode?: string | null;
   };
 } = {}): LocalApi {
-  const clock = Number.isFinite(nowUnixMs) && nowUnixMs > 0 ? nowUnixMs : Date.now();
+  const clock = Date.now();
   const offset = clock - fixtureNow;
   let captures = fixtureCaptures.map((capture) => shiftCapture(structuredClone(capture), offset));
   let operations = fixtureOperations.map((operation) =>
@@ -1029,7 +1027,6 @@ export function createFixtureApi({
   };
   return {
     session: async () => undefined,
-    endSession: async () => undefined,
     status: async () => status(),
     captureSetting: async () => ({ mode: captureMode }),
     updateCaptureSetting: async (mode) => {

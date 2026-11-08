@@ -11,7 +11,6 @@ export type Providers = components['schemas']['ProvidersResponse'];
 export type TraceSummary = components['schemas']['TraceSummary'];
 export type TraceDetail = components['schemas']['TraceDetail'];
 export type Operation = components['schemas']['TechnicalOperation'];
-export type OperationSummary = Operation;
 export type Event = components['schemas']['ActivityItem'];
 export type TraceContent = components['schemas']['TraceContent'];
 export type Verification = components['schemas']['VerificationResult'];
@@ -130,10 +129,6 @@ export function createLocalApi(options: LocalApiOptions = {}) {
         basicAuth: { username, password },
       });
       credentials = { username, password };
-    },
-    endSession: async () => {
-      await request<void>('/v1/session', { method: 'DELETE' });
-      credentials = null;
     },
     status: () => request<Status>('/v1/status'),
     captureSetting: () => request<CaptureSetting>('/v1/settings/capture'),

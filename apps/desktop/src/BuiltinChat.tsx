@@ -1,4 +1,3 @@
-import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { Plus } from 'lucide-react';
 import { useEffect, useEffectEvent, useRef, useState } from 'react';
 import {
@@ -6,10 +5,10 @@ import {
   type DesktopState,
   errorMessage,
   evidenceLabel,
-  isTauri,
   readTraceEvidence,
   setCaptureMode,
   startDaemon,
+  useTauriEvent,
 } from './bridge';
 import * as bridge from './builtinBridge';
 import { ChatComposer } from './ChatComposer';
@@ -97,26 +96,11 @@ export function BuiltinChat({
     };
   }, []);
   // File > New Chat clears the conversation and focuses the composer.
-  const newChatFromMenu = useEffectEvent(() => {
-    if (request.current) return;
+  useTauriEvent<string>('exalto:menu', (command) => {
+    if (command !== 'new-chat' || request.current) return;
     setShowConnections(false);
     newChat();
   });
-  useEffect(() => {
-    if (!isTauri()) return;
-    let disposed = false;
-    let unlisten: UnlistenFn | null = null;
-    void listen<string>('exalto:menu', (event) => {
-      if (event.payload === 'new-chat') newChatFromMenu();
-    }).then((stopListening) => {
-      if (disposed) stopListening();
-      else unlisten = stopListening;
-    });
-    return () => {
-      disposed = true;
-      unlisten?.();
-    };
-  }, []);
   function loadModels({ id, status }: bridge.Connection) {
     // Only a result for the status it was requested under may land.
     const settle = (catalog: Catalog) =>

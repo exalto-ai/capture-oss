@@ -5,10 +5,9 @@ import {
 } from '@mantine/core';
 import { Notifications, notifications } from '@mantine/notifications';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import '@mantine/core/styles.css';
 import '@mantine/notifications/styles.css';
-import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { OpenExternalProvider } from '../../admin-dashboard/src/AccountConnection';
 import type { DashboardRoute } from '../../admin-dashboard/src/routes';
 import { exaltoTheme } from '../../admin-dashboard/src/theme';
@@ -23,11 +22,11 @@ import {
   getDesktopState,
   getUpdateState,
   installUpdateAndRestart,
-  isTauri,
   openAccountLink,
   setCaptureMode,
   setWindowTheme,
   startDaemon,
+  useTauriEvent,
 } from './bridge';
 import { LoadingWindow, VaultUnlock } from './LockedState';
 import { Onboarding } from './Onboarding';
@@ -46,12 +45,23 @@ import { TracesHeader } from './TracesHeader';
 export const SENSITIVE_INPUT_RESET_EVENT = 'exalto:sensitive-input-reset';
 export const CAPTURE_STATE_CHANGED_EVENT = 'exalto:capture-state-changed';
 
+const CAPTURE_NEEDS_TRANSPORT =
+  'Capture needs a reachable trusted transport. No Exalto Seal account is required. Try the connection again before capturing.';
+
+/** Tries `attempt` up to 12 times, 250 ms apart, while the local service starts. */
+async function retry<T>(attempt: () => Promise<T>): Promise<T> {
+  for (let tries = 1; ; tries += 1) {
+    try {
+      return await attempt();
+    } catch (error) {
+      if (tries === 12) throw error;
+      await new Promise((resolve) => window.setTimeout(resolve, 250));
+    }
+  }
+}
+
 function AppContent() {
-  const query = useMemo(() => new URLSearchParams(window.location.search), []);
-  const requestedView = query.get('view') as View | null;
-  const [view, setView] = useState<View>(
-    requestedView && requestedView in viewMeta ? requestedView : 'traces',
-  );
+  const [view, setView] = useState<View>('traces');
   const [traceConstraint, setTraceConstraint] = useState<TraceConstraint | null>(null);
   const [traceTarget, setTraceTarget] = useState<TraceTarget | null>(null);
   const [state, setState] = useState<DesktopState | null>(null);
@@ -89,98 +99,38 @@ function AppContent() {
     };
   }, []);
 
-  useEffect(() => {
-    if (!isTauri()) return;
-    let disposed = false;
-    let unlisten: UnlistenFn | null = null;
-    void listen<string>('exalto:navigate', (event) => {
-      if (event.payload !== 'settings') return;
-      if (!state?.onboarding_complete || setupOpen) return;
+  // Menu-bar commands. The desktop tree owns navigation and search.
+  useTauriEvent<string>('exalto:menu', (target) => {
+    if (!state?.onboarding_complete || setupOpen) return;
+    if (target === 'chat' || target === 'traces' || target === 'settings') {
       setTraceConstraint(null);
-      setView('settings');
-    }).then((stopListening) => {
-      if (disposed) stopListening();
-      else unlisten = stopListening;
-    });
-    return () => {
-      disposed = true;
-      unlisten?.();
-    };
-  }, [setupOpen, state?.onboarding_complete]);
-
-  // Menu-bar View commands. The desktop tree owns navigation and search.
-  useEffect(() => {
-    if (!isTauri()) return;
-    let disposed = false;
-    let unlisten: UnlistenFn | null = null;
-    void listen<string>('exalto:menu', (event) => {
-      if (!state?.onboarding_complete || setupOpen) return;
-      const target = event.payload;
-      if (target === 'chat' || target === 'traces' || target === 'settings') {
-        setTraceConstraint(null);
-        setTraceTarget(null);
-        setView(target);
-      } else if (target === 'new-chat') {
-        setTraceConstraint(null);
-        setTraceTarget(null);
-        setView('chat');
-      } else if (target === 'find') {
-        const field = document.querySelector<HTMLInputElement>(
-          'input[aria-label="Search traces"], input[aria-label="Activity Trace ID"]',
-        );
-        field?.focus();
-        field?.select();
-      }
-    }).then((stopListening) => {
-      if (disposed) stopListening();
-      else unlisten = stopListening;
-    });
-    return () => {
-      disposed = true;
-      unlisten?.();
-    };
-  }, [setupOpen, state?.onboarding_complete]);
-
-  useEffect(() => {
-    if (!isTauri()) return;
-    let disposed = false;
-    let unlisten: UnlistenFn | null = null;
-    void listen<CaptureMode>(CAPTURE_STATE_CHANGED_EVENT, (event) => {
-      setState((current) =>
-        current
-          ? {
-              ...current,
-              running: current.running || captures(event.payload),
-              capture_mode: event.payload,
-            }
-          : current,
+      setTraceTarget(null);
+      setView(target);
+    } else if (target === 'new-chat') {
+      setTraceConstraint(null);
+      setTraceTarget(null);
+      setView('chat');
+    } else if (target === 'find') {
+      const field = document.querySelector<HTMLInputElement>(
+        'input[aria-label="Search traces"], input[aria-label="Activity Trace ID"]',
       );
-    }).then((stopListening) => {
-      if (disposed) stopListening();
-      else unlisten = stopListening;
-    });
-    return () => {
-      disposed = true;
-      unlisten?.();
-    };
-  }, []);
+      field?.focus();
+      field?.select();
+    }
+  });
 
-  useEffect(() => {
-    if (!isTauri()) return;
-    let disposed = false;
-    let unlisten: UnlistenFn | null = null;
-    // Closing the window forgets unsaved sensitive input everywhere in the app.
-    void listen('exalto:window-closed', () =>
-      window.dispatchEvent(new Event(SENSITIVE_INPUT_RESET_EVENT)),
-    ).then((stopListening) => {
-      if (disposed) stopListening();
-      else unlisten = stopListening;
-    });
-    return () => {
-      disposed = true;
-      unlisten?.();
-    };
-  }, []);
+  useTauriEvent<CaptureMode>(CAPTURE_STATE_CHANGED_EVENT, (mode) =>
+    setState((current) =>
+      current
+        ? { ...current, running: current.running || captures(mode), capture_mode: mode }
+        : current,
+    ),
+  );
+
+  // Closing the window forgets unsaved sensitive input everywhere in the app.
+  useTauriEvent('exalto:window-closed', () =>
+    window.dispatchEvent(new Event(SENSITIVE_INPUT_RESET_EVENT)),
+  );
 
   useEffect(() => {
     const refreshUpdate = async () => {
@@ -245,60 +195,23 @@ function AppContent() {
 
   const startCapturing = async (mode: Exclude<CaptureMode, 'off'>) => {
     if (!state?.running) await startDaemon();
-    let currentState: DesktopState | null = null;
-    let readinessError: unknown = null;
-    for (let attempt = 0; attempt < 12; attempt += 1) {
-      try {
-        currentState = await getDesktopState(true);
-        setState(currentState);
-        readinessError = null;
-        if (currentState.sealing_service_readiness.phase === 'ready') break;
-        if (
-          currentState.sealing_service_readiness.phase === 'unreachable' ||
-          currentState.sealing_service_readiness.phase === 'trust_unavailable'
-        )
-          break;
-      } catch (error) {
-        readinessError = error;
-      }
-      await new Promise((resolve) => window.setTimeout(resolve, 250));
-    }
-    if (currentState?.sealing_service_readiness.phase !== 'ready') {
-      throw (
-        readinessError ??
-        new Error(
-          'Capture needs a reachable trusted transport. No Exalto Seal account is required. Try the connection again before capturing.',
-        )
-      );
-    }
-    let lastError: unknown = null;
-    for (let attempt = 0; attempt < 12; attempt += 1) {
-      try {
-        await setCaptureMode(mode);
-        return;
-      } catch (error) {
-        lastError = error;
-        await new Promise((resolve) => window.setTimeout(resolve, 250));
-      }
-    }
-    throw lastError ?? new Error('The local capture service did not become ready.');
+    // Wait out a starting check; a settled one that is not ready refuses capture.
+    const readiness = await retry(async () => {
+      const current = await getDesktopState(true);
+      setState(current);
+      const { phase } = current.sealing_service_readiness;
+      if (phase === 'off' || phase === 'starting') throw new Error(CAPTURE_NEEDS_TRANSPORT);
+      return phase;
+    });
+    if (readiness !== 'ready') throw new Error(CAPTURE_NEEDS_TRANSPORT);
+    await retry(() => setCaptureMode(mode));
   };
 
   const showCaptureChange = (message: string) => notifications.show({ message });
 
   const startLocalService = async () => {
     if (!state?.running) await startDaemon();
-    let lastError: unknown = null;
-    for (let attempt = 0; attempt < 12; attempt += 1) {
-      try {
-        await setCaptureMode('off');
-        return;
-      } catch (error) {
-        lastError = error;
-        await new Promise((resolve) => window.setTimeout(resolve, 250));
-      }
-    }
-    throw lastError ?? new Error('The local service did not become ready.');
+    await retry(() => setCaptureMode('off'));
   };
 
   const startLocalServiceFromWorkspace = () => {

@@ -19,7 +19,6 @@ import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tansta
 import {
   ArrowLeft,
   Copy,
-  Database,
   Download,
   Ellipsis,
   FileJson2,
@@ -43,7 +42,6 @@ import type {
   EvidenceKind,
   LocalApi,
   Operation,
-  OperationSummary,
   ShareSettings,
   ShareVisibility,
   TraceDetail,
@@ -197,7 +195,7 @@ function SealingFailure({ operation }: { operation: Operation }) {
   );
 }
 
-function proofPercent(operation: Operation | OperationSummary) {
+function proofPercent(operation: Operation) {
   const proof = operation.progress.proof;
   if (!proof?.bytes_total) return null;
   return Math.min(100, Math.floor((proof.bytes_completed / proof.bytes_total) * 100));
@@ -1059,7 +1057,6 @@ function CapturedTraceInspector({
             {value.notarization ? (
               <OperationInspector
                 operation={value.notarization}
-                fixture={false}
                 onViewActivity={
                   !hideActivity
                     ? () => navigate({ view: 'activity', filters: { traceId: capture.trace_id } })
@@ -1154,11 +1151,9 @@ function ProofProgress({ operation }: { operation: Operation }) {
 
 function OperationInspector({
   operation,
-  fixture,
   onViewActivity,
 }: {
   operation: Operation;
-  fixture: boolean;
   onViewActivity?: () => void;
 }) {
   return (
@@ -1168,24 +1163,13 @@ function OperationInspector({
         <div>
           <Title order={2}>
             {operation.state === 'running'
-              ? fixture
-                ? 'Simulated proof generation'
-                : notarizationPhaseLabel(operation.progress.phase)
+              ? notarizationPhaseLabel(operation.progress.phase)
               : operation.state.replaceAll('_', ' ')}
           </Title>
           <Text className="mono-id">{operation.operation_id}</Text>
         </div>
         <StatusLabel state={operation.state} />
       </Group>
-      {fixture && (
-        <div className="fixture-flow-note operation-fixture-note">
-          <Database size={16} aria-hidden="true" />
-          <Text>
-            <b>Simulation only.</b> No proof worker is running. Times are relative to when this
-            preview was opened.
-          </Text>
-        </div>
-      )}
       <SealingFailure operation={operation} />
       <ProofProgress operation={operation} />
       <dl className="receipt-list">
@@ -1681,7 +1665,6 @@ function NotarizedTraceInspector({
             {detail.data.notarization ? (
               <OperationInspector
                 operation={detail.data.notarization}
-                fixture={false}
                 onViewActivity={
                   !hideActivity
                     ? () => navigate({ view: 'activity', filters: { traceId: captureId } })

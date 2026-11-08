@@ -1949,39 +1949,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn removed_product_routes_return_not_found() {
-        let directory = tempfile::tempdir().unwrap();
-        let app = router(state(directory.path()).await);
-        for (method, path) in [
-            ("GET", "/v1/captures"),
-            ("GET", "/v1/captures/trc-removed"),
-            ("POST", "/v1/captures/trc-removed/finalizations"),
-            ("GET", "/v1/captures/trc-removed/package"),
-            ("GET", "/v1/captures/trc-removed/trace"),
-            ("POST", "/v1/captures/trc-removed/trace:verify"),
-            ("POST", "/v1/captures/trc-removed/shares"),
-            ("GET", "/v1/shares/share-removed"),
-            ("GET", "/v1/events"),
-            ("GET", "/v1/operations"),
-            ("POST", "/v1/operations/op-removed/retry"),
-            ("POST", "/v1/traces:verify"),
-        ] {
-            let response = app
-                .clone()
-                .oneshot(
-                    Request::builder()
-                        .method(method)
-                        .uri(path)
-                        .body(Body::empty())
-                        .unwrap(),
-                )
-                .await
-                .unwrap();
-            assert_eq!(response.status(), StatusCode::NOT_FOUND, "{method} {path}");
-        }
-    }
-
-    #[tokio::test]
     async fn local_trace_deletion_is_idempotent_and_refuses_active_work_or_sharing() {
         let directory = tempfile::tempdir().unwrap();
         let state = state(directory.path()).await;

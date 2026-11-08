@@ -156,26 +156,7 @@ pub(super) fn open_account_link(url: String) -> Result<(), String> {
     open_external_url(url.as_str(), "account page")
 }
 
-pub(super) fn product_link(destination: &str) -> Option<&'static str> {
-    match destination {
-        "public_traces" => Some("https://capture.exalto.ai/traces"),
-        "guide" => Some("https://capture.exalto.ai/docs"),
-        "report" => Some("https://github.com/exalto-ai/notary/issues/new"),
-        "openai_key" => Some("https://platform.openai.com/api-keys"),
-        "anthropic_key" => Some("https://console.anthropic.com/settings/keys"),
-        "openrouter_key" => Some("https://openrouter.ai/settings/keys"),
-        _ => None,
-    }
-}
-
-#[tauri::command]
-pub(super) fn open_product_link(destination: String) -> Result<(), String> {
-    let url = product_link(&destination)
-        .ok_or_else(|| "The requested Exalto destination is not allowed.".to_string())?;
-    open_external_url(url, "Exalto page")
-}
-
-fn open_external_url(url: &str, label: &str) -> Result<(), String> {
+pub(super) fn open_external_url(url: &str, label: &str) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     let result = Command::new("open").arg(url).spawn();
     #[cfg(target_os = "windows")]

@@ -163,9 +163,6 @@ code, pre, .mono-id, .mono-time { font-family: var(--mono); }
 .capture-mode-setting > div { min-width: 0; max-width: 620px; }
 .capture-mode-setting .capture-mode-tradeoff { color: var(--ink); font-weight: 500; }
 .settings-panel > p:not(.eyebrow) { color: var(--muted); line-height: 1.65; }
-.fixture-flow-note p { color: var(--muted); font-size: 11px; line-height: 1.55; }
-.fixture-flow-note b { color: var(--ink); }
-.operation-fixture-note { margin-top: 22px; }
 .sharing-facts { border-top: 1px solid var(--rule); margin: 0; }
 .sharing-facts > div { border-bottom: 1px solid var(--rule); display: grid; gap: 8px; grid-template-columns: 74px minmax(0, 1fr); padding: 10px 0; }
 .sharing-facts dt { color: var(--muted); font: 600 11px var(--ui-font); letter-spacing: .035em; text-transform: uppercase; }
@@ -195,8 +192,6 @@ code, pre, .mono-id, .mono-time { font-family: var(--mono); }
 .provider-boundary-note { border-bottom: 1px solid var(--rule); color: var(--muted); font-size: 11px; margin: 0; padding: 0 0 12px; }
 .settings-group + .settings-group { margin-top: 40px; }
 .settings-group-title { border-bottom: 1px solid var(--rule); font-size: 21px; letter-spacing: -.035em; margin: 0 0 14px; padding-bottom: 8px; }
-.settings-subgroup-grid { border-left: 1px solid var(--rule); border-top: 1px solid var(--rule); display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
-.settings-subgroup-grid > .settings-panel { border-left: 0; border-top: 0; }
 .notary-details { border-top: 1px solid var(--rule); margin-top: 20px; padding-top: 12px; }
 .notary-details summary { cursor: pointer; font-size: 12px; font-weight: 700; }
 .otlp-details > .mantine-Button-root { margin-top: 12px; }
@@ -243,7 +238,7 @@ code, pre, .mono-id, .mono-time { font-family: var(--mono); }
 @media (max-width: 520px) {
   .count-strip { grid-template-columns: repeat(2, 1fr); }
   .trace-filter-primary, .trace-filter-more { grid-template-columns: 1fr; }
-  .activity-filter-primary, .activity-filter-more, .provider-route-list, .settings-subgroup-grid { grid-template-columns: 1fr; }
+  .activity-filter-primary, .activity-filter-more, .provider-route-list { grid-template-columns: 1fr; }
   .activity-filter-primary > :nth-child(3) { grid-column: auto; }
   .trace-filter-primary > :first-child { grid-column: auto; }
   .inspector { padding: 17px; }
@@ -358,7 +353,7 @@ h1, h2, h3 { word-spacing: normal; }
 button:focus-visible, a:focus-visible, [tabindex]:focus-visible { outline-color: var(--action); }
 .dashboard-shell, .mantine-AppShell-main { background: var(--surface); }
 .dashboard-header { height: 54px; border-bottom: 1px solid var(--rule); background: var(--surface); }
-.local-topbar { display: flex; height: 54px; min-width: 0; align-items: stretch; }.local-topbar > .local-brand { align-items: center; border-right: 1px solid var(--rule); padding: 0 14px 0 12px; }.local-mark { display: inline-flex; width: 24px; height: 24px; }.local-mark img { display: block; width: 24px; height: 24px; border-radius: 5px; }.local-topbar nav { display: flex; min-width: 0; overflow-x: auto; }.local-topbar nav button { display: inline-flex; flex: none; align-items: center; gap: 7px; min-height: 54px; border-right: 1px solid var(--rule); border-bottom: 3px solid transparent; padding: 0 12px; color: var(--muted); font-size: 12px; white-space: nowrap; }.local-topbar nav button:hover { color: var(--ink); background: var(--raised); }.local-topbar nav button.is-active { border-bottom-color: var(--action); color: var(--ink); font-weight: 600; }.local-topbar nav button b { color: var(--muted); font: 500 11px var(--mono); }.local-topbar-status { display: flex; align-items: center; gap: 10px; margin-left: auto; padding: 0 12px; }.sample-data-label { padding: 3px 6px; border: 1px solid var(--rule); color: var(--muted); font: 600 11px var(--ui-font); letter-spacing: .05em; text-transform: uppercase; white-space: nowrap; }.local-topbar-status .mantine-Burger-root { display: none; color: var(--ink); }
+.local-topbar { display: flex; height: 54px; min-width: 0; align-items: stretch; }.local-topbar > .local-brand { align-items: center; border-right: 1px solid var(--rule); padding: 0 14px 0 12px; }.local-mark { display: inline-flex; width: 24px; height: 24px; }.local-mark img { display: block; width: 24px; height: 24px; border-radius: 5px; }.local-topbar nav { display: flex; min-width: 0; overflow-x: auto; }.local-topbar nav button { display: inline-flex; flex: none; align-items: center; gap: 7px; min-height: 54px; border-right: 1px solid var(--rule); border-bottom: 3px solid transparent; padding: 0 12px; color: var(--muted); font-size: 12px; white-space: nowrap; }.local-topbar nav button:hover { color: var(--ink); background: var(--raised); }.local-topbar nav button.is-active { border-bottom-color: var(--action); color: var(--ink); font-weight: 600; }.local-topbar nav button b { color: var(--muted); font: 500 11px var(--mono); }.local-topbar-status { display: flex; align-items: center; gap: 10px; margin-left: auto; padding: 0 12px; }.local-topbar-status .mantine-Burger-root { display: none; color: var(--ink); }
 
 .dashboard-main { position: relative; height: calc(100dvh - 54px); overflow: auto; }.view-page { width: 100%; max-width: none; min-height: 100%; margin: 0; padding: 0 16px 34px; }
 
@@ -373,7 +368,7 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible { outline-color:
 
 .notarization-ineligible-note { display: flex; align-items: flex-start; gap: 10px; margin: 0 0 4px; padding: 12px 0; border-top: 1px solid var(--danger); border-bottom: 1px solid var(--rule); color: var(--danger); }.notarization-ineligible-note > svg { flex: none; margin-top: 1px; }.notarization-ineligible-note b { display: block; color: var(--ink); font-size: 12px; }.notarization-ineligible-note p { margin: 3px 0 0; color: var(--body-copy); font-size: 12px; line-height: 1.5; }.notarization-ineligible-note code { display: block; margin-top: 7px; color: var(--danger); font-size: 11px; }.trace-inspector { min-width: 0; padding: 17px 20px; border: 0; background: transparent; }.trace-inspector h2, .document-panel h3 { font-family: var(--ui-font); font-weight: 600; }.mantine-Tabs-list { margin-top: 20px; border-color: var(--rule); }.mantine-Tabs-tab { min-height: 34px; color: var(--muted); font-size: 11px; }.mantine-Tabs-tab[data-active] { border-color: var(--action); color: var(--ink); }.document-panel { min-height: 0; padding: 18px 0; }.document-panel > p { margin: 8px 0 19px; color: var(--muted); }.trace-transcript { margin-top: 18px; padding-top: 18px; border-color: var(--rule); }.trace-message-list { border-color: var(--rule); }.trace-message + .trace-message { border-color: var(--rule); }.trace-message > header { background: var(--subtle); border-color: var(--rule); }.trace-message-body { min-width: 0; padding: 14px; }.trace-structured-part pre { border-left: 2px solid var(--rule-strong); font-size: 11px; margin: 7px 0 0; overflow: auto; padding: 12px; white-space: pre-wrap; border-color: var(--action); background: var(--subtle); }.receipt, .json-view { border-color: var(--rule); background: var(--inverse); }.receipt { min-height: 0; padding: 18px; }.receipt dl div { border-color: var(--inverse-rule); }.receipt dd, .receipt .status-label--ready { color: var(--inverse-accent); }
 
-.settings-panel { min-height: 0; padding: 17px 20px 28px; border: 0; border-right: 1px solid var(--rule); border-bottom: 1px solid var(--rule); background: transparent; }.settings-panel:last-child { border-right: 0; }.settings-panel h2 { letter-spacing: -.025em; margin: 20px 0 7px; font-family: var(--ui-font); font-size: 22px; font-weight: 600; }.fixture-flow-note { align-items: flex-start; display: flex; gap: 10px; padding: 10px 0; border-top: 1px solid var(--rule); border-left: 0; background: transparent; }.event-list { margin-top: 0; border: 0; border-bottom: 1px solid var(--rule); background: transparent; }.event-row { min-height: 57px; padding: 9px 12px; border-color: var(--rule); }.appearance-setting { align-items: center; display: flex; justify-content: space-between; margin: 0 -16px; padding: 10px 16px; border: 0; border-bottom: 1px solid var(--rule); background: transparent; }.api-link { border-color: var(--rule); background: var(--subtle); }
+.settings-panel { min-height: 0; padding: 17px 20px 28px; border: 0; border-right: 1px solid var(--rule); border-bottom: 1px solid var(--rule); background: transparent; }.settings-panel:last-child { border-right: 0; }.settings-panel h2 { letter-spacing: -.025em; margin: 20px 0 7px; font-family: var(--ui-font); font-size: 22px; font-weight: 600; }.event-list { margin-top: 0; border: 0; border-bottom: 1px solid var(--rule); background: transparent; }.event-row { min-height: 57px; padding: 9px 12px; border-color: var(--rule); }.appearance-setting { align-items: center; display: flex; justify-content: space-between; margin: 0 -16px; padding: 10px 16px; border: 0; border-bottom: 1px solid var(--rule); background: transparent; }.api-link { border-color: var(--rule); background: var(--subtle); }
 
 .capture-mode-setting { margin-top: 0; }
 .settings-notaries { grid-column: 1 / -1; border-right: 0; }
@@ -667,7 +662,7 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible { outline-color:
   background: color-mix(in srgb, var(--raised) 82%, var(--surface));
 }
 
-.service-grid, .count-strip, .master-list, .event-list, .provider-route-list, .settings-subgroup-grid {
+.service-grid, .count-strip, .master-list, .event-list, .provider-route-list {
   background: var(--raised);
 }
 
@@ -804,8 +799,7 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible { outline-color:
 @media (max-width: 820px) {
   .empty-state,
   .error-state { width: calc(100% - 24px); margin-block: 18px; }
-  .provider-route-list,
-  .settings-subgroup-grid { grid-template-columns: 1fr; }
+  .provider-route-list { grid-template-columns: 1fr; }
 }
 
 /* Native desktop legibility and proportion pass. The native app gives this
@@ -1013,7 +1007,7 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible { outline-color:
 
 /* macOS shell: section headers and field names are sentence-case secondary text.
    Uppercase tracked mono survives only inside evidence receipts and transcripts. */
-.dashboard-shell--inline .eyebrow, .dashboard-shell--inline .admin-context-label, .dashboard-shell--inline .trace-lifecycle-label, .dashboard-shell--inline .metadata-grid dt, .dashboard-shell--inline .receipt-list dt, .dashboard-shell--inline .sharing-facts dt, .dashboard-shell--inline .share-progress-timeline li, .dashboard-shell--inline .settings-notary-source dt, .dashboard-shell--inline .local-notary-facts dt, .dashboard-shell--inline .local-notary-state, .dashboard-shell--inline .local-notary-selected, .dashboard-shell--inline .local-notary-key > span, .dashboard-shell--inline .settings-notaries-heading > p, .dashboard-shell--inline .sample-data-label, .dashboard-shell--inline .trace-inference-label, .dashboard-shell--inline .proof-work footer {
+.dashboard-shell--inline .eyebrow, .dashboard-shell--inline .admin-context-label, .dashboard-shell--inline .trace-lifecycle-label, .dashboard-shell--inline .metadata-grid dt, .dashboard-shell--inline .receipt-list dt, .dashboard-shell--inline .sharing-facts dt, .dashboard-shell--inline .share-progress-timeline li, .dashboard-shell--inline .settings-notary-source dt, .dashboard-shell--inline .local-notary-facts dt, .dashboard-shell--inline .local-notary-state, .dashboard-shell--inline .local-notary-selected, .dashboard-shell--inline .local-notary-key > span, .dashboard-shell--inline .settings-notaries-heading > p, .dashboard-shell--inline .trace-inference-label, .dashboard-shell--inline .proof-work footer {
   font-family: var(--ui-font);
   letter-spacing: 0;
   text-transform: none;
@@ -1129,20 +1123,13 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible { outline-color:
   font: 600 13px/1.3 var(--ui-font);
   letter-spacing: 0;
 }
-.dashboard-shell--inline .settings-subgroup-grid, .dashboard-shell--inline .settings-group > .settings-panel, .dashboard-shell--inline .settings-group > .account-card, .dashboard-shell--inline .settings-group > .capture-mode-setting {
+.dashboard-shell--inline .settings-group > .settings-panel, .dashboard-shell--inline .settings-group > .account-card, .dashboard-shell--inline .settings-group > .capture-mode-setting {
   overflow: hidden;
   border: 1px solid var(--rule-soft);
   border-radius: 10px;
   background: var(--raised);
 }
 .dashboard-shell--inline .settings-group > * + * { margin-top: 12px; }
-.dashboard-shell--inline .settings-subgroup-grid > .settings-panel {
-  border: 0;
-  border-right: 1px solid var(--rule-soft);
-  border-radius: 0;
-  background: transparent;
-}
-.dashboard-shell--inline .settings-subgroup-grid > .settings-panel:last-child { border-right: 0; }
 .dashboard-shell--inline .settings-panel { padding: 14px 16px 16px; }
 .dashboard-shell--inline .settings-panel .eyebrow { display: none; }
 .dashboard-shell--inline .settings-panel h2 {

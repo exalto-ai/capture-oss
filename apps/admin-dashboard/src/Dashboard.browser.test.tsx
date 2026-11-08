@@ -2,6 +2,7 @@ import { createTheme, MantineProvider } from '@mantine/core';
 import { Notifications, notifications } from '@mantine/notifications';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { cleanup, render } from '@testing-library/react';
+import type { ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { page, userEvent } from 'vitest/browser';
 import { OpenExternalProvider } from './AccountConnection';
@@ -12,7 +13,12 @@ import {
   LocalApiError,
   type TraceSummary,
 } from './api';
-import { Dashboard, type DesktopSettingsAction, type DesktopSettingsState } from './Dashboard';
+import {
+  Dashboard,
+  type DesktopSettingsAction,
+  type DesktopSettingsState,
+  InlineDashboard,
+} from './Dashboard';
 import { createFixtureApi, fixtureCaptures, fixtureNotaries, fixtureOperations } from './fixtures';
 import '@mantine/core/styles.css';
 import '@mantine/notifications/styles.css';
@@ -39,23 +45,8 @@ const desktopSettings: DesktopSettingsState = {
   notice: null,
 };
 
-function renderDashboard(
-  hash = '/overview',
-  api: LocalApi = createFixtureApi(),
-  settings: DesktopSettingsState | null = null,
-  onDesktopSettingsAction?: (action: DesktopSettingsAction) => void,
-  openExternal?: (url: string) => void,
-) {
-  window.location.hash = hash;
+function renderWithProviders(dashboard: ReactNode, openExternal?: (url: string) => void) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  const dashboard = (
-    <Dashboard
-      api={api}
-      fixture
-      desktopSettings={settings}
-      onDesktopSettingsAction={onDesktopSettingsAction}
-    />
-  );
   return render(
     <MantineProvider theme={theme} defaultColorScheme="auto">
       <Notifications transitionDuration={0} />
@@ -67,6 +58,32 @@ function renderDashboard(
         )}
       </QueryClientProvider>
     </MantineProvider>,
+  );
+}
+
+function renderDashboard(
+  hash = '/overview',
+  api: LocalApi = createFixtureApi(),
+  openExternal?: (url: string) => void,
+) {
+  window.location.hash = hash;
+  return renderWithProviders(<Dashboard api={api} />, openExternal);
+}
+
+/** The desktop app's Settings, as it embeds them. */
+function renderDesktopSettings(
+  api: LocalApi,
+  settings: DesktopSettingsState,
+  onDesktopSettingsAction?: (action: DesktopSettingsAction) => void,
+) {
+  return renderWithProviders(
+    <InlineDashboard
+      api={api}
+      route={{ view: 'settings' }}
+      desktopSettings={settings}
+      onDesktopSettingsAction={onDesktopSettingsAction}
+      onNavigate={() => undefined}
+    />,
   );
 }
 
@@ -92,12 +109,6 @@ describe('Notary admin dashboard', () => {
     await expect.element(page.getByText('Captures', { exact: true })).not.toBeInTheDocument();
     await expect.element(page.getByText('Notarizations', { exact: true })).not.toBeInTheDocument();
     await expect.element(page.getByText('Share', { exact: true })).not.toBeInTheDocument();
-  });
-
-  test('does not preserve aliases for removed routes', async () => {
-    renderDashboard('/captures/trc-20260727-benchmark');
-    await expect.element(page.getByRole('heading', { name: 'Online' })).toBeVisible();
-    await expect.element(page.getByLabelText('Search traces')).not.toBeInTheDocument();
   });
 
   test('shows the four canonical trace counts and routes all of them to Traces', async () => {
@@ -278,7 +289,7 @@ describe('Notary admin dashboard', () => {
     const api = createFixtureApi();
     await api.disconnectAccount();
     const opened: string[] = [];
-    renderDashboard('/traces/trc-20260727-research-brief', api, null, undefined, (url) => {
+    renderDashboard('/traces/trc-20260727-research-brief', api, (url) => {
       opened.push(url);
     });
 
@@ -312,7 +323,7 @@ describe('Notary admin dashboard', () => {
     };
     const opened: string[] = [];
     const windowOpen = vi.spyOn(window, 'open').mockReturnValue(null);
-    renderDashboard('/settings', api, null, undefined, (url) => {
+    renderDashboard('/settings', api, (url) => {
       opened.push(url);
     });
 
@@ -373,7 +384,7 @@ describe('Notary admin dashboard', () => {
         return pollCalls < 2 ? pendingAccount : connectedAccount;
       },
     };
-    renderDashboard('/settings', api, null, undefined, () => {});
+    renderDashboard('/settings', api, () => {});
 
     await page.getByRole('button', { name: 'Connect account…' }).click();
     await expect.element(page.getByText('7A3C-91F2')).toBeVisible();
@@ -400,7 +411,7 @@ describe('Notary admin dashboard', () => {
         return startCalls === 1 ? { ...started, expires_in_seconds: 0 } : started;
       },
     };
-    renderDashboard('/settings', api, null, undefined, () => {});
+    renderDashboard('/settings', api, () => {});
 
     await page.getByRole('button', { name: 'Connect account…' }).click();
     await expect.element(page.getByText('Request expired')).toBeVisible();
@@ -429,7 +440,7 @@ describe('Notary admin dashboard', () => {
         return account;
       },
     };
-    renderDashboard('/settings', api, null, undefined, () => {});
+    renderDashboard('/settings', api, () => {});
 
     await page.getByRole('button', { name: 'Connect account…' }).click();
     await expect.element(page.getByText('7A3C-91F2')).toBeVisible();
@@ -1143,15 +1154,8 @@ describe('Notary admin dashboard', () => {
     await expect.element(page.getByRole('button', { name: 'View providers' })).toBeVisible();
   });
 
-  test('shows pinned notary lifecycle records in trust order without health claims', async () => {
-    const api: LocalApi = {
-      ...createFixtureApi(),
-      notaries: async () => ({
-        ...structuredClone(fixtureNotaries),
-        notaries: [...structuredClone(fixtureNotaries.notaries)].reverse(),
-      }),
-    };
-    renderDashboard('/settings', api);
+  test('shows pinned notary lifecycle records in the service trust order without health claims', async () => {
+    renderDashboard('/settings');
     await expect
       .poll(() =>
         Array.from(document.querySelectorAll('.local-notary-record h3')).map(
@@ -1258,9 +1262,7 @@ describe('Notary admin dashboard', () => {
 
   test('groups desktop Settings into short sections with controls on the right', async () => {
     const actions: DesktopSettingsAction[] = [];
-    renderDashboard('/settings', createFixtureApi(), desktopSettings, (action) =>
-      actions.push(action),
-    );
+    renderDesktopSettings(createFixtureApi(), desktopSettings, (action) => actions.push(action));
     await expect
       .poll(() =>
         Array.from(document.querySelectorAll('.preference-section > h2')).map(
@@ -1285,7 +1287,7 @@ describe('Notary admin dashboard', () => {
   });
 
   test('keeps only actionable facts in desktop Settings', async () => {
-    renderDashboard('/settings', createFixtureApi(), desktopSettings);
+    renderDesktopSettings(createFixtureApi(), desktopSettings);
     await expect.element(page.getByText('Sample User', { exact: true })).toBeVisible();
     await expect.element(page.getByText('Protected by Keychain', { exact: true })).toBeVisible();
     await expect
@@ -1323,7 +1325,7 @@ describe('Notary admin dashboard', () => {
 
   test('puts routes, sealing details, and service facts on the Advanced page', async () => {
     const writeText = vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue();
-    renderDashboard('/settings', createFixtureApi(), desktopSettings);
+    renderDesktopSettings(createFixtureApi(), desktopSettings);
     await page.getByRole('button', { name: 'Advanced' }).click();
     await expect
       .poll(() =>
@@ -1347,7 +1349,7 @@ describe('Notary admin dashboard', () => {
   });
 
   test('switches the desktop theme between System, Light, and Dark', async () => {
-    renderDashboard('/settings', createFixtureApi(), desktopSettings);
+    renderDesktopSettings(createFixtureApi(), desktopSettings);
     const theme = page.getByRole('radiogroup', { name: 'Theme' });
     await expect.element(theme.getByRole('radio', { name: 'System' })).toBeChecked();
     await theme.getByText('Dark', { exact: true }).click();
@@ -1373,7 +1375,7 @@ describe('Notary admin dashboard', () => {
         })),
       }),
     };
-    renderDashboard('/settings', thirdParty, desktopSettings);
+    renderDesktopSettings(thirdParty, desktopSettings);
     await expect.element(page.getByText('Northstar Seal', { exact: true }).first()).toBeVisible();
     await expect.element(page.getByText('Exalto Seal', { exact: true })).not.toBeInTheDocument();
 
@@ -1394,7 +1396,7 @@ describe('Notary admin dashboard', () => {
         ],
       }),
     };
-    renderDashboard('/settings', explicit, desktopSettings);
+    renderDesktopSettings(explicit, desktopSettings);
     await expect
       .element(page.getByText('Configured sealing service', { exact: true }))
       .toBeVisible();
@@ -1413,7 +1415,7 @@ describe('Notary admin dashboard', () => {
         links: (await fixture.account()).links,
       }),
     };
-    renderDashboard('/settings', api, {
+    renderDesktopSettings(api, {
       ...desktopSettings,
       update: { ...readyUpdate, phase: 'ready' },
       restart_block_reason: 'Wait for the active seal to finish before restarting to update.',

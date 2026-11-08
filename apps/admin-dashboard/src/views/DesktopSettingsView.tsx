@@ -13,7 +13,7 @@ import { type ReactNode, useState } from 'react';
 import { AccountConnectionCard } from '../AccountConnection';
 import type { LocalApi, Notary, Status } from '../api';
 import { claudeCommand, codexProfile } from '../clientSetup';
-import { formatNotaryBoundary, orderNotaries } from '../notaryLifecycle';
+import { formatNotaryBoundary } from '../notaryLifecycle';
 import { Fact, formatBytes, StatusLabel } from '../shared';
 
 /** Desktop-owned settings the app passes into the embedded Preferences. */
@@ -160,7 +160,7 @@ function serviceName(record: Notary, source: string | undefined, registry: strin
 function useSealingService(api: LocalApi) {
   const notaries = useQuery({ queryKey: ['notaries'], queryFn: api.notaries, retry: false });
   const data = notaries.data;
-  const records = orderNotaries(data?.notaries ?? [], data?.active_key_id);
+  const records = data?.notaries ?? [];
   const active = records.find((record) => record.key_id === data?.active_key_id) ?? records[0];
   return { notaries, data, records, active };
 }

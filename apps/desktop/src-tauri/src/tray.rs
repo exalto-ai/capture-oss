@@ -17,6 +17,8 @@ pub(super) const SAFE_HIDE_MENU_ID: &str = "app_hide";
 pub(super) const CAPTURE_STATE_CHANGED_EVENT: &str = "exalto:capture-state-changed";
 /// Menu-bar commands the web view carries out: a view name, `new-chat`, or `find`.
 pub(super) const MENU_COMMAND_EVENT: &str = "exalto:menu";
+const GUIDE_URL: &str = "https://capture.exalto.ai/docs";
+const REPORT_URL: &str = "https://github.com/exalto-ai/notary/issues/new";
 const MENU_BAR_CAPTURE_PREFIX: &str = "menu_capture_";
 const TRAY_CAPTURE_PREFIX: &str = "tray_capture_";
 const CAPTURE_MENU_LABEL: &str = "Capture";
@@ -125,9 +127,8 @@ pub(super) fn publish_capture_mode(app: &tauri::AppHandle, mode: CaptureMode) {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum AppMenuAction {
     Hide,
-    Settings,
-    HelpGuide,
-    HelpReport,
+    /// Opens a fixed Exalto page in the default browser.
+    OpenUrl(&'static str),
     /// Sent to the web view as an `exalto:menu` command.
     Command(&'static str),
     SetCaptureMode(CaptureMode),
@@ -136,13 +137,12 @@ pub(super) enum AppMenuAction {
 pub(super) fn app_menu_action(id: &str) -> Option<AppMenuAction> {
     match id {
         SAFE_HIDE_MENU_ID => Some(AppMenuAction::Hide),
-        "app_settings" => Some(AppMenuAction::Settings),
-        "help_guide" => Some(AppMenuAction::HelpGuide),
-        "help_report" => Some(AppMenuAction::HelpReport),
+        "app_settings" | "view_settings" => Some(AppMenuAction::Command("settings")),
+        "help_guide" => Some(AppMenuAction::OpenUrl(GUIDE_URL)),
+        "help_report" => Some(AppMenuAction::OpenUrl(REPORT_URL)),
         "file_new_chat" => Some(AppMenuAction::Command("new-chat")),
         "view_chat" => Some(AppMenuAction::Command("chat")),
         "view_traces" => Some(AppMenuAction::Command("traces")),
-        "view_settings" => Some(AppMenuAction::Command("settings")),
         "view_find" => Some(AppMenuAction::Command("find")),
         _ => capture_mode_for_item(MENU_BAR_CAPTURE_PREFIX, id).map(AppMenuAction::SetCaptureMode),
     }
@@ -173,13 +173,6 @@ pub(super) fn show_main_window(app: &tauri::AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.show();
         let _ = window.set_focus();
-    }
-}
-
-pub(super) fn show_settings_window(app: &tauri::AppHandle) {
-    show_main_window(app);
-    if let Some(window) = app.get_webview_window("main") {
-        let _ = window.emit("exalto:navigate", "settings");
     }
 }
 

@@ -36,12 +36,6 @@ export function vaultProtection(mode: string) {
   };
 }
 
-export function StatusDot({ running, warning = false }: { running: boolean; warning?: boolean }) {
-  return (
-    <span className={`status-dot ${running ? 'is-running' : ''} ${warning ? 'is-warning' : ''}`} />
-  );
-}
-
 export function updateRestartBlockReason(state: DesktopState) {
   if (state.counts.capturing > 0) return 'Finish the active capture before restarting.';
   if (state.counts.notarizing > 0) return 'Finish the active seal before restarting.';

@@ -3,7 +3,47 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { page, userEvent } from 'vitest/browser';
 import { formatBytes } from '../../admin-dashboard/src/shared';
 import App, { SENSITIVE_INPUT_RESET_EVENT } from './App';
+import {
+  type DesktopState,
+  type DesktopUpdateState,
+  getDesktopState,
+  getLaunchAtLogin,
+  getUpdateState,
+  setLaunchAtLogin,
+  startDaemon,
+} from './bridge';
+import { states } from './testStates';
 import './styles.css';
+
+vi.mock('./bridge', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./bridge')>()),
+  getDesktopState: vi.fn(),
+  getUpdateState: vi.fn(),
+  startDaemon: vi.fn(),
+  getLaunchAtLogin: vi.fn(),
+  setLaunchAtLogin: vi.fn(),
+}));
+
+const updates = (phase: 'disabled' | 'ready'): DesktopUpdateState =>
+  phase === 'ready'
+    ? {
+        enabled: true,
+        phase: 'ready',
+        current_build_id: 'preview-build-a',
+        latest_build_id: 'preview-build-b',
+        downloaded_bytes: 42 * 1024 * 1024,
+        total_bytes: 42 * 1024 * 1024,
+        message: 'The latest release is ready. Restart when local work is idle.',
+      }
+    : {
+        enabled: false,
+        phase: 'disabled',
+        current_build_id: 'dev',
+        latest_build_id: null,
+        downloaded_bytes: 0,
+        total_bytes: null,
+        message: 'Automatic updates are available in signed release builds.',
+      };
 
 const approvalUrl = 'https://capture.exalto.ai/authorize?request_id=req-browser&approval_secret=s';
 
@@ -53,25 +93,33 @@ const captureMode = () => page.getByRole('radiogroup', { name: 'Capture mode' })
 const captureOption = (label: 'Off' | 'Witnessed' | 'Notarized') =>
   captureMode().getByRole('radio', { name: label });
 
-function renderApp(query: string) {
-  window.history.replaceState({}, '', `/${query}`);
+/** Opens the app in `state`, then on `view` when it is not the default Traces. */
+async function renderApp(state: DesktopState, view?: 'Chat' | 'Settings') {
+  vi.mocked(getDesktopState).mockResolvedValue(state);
   const result = render(<App />);
   result.container.style.width = '100vw';
   result.container.style.height = '100vh';
+  if (view) await userEvent.click(page.getByRole('button', { name: new RegExp(`^${view}`) }));
   return result;
 }
 
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+  vi.clearAllMocks();
   localStorage.clear();
-  window.history.replaceState({}, '', '/');
 });
 
 let autoSealEnabled = false;
+let noTraces = false;
 
 beforeEach(() => {
   autoSealEnabled = false;
+  noTraces = false;
+  vi.mocked(getUpdateState).mockResolvedValue(updates('disabled'));
+  vi.mocked(startDaemon).mockResolvedValue(undefined);
+  vi.mocked(getLaunchAtLogin).mockResolvedValue(false);
+  vi.mocked(setLaunchAtLogin).mockResolvedValue(undefined);
   vi.stubGlobal(
     'fetch',
     vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -133,7 +181,7 @@ beforeEach(() => {
         });
       }
       if (path === '/v1/traces') {
-        const items = window.location.search.includes('no-traces') ? [] : [browserTraceSummary()];
+        const items = noTraces ? [] : [browserTraceSummary()];
         return response({ items, next_cursor: null });
       }
       if (/^\/v1\/traces\/[^/]+\/notarizations$/.test(path)) {
@@ -210,7 +258,7 @@ beforeEach(() => {
 
 describe('Exalto Capture desktop shell', () => {
   test('exposes the primary desktop destinations', async () => {
-    renderApp('?screen=capture-on');
+    await renderApp(states.captureOn);
     await expect
       .poll(() =>
         Array.from(document.querySelectorAll('.sidebar-group button')).map((node) =>
@@ -230,7 +278,7 @@ describe('Exalto Capture desktop shell', () => {
   });
 
   test('opens Chat on its connect action when no connection is saved', async () => {
-    renderApp('?screen=capture-on&view=chat');
+    await renderApp(states.captureOn, 'Chat');
     const add = page.getByRole('button', { name: 'Add a connection' });
     await expect.element(add).toBeVisible();
     expect(document.querySelector('.chat-composer')).toBeNull();
@@ -246,7 +294,7 @@ describe('Exalto Capture desktop shell', () => {
   });
 
   test('opens on Traces with the capture mode chooser in its header', async () => {
-    renderApp('?screen=capture-off');
+    await renderApp(states.captureOff);
     await expect.element(page.getByRole('heading', { name: 'Traces', exact: true })).toBeVisible();
     await expect.element(page.getByPlaceholder('Search traces')).toBeVisible();
     await expect.element(captureOption('Off')).toBeChecked();
@@ -266,12 +314,12 @@ describe('Exalto Capture desktop shell', () => {
   });
 
   test('chooses Witnessed capture and says each trace is sealed as it completes', async () => {
-    renderApp('?screen=capture-off');
+    await renderApp(states.captureOff);
     await captureMode().getByText('Witnessed', { exact: true }).click();
     await expect.element(page.getByText('Witnessed capture is on.', { exact: true })).toBeVisible();
 
     cleanup();
-    renderApp('?screen=capture-witnessed');
+    await renderApp(states.captureWitnessed);
     await expect.element(captureOption('Witnessed')).toBeChecked();
     await expect
       .element(
@@ -283,7 +331,7 @@ describe('Exalto Capture desktop shell', () => {
   });
 
   test('turns auto-seal on without an account', async () => {
-    renderApp('?screen=capture-on&view=traces');
+    await renderApp(states.captureOn);
     const autoSeal = page.getByRole('switch', { name: 'Auto-seal' });
     await expect.element(autoSeal).not.toBeChecked();
     await expect.element(autoSeal).toBeEnabled();
@@ -294,7 +342,7 @@ describe('Exalto Capture desktop shell', () => {
   });
 
   test('keeps connections inside Settings', async () => {
-    renderApp('?screen=capture-on&view=settings');
+    await renderApp(states.captureOn, 'Settings');
     await expect
       .element(page.getByRole('heading', { name: 'Settings', exact: true }))
       .toBeVisible();
@@ -318,7 +366,8 @@ describe('Exalto Capture desktop shell', () => {
   });
 
   test('opens connection setup from an empty Traces list', async () => {
-    renderApp('?screen=capture-on&no-traces');
+    noTraces = true;
+    await renderApp(states.captureOn);
     await userEvent.click(page.getByRole('button', { name: 'Set up a connection' }));
     await expect
       .element(page.getByRole('heading', { name: 'What would you like to capture?' }))
@@ -326,7 +375,7 @@ describe('Exalto Capture desktop shell', () => {
   });
 
   test('keeps native navigation in charge of service-backed views', async () => {
-    renderApp('?screen=capture-on&view=traces');
+    await renderApp(states.captureOn);
     await expect.element(page.getByPlaceholder('Search traces')).toBeVisible();
     expect(document.querySelector('.workspace-frame')).toBeNull();
     for (const label of ['Settings', 'Chat', 'Traces', 'Settings', 'Traces']) {
@@ -337,7 +386,7 @@ describe('Exalto Capture desktop shell', () => {
   });
 
   test('keeps the capture mode chooser beside the offline Traces workspace', async () => {
-    renderApp('?screen=service-off&view=traces');
+    await renderApp(states.serviceOff);
     await expect
       .element(
         page.getByText(
@@ -350,18 +399,17 @@ describe('Exalto Capture desktop shell', () => {
     await expect.element(captureOption('Notarized')).toBeEnabled();
   });
 
-  test('shows start failures beside the retry action on every offline workspace', async () => {
-    for (const view of ['traces'] as const) {
-      renderApp(`?screen=service-off&view=${view}&service-start=fail`);
-      await userEvent.click(page.getByRole('button', { name: 'Start local service' }));
-      await expect.element(page.getByRole('alert')).toHaveTextContent('could not start');
-      await expect.element(page.getByRole('button', { name: 'Start local service' })).toBeEnabled();
-      cleanup();
-    }
+  test('shows start failures beside the Traces retry action', async () => {
+    vi.mocked(startDaemon).mockRejectedValue(new Error('The local service could not start.'));
+    await renderApp(states.serviceOff);
+    await userEvent.click(page.getByRole('button', { name: 'Start local service' }));
+    await expect.element(page.getByRole('alert')).toHaveTextContent('could not start');
+    await expect.element(page.getByRole('button', { name: 'Start local service' })).toBeEnabled();
   });
 
   test('shows start failures beside the Settings retry action', async () => {
-    renderApp('?screen=service-off&view=settings&service-start=fail');
+    vi.mocked(startDaemon).mockRejectedValue(new Error('The local service could not start.'));
+    await renderApp(states.serviceOff, 'Settings');
     await userEvent.click(page.getByRole('button', { name: 'Start local service' }));
     await expect.element(page.getByRole('alert')).toHaveTextContent('could not start');
     const alert = present(document.querySelector('[role="alert"]'), 'the start failure alert');
@@ -375,7 +423,7 @@ describe('Exalto Capture desktop shell', () => {
   });
 
   test('shows a neutral startup state instead of a false sealing failure', async () => {
-    renderApp('?screen=service-off');
+    await renderApp(states.serviceOff);
     await expect.element(page.getByText(/^Capture is off\./)).toBeVisible();
     await expect.element(captureOption('Notarized')).toBeEnabled();
     await expect
@@ -383,7 +431,7 @@ describe('Exalto Capture desktop shell', () => {
       .not.toBeInTheDocument();
 
     cleanup();
-    renderApp('?screen=service-starting');
+    await renderApp(states.serviceStarting);
     await expect.element(page.getByText(/Checking the connection to Exalto Seal/)).toBeVisible();
     await expect.element(page.getByText('Sealing service is unavailable')).not.toBeInTheDocument();
     await expect.element(captureOption('Witnessed')).toBeDisabled();
@@ -391,7 +439,7 @@ describe('Exalto Capture desktop shell', () => {
   });
 
   test('shows capture changes as a temporary notification', async () => {
-    renderApp('?screen=capture-on');
+    await renderApp(states.captureOn);
     await expect.element(captureOption('Notarized')).toBeChecked();
     await captureMode().getByText('Off', { exact: true }).click();
     await expect.element(page.getByText('Capture is off.', { exact: true })).toBeVisible();
@@ -399,7 +447,7 @@ describe('Exalto Capture desktop shell', () => {
   });
 
   test('distinguishes trusted but unreachable Seal from unavailable trust', async () => {
-    renderApp('?screen=seal-unreachable');
+    await renderApp(states.sealUnreachable);
     await expect.element(page.getByText('Exalto Seal can’t be reached')).toBeVisible();
     await expect.element(page.getByText(/transport handshake did not complete/)).toBeVisible();
     await expect.element(captureOption('Witnessed')).toBeDisabled();
@@ -407,7 +455,7 @@ describe('Exalto Capture desktop shell', () => {
     await expect.element(page.getByRole('button', { name: 'Try again' })).toBeVisible();
 
     cleanup();
-    renderApp('?screen=seal-trust-unavailable');
+    await renderApp(states.sealTrustUnavailable);
     await expect.element(page.getByText('Sealing trust needs attention')).toBeVisible();
     await expect
       .element(page.getByText(/could not resolve a trusted sealing endpoint/))
@@ -416,13 +464,13 @@ describe('Exalto Capture desktop shell', () => {
   });
 
   test('reports Seal ready only after trust and transport checks succeed', async () => {
-    renderApp('?screen=capture-off');
+    await renderApp(states.captureOff);
     await expect.element(page.getByText(/can’t be reached/)).not.toBeInTheDocument();
     await expect.element(captureOption('Notarized')).toBeEnabled();
   });
 
   test('sets up each chosen tool in turn and finishes without a test', async () => {
-    renderApp('?screen=onboarding');
+    await renderApp(states.onboarding);
     await userEvent.click(page.getByRole('button', { name: /Begin setup/ }));
     await userEvent.click(page.getByRole('button', { name: /Protect traces/ }));
     const builtin = page.getByRole('checkbox', { name: /^Built-in Chat/ });
@@ -450,7 +498,7 @@ describe('Exalto Capture desktop shell', () => {
   });
 
   test('goes from protection straight to the connection choice', async () => {
-    renderApp('?screen=onboarding-third-party');
+    await renderApp(states.onboardingThirdParty);
     await userEvent.click(page.getByRole('button', { name: /Begin setup/ }));
     await userEvent.click(page.getByRole('button', { name: /Protect traces/ }));
     await expect
@@ -460,7 +508,7 @@ describe('Exalto Capture desktop shell', () => {
     expect(document.body.textContent).not.toContain('Sealing service');
 
     cleanup();
-    renderApp('?screen=capture-third-party');
+    await renderApp(states.captureThirdParty);
     await expect.element(captureOption('Notarized')).toBeChecked();
     expect(document.body.textContent).not.toContain('Exalto Seal');
   });
@@ -468,7 +516,7 @@ describe('Exalto Capture desktop shell', () => {
   test('keeps the connection setup action visible at the minimum desktop size', async () => {
     await page.viewport(980, 680);
     try {
-      renderApp('?screen=onboarding');
+      await renderApp(states.onboarding);
       await userEvent.click(page.getByRole('button', { name: /Begin setup/ }));
       await userEvent.click(page.getByRole('button', { name: /Protect traces/ }));
       await userEvent.click(page.getByRole('checkbox', { name: /^Codex/ }));
@@ -530,7 +578,7 @@ describe('Exalto Capture desktop shell', () => {
   });
 
   test('does not create an unprotected passphrase vault', async () => {
-    renderApp('?screen=onboarding');
+    await renderApp(states.onboarding);
     await userEvent.click(page.getByRole('button', { name: /Begin setup/ }));
     await userEvent.click(page.getByRole('button', { name: /Advanced protection/ }));
     await userEvent.click(page.getByRole('radio', { name: /Use a passphrase/ }));
@@ -552,7 +600,7 @@ describe('Exalto Capture desktop shell', () => {
   });
 
   test('clears unsaved secrets whenever the native window is hidden', async () => {
-    renderApp('?screen=unlock');
+    await renderApp(states.unlock);
     await userEvent.fill(page.getByLabelText('Vault passphrase'), 'unsaved unlock secret');
     await act(async () => {
       window.dispatchEvent(new Event(SENSITIVE_INPUT_RESET_EVENT));
@@ -560,7 +608,7 @@ describe('Exalto Capture desktop shell', () => {
     await expect.element(page.getByLabelText('Vault passphrase')).toHaveValue('');
 
     cleanup();
-    renderApp('?screen=capture-on&view=settings');
+    await renderApp(states.captureOn, 'Settings');
     await userEvent.click(page.getByRole('button', { name: 'Set up…' }));
     await userEvent.click(page.getByRole('button', { name: 'Continue' }));
     await page.getByRole('combobox', { name: 'Connection type' }).click();
@@ -577,7 +625,7 @@ describe('Exalto Capture desktop shell', () => {
     await expect.element(page.getByLabelText('OpenAI API key')).toHaveValue('');
 
     cleanup();
-    renderApp('?screen=capture-on&view=traces');
+    await renderApp(states.captureOn);
     await expect.element(page.getByPlaceholder('Search traces')).toBeVisible();
     expect(document.querySelector('.workspace-frame')).toBeNull();
     await act(async () => {
@@ -588,7 +636,7 @@ describe('Exalto Capture desktop shell', () => {
   });
 
   test('uses private Trace language in the locked state', async () => {
-    renderApp('?screen=unlock');
+    await renderApp(states.unlock);
     await expect.element(page.getByText('Private trace vault')).toBeVisible();
     await expect
       .element(page.getByRole('heading', { name: 'Unlock private traces on this Mac' }))
@@ -596,7 +644,8 @@ describe('Exalto Capture desktop shell', () => {
   });
 
   test('uses one native desktop-and-service Settings surface', async () => {
-    renderApp('?screen=capture-on&view=settings&update=ready');
+    vi.mocked(getUpdateState).mockResolvedValue(updates('ready'));
+    await renderApp(states.captureOn, 'Settings');
     await expect
       .element(page.getByRole('heading', { name: 'Settings', exact: true }))
       .toBeVisible();
@@ -614,7 +663,7 @@ describe('Exalto Capture desktop shell', () => {
         .getByRole('switch', { name: 'Open Exalto Capture at sign-in' })
         .element() as HTMLInputElement
     ).click();
-    await expect.poll(() => localStorage.getItem('notary-launch-at-login')).toBe('true');
+    await expect.poll(() => vi.mocked(setLaunchAtLogin).mock.calls).toEqual([[true]]);
     await userEvent.click(page.getByRole('button', { name: 'Advanced' }));
     await expect
       .element(page.getByText('http://127.0.0.1:8788/openapi.json', { exact: true }))
@@ -623,7 +672,7 @@ describe('Exalto Capture desktop shell', () => {
   });
 
   test('keeps the same Settings sections while the local service is off', async () => {
-    renderApp('?screen=offline&view=settings');
+    await renderApp(states.offline, 'Settings');
     await expect
       .poll(() =>
         Array.from(document.querySelectorAll('.preference-section > h2')).map(
@@ -648,7 +697,7 @@ describe('Exalto Capture desktop shell', () => {
       getComputedStyle(present(document.querySelector('.native-window'), 'window'))
         .getPropertyValue('--window')
         .trim();
-    renderApp('?screen=capture-on&view=settings');
+    await renderApp(states.captureOn, 'Settings');
     const theme = page.getByRole('radiogroup', { name: 'Theme' });
     await expect.element(theme.getByRole('radio', { name: 'System' })).toBeChecked();
 
@@ -662,7 +711,7 @@ describe('Exalto Capture desktop shell', () => {
     expect(windowColor()).toBe('#f5f5f5');
 
     cleanup();
-    renderApp('?screen=offline&view=settings');
+    await renderApp(states.offline, 'Settings');
     await expect
       .element(
         page.getByRole('radiogroup', { name: 'Theme' }).getByRole('radio', { name: 'Light' }),

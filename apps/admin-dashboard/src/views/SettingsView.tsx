@@ -17,12 +17,7 @@ import { useEffect, useState } from 'react';
 import { AccountConnectionCard } from '../AccountConnection';
 import type { CaptureMode, LocalApi, Notary, Status } from '../api';
 import { LocalApiError } from '../api';
-import {
-  abbreviatedKeyId,
-  formatNotaryBoundary,
-  notaryLifecycle,
-  orderNotaries,
-} from '../notaryLifecycle';
+import { abbreviatedKeyId, formatNotaryBoundary, notaryLifecycle } from '../notaryLifecycle';
 import { Fact, mutationError } from '../shared';
 
 function SchemeControl() {
@@ -111,7 +106,7 @@ function LocalNotaryRecord({
 function SettingsNotaries({ api }: { api: LocalApi }) {
   const notaries = useQuery({ queryKey: ['notaries'], queryFn: api.notaries, retry: false });
   const errorCode = notaries.error instanceof LocalApiError ? notaries.error.code : null;
-  const records = orderNotaries(notaries.data?.notaries ?? [], notaries.data?.active_key_id);
+  const records = notaries.data?.notaries ?? [];
   return (
     <Paper className="settings-panel settings-notaries">
       <div className="settings-notaries-heading">

@@ -24,12 +24,12 @@ use daemon::{
     request_managed_daemon_shutdown_inner, start_daemon,
 };
 use service_client::{
-    SealingServiceIdentity, daemon_is_healthy, open_account_link, open_product_link,
+    SealingServiceIdentity, daemon_is_healthy, open_account_link, open_external_url,
     read_admin_status, read_sealing_service, read_sealing_service_readiness, set_capture_mode,
 };
 use tray::{
     AppMenuAction, app_menu_action, create_app_menu, create_tray, request_capture_mode,
-    schedule_capture_menu_updates, send_menu_command, show_main_window, show_settings_window,
+    schedule_capture_menu_updates, send_menu_command, show_main_window,
 };
 use updates::{
     DesktopUpdaterState, check_for_updates, get_update_state, install_update_and_restart,
@@ -41,7 +41,7 @@ use vault::{
 };
 
 #[cfg(test)]
-use service_client::{product_link, validate_account_link};
+use service_client::validate_account_link;
 #[cfg(test)]
 use updates::{
     build_ids_require_update, desktop_updates_enabled, pending_build_is_latest,
@@ -308,7 +308,6 @@ pub fn run() {
             chat::cancel_chat,
             get_desktop_state,
             open_account_link,
-            open_product_link,
             detect_agent_apps,
             open_agent_setup,
             set_capture_mode,
@@ -330,12 +329,8 @@ pub fn run() {
                     show_main_window(app);
                 }
             }
-            Some(AppMenuAction::Settings) => show_settings_window(app),
-            Some(AppMenuAction::HelpGuide) => {
-                let _ = open_product_link("guide".into());
-            }
-            Some(AppMenuAction::HelpReport) => {
-                let _ = open_product_link("report".into());
+            Some(AppMenuAction::OpenUrl(url)) => {
+                let _ = open_external_url(url, "Exalto page");
             }
             Some(AppMenuAction::Command(command)) => send_menu_command(app, command),
             Some(AppMenuAction::SetCaptureMode(mode)) => request_capture_mode(app, mode),
@@ -566,35 +561,5 @@ mod tests {
                 .is_err()
         );
         assert!(validate_account_link("http://example.com/#/account").is_err());
-    }
-
-    #[test]
-    fn product_links_are_an_explicit_allowlist() {
-        assert_eq!(
-            product_link("public_traces"),
-            Some("https://capture.exalto.ai/traces")
-        );
-        assert_eq!(
-            product_link("guide"),
-            Some("https://capture.exalto.ai/docs")
-        );
-        assert_eq!(
-            product_link("report"),
-            Some("https://github.com/exalto-ai/notary/issues/new")
-        );
-        assert_eq!(
-            product_link("openai_key"),
-            Some("https://platform.openai.com/api-keys")
-        );
-        assert_eq!(
-            product_link("anthropic_key"),
-            Some("https://console.anthropic.com/settings/keys")
-        );
-        assert_eq!(
-            product_link("openrouter_key"),
-            Some("https://openrouter.ai/settings/keys")
-        );
-        assert_eq!(product_link("xai_key"), None);
-        assert_eq!(product_link("https://example.com"), None);
     }
 }

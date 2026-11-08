@@ -189,14 +189,12 @@ function TopNav({
   onNavigate,
   opened,
   onOpenNavigation,
-  fixture,
 }: {
   route: Route;
   status: Status;
   onNavigate: (route: Route) => void;
   opened: boolean;
   onOpenNavigation: () => void;
-  fixture: boolean;
 }) {
   const count = (view: DashboardView) => (view === 'traces' ? status.counts.captured : undefined);
   return (
@@ -219,35 +217,16 @@ function TopNav({
         <span className="admin-context-label">
           {status.runtime_profile === 'cluster' ? 'Cluster admin' : 'Local admin'}
         </span>
-        {fixture && (
-          <span className="sample-data-label" title="This preview uses synthetic sample data">
-            Sample data
-          </span>
-        )}
         <Burger opened={opened} onClick={onOpenNavigation} size="sm" aria-label="Open navigation" />
       </div>
     </header>
   );
 }
 
-export function Dashboard({
-  api,
-  fixture = false,
-  desktopSettings = null,
-  onDesktopSettingsAction,
-}: {
-  api: LocalApi;
-  fixture?: boolean;
-  desktopSettings?: DesktopSettingsState | null;
-  onDesktopSettingsAction?: (action: DesktopSettingsAction) => void;
-}) {
+export function Dashboard({ api }: { api: LocalApi }) {
   const route = useRoute();
   const queryClient = useQueryClient();
   const [navOpened, { open: openNav, close: closeNav }] = useDisclosure(false);
-  const desktopBridge = {
-    state: desktopSettings,
-    send: (action: DesktopSettingsAction) => onDesktopSettingsAction?.(action),
-  };
   const statusQuery = useQuery({
     queryKey: ['status'],
     queryFn: api.status,
@@ -280,7 +259,6 @@ export function Dashboard({
           onNavigate={navigate}
           opened={navOpened}
           onOpenNavigation={openNav}
-          fixture={fixture}
         />
       </AppShell.Header>
       <Drawer
@@ -293,15 +271,7 @@ export function Dashboard({
         <Sidebar route={route} status={status} onNavigate={navigate} />
       </Drawer>
       <AppShell.Main className="dashboard-main">
-        <View
-          route={route}
-          status={status}
-          api={api}
-          navigate={navigate}
-          fixture={fixture}
-          desktopShell={false}
-          desktopBridge={desktopBridge}
-        />
+        <View route={route} status={status} api={api} navigate={navigate} desktopShell={false} />
       </AppShell.Main>
     </AppShell>
   );
@@ -335,7 +305,6 @@ export function InlineDashboard({
   onDesktopSettingsAction?: (action: DesktopSettingsAction) => void;
   onNavigate: (route: Route) => void;
 }) {
-  const queryClient = useQueryClient();
   const statusQuery = useQuery({
     queryKey: ['status'],
     queryFn: api.status,
@@ -344,14 +313,6 @@ export function InlineDashboard({
   });
 
   if (statusQuery.isLoading) return <LoadingState label="Connecting to the local service" />;
-  if (statusQuery.error && (statusQuery.error as LocalApiError).status === 401) {
-    return (
-      <AuthGate
-        api={api}
-        onAuthenticated={() => queryClient.invalidateQueries({ queryKey: ['status'] })}
-      />
-    );
-  }
   if (statusQuery.error || !statusQuery.data) {
     return <ErrorState onRetry={() => statusQuery.refetch()} />;
   }
@@ -371,7 +332,6 @@ export function InlineDashboard({
         api={api}
         apiBaseUrl={apiBaseUrl}
         navigate={onNavigate}
-        fixture={false}
         desktopShell={desktopShell}
         desktopBridge={desktopBridge}
       />
@@ -393,9 +353,8 @@ function View({
   api: LocalApi;
   apiBaseUrl?: string;
   navigate: (route: Route) => void;
-  fixture: boolean;
   desktopShell: boolean;
-  desktopBridge: {
+  desktopBridge?: {
     state: DesktopSettingsState | null;
     connections?: ReactNode;
     tracesEmptyAction?: ReactNode;
@@ -412,16 +371,16 @@ function View({
           initialFilters={route.filters}
           navigate={navigate}
           hideActivity={desktopShell}
-          emptyAction={desktopBridge.tracesEmptyAction}
+          emptyAction={desktopBridge?.tracesEmptyAction}
           sharing={status.runtime_profile !== 'cluster'}
         />
       );
     case 'activity':
       return <ActivityView api={api} initialTraceId={route.filters?.traceId} navigate={navigate} />;
     case 'providers':
-      return <ProvidersView api={api} status={status} showHeading={!desktopBridge.state} />;
+      return <ProvidersView api={api} status={status} showHeading={!desktopBridge?.state} />;
     case 'settings':
-      return desktopBridge.state ? (
+      return desktopBridge?.state ? (
         <DesktopSettingsView
           status={status}
           api={api}

@@ -606,57 +606,6 @@ fn turn_error(error: &Value) -> String {
 mod tests {
     use super::*;
     #[tokio::test]
-    #[ignore = "uses Capture's linked account and sends one short captured provider exchange"]
-    async fn live_capture_diagnostic() {
-        assert!(
-            crate::service_client::daemon_is_healthy().await,
-            "Start the local capture service before running the opt-in live check."
-        );
-        let state = CodexState::default();
-        let available = models(&state).await.unwrap();
-        let model = available
-            .iter()
-            .find(|m| m.is_default)
-            .or(available.first())
-            .expect("linked account has no models");
-        let events = Channel::new(|_| Ok(()));
-        let (_send, mut cancel) = tokio::sync::watch::channel(false);
-        let mut ids = vec![];
-        let result = exchange(
-            &state,
-            &model.id,
-            &[Message {
-                role: "user".into(),
-                content: "Hello! Reply with one short greeting.".into(),
-            }],
-            &events,
-            &mut ids,
-            &mut cancel,
-        )
-        .await;
-        eprintln!(
-            "Safe exchange result: {result:?}; trace count: {}",
-            ids.len()
-        );
-        assert!(result.is_ok());
-    }
-
-    #[tokio::test]
-    #[ignore = "reads the model catalog for Capture's linked account; no provider exchange"]
-    async fn linked_account_model_catalog() {
-        let models = models(&CodexState::default()).await.unwrap();
-        assert!(!models.is_empty());
-        assert!(models.iter().any(|m| m.is_default));
-        eprintln!(
-            "Available models: {:?}",
-            models
-                .iter()
-                .map(|m| (&m.id, m.is_default))
-                .collect::<Vec<_>>()
-        );
-    }
-
-    #[tokio::test]
     #[ignore = "requires an installed Codex runtime; never sends a provider request"]
     async fn installed_codex_accepts_exact_capture_startup_and_history() {
         let directory = tempfile::tempdir().unwrap();
