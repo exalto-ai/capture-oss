@@ -3051,6 +3051,17 @@
           "verified_at_unix_ms"
         ],
         "properties": {
+          "evidence_kind": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/EvidenceKind",
+                "description": "How the verified package's evidence was produced, read from its\nmanifest format. A `witnessed` package carries the notary operator's\nsigned receipt, not a cryptographic proof; only a `notarized` package\ncarries a TLSNotary proof. Absent when verification did not pass."
+              }
+            ]
+          },
           "failure_code": {
             "type": [
               "string",

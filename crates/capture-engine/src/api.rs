@@ -724,6 +724,7 @@ pub async fn verify_trace(
         Ok(VerificationResult {
             outcome: VerificationOutcome::Passed,
             trace_id: Some(manifest.trace_id().into()),
+            evidence_kind: Some(manifest.evidence_kind()),
             verified_at_unix_ms,
             notary_key_id: Some(notary_key_id),
             trust_source: Some(trust_source),
@@ -781,6 +782,7 @@ pub async fn verify_uploaded_trace(
         Ok(VerificationResult {
             outcome: VerificationOutcome::Passed,
             trace_id: Some(manifest.trace_id().into()),
+            evidence_kind: Some(manifest.evidence_kind()),
             verified_at_unix_ms,
             notary_key_id: Some(notary_key_id),
             trust_source: Some(trust_source),
@@ -796,6 +798,7 @@ pub async fn verify_uploaded_trace(
             VerificationResult {
                 outcome,
                 trace_id: None,
+                evidence_kind: None,
                 verified_at_unix_ms,
                 notary_key_id: None,
                 trust_source: None,
@@ -1435,6 +1438,11 @@ pub enum VerificationOutcome {
 pub struct VerificationResult {
     outcome: VerificationOutcome,
     trace_id: Option<String>,
+    /// How the verified package's evidence was produced, read from its
+    /// manifest format. A `witnessed` package carries the notary operator's
+    /// signed receipt, not a cryptographic proof; only a `notarized` package
+    /// carries a TLSNotary proof. Absent when verification did not pass.
+    evidence_kind: Option<EvidenceKind>,
     verified_at_unix_ms: u64,
     notary_key_id: Option<String>,
     trust_source: Option<String>,

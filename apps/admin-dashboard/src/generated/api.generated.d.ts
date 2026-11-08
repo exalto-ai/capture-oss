@@ -839,6 +839,7 @@ export interface components {
         /** @enum {string} */
         VerificationOutcome: "passed" | "failed" | "unsupported";
         VerificationResult: {
+            evidence_kind?: null | components["schemas"]["EvidenceKind"];
             failure_code?: string | null;
             notary_key_id?: string | null;
             outcome: components["schemas"]["VerificationOutcome"];

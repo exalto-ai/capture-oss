@@ -195,7 +195,9 @@ selection, TLSNotary evidence, provider identity, selective disclosure,
 header-value privacy, manifest hashes, and exact trace reproduction. For a
 Witnessed package it checks the receipt signature under the trusted key and
 its binding to the disclosed bytes, provider host, and connection time in
-place of the TLSNotary evidence.
+place of the TLSNotary evidence. A passing result names the package's
+`evidence_kind`, read from its manifest format: `witnessed` means the notary
+operator's signed receipt, not a cryptographic proof.
 
 ## Hosted verification and sharing
 

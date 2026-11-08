@@ -269,13 +269,21 @@ pub(super) fn value_i64(value: &Value, pointer: &str) -> i64 {
     value.pointer(pointer).and_then(Value::as_i64).unwrap_or(0)
 }
 
-/// Summarizes a verification result. A failure carries no Trace or key, so
-/// it states the reason instead of printing empty fields.
+/// Summarizes a verification result. A pass names the evidence kind, so a
+/// Witnessed package never reads as a proof. A failure carries no Trace or
+/// key, so it states the reason instead of printing empty fields.
 fn verification_line(value: &Value) -> String {
     let outcome = value_string(value, "/outcome");
     if outcome == "passed" {
+        let evidence = match value_string(value, "/evidence_kind").as_str() {
+            "witnessed" => {
+                "witnessed: the notary operator's signed receipt, not a cryptographic proof"
+            }
+            "notarized" => "notarized: a TLSNotary proof",
+            _ => "not reported",
+        };
         return format!(
-            "Verification passed for Trace {} with {} ({})",
+            "Verification passed for Trace {} with {} ({})\nevidence {evidence}",
             value_string(value, "/trace_id"),
             value_string(value, "/notary_key_id"),
             value_string(value, "/trust_source"),

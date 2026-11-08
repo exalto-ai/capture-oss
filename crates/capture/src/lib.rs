@@ -646,16 +646,37 @@ mod tests {
             "Verification failed: the package was not signed by the trusted notary key (untrusted_notary)"
         );
         assert!(!failed.contains(" - "));
-        let passed = crate::output::human_output(
-            &command,
-            &json!({ "outcome": "passed", "trace_id": "trc-example",
-                     "notary_key_id": "sha256:abc", "trust_source": "registry" }),
-        )
-        .unwrap();
+    }
+
+    #[test]
+    fn passed_verification_names_the_evidence_kind() {
+        let command = CliCommand::Traces {
+            command: TracesCommand::Verify(TraceVerifyArgs {
+                target: "trc-example".to_owned(),
+                trusted_notary_key: None,
+            }),
+        };
+        let passed = |evidence_kind: Value| {
+            crate::output::human_output(
+                &command,
+                &json!({ "outcome": "passed", "trace_id": "trc-example",
+                         "evidence_kind": evidence_kind,
+                         "notary_key_id": "sha256:abc", "trust_source": "registry" }),
+            )
+            .unwrap()
+        };
         assert_eq!(
-            passed,
-            "Verification passed for Trace trc-example with sha256:abc (registry)"
+            passed(json!("witnessed")),
+            "Verification passed for Trace trc-example with sha256:abc (registry)\n\
+             evidence witnessed: the notary operator's signed receipt, not a cryptographic proof"
         );
+        assert_eq!(
+            passed(json!("notarized")),
+            "Verification passed for Trace trc-example with sha256:abc (registry)\n\
+             evidence notarized: a TLSNotary proof"
+        );
+        // An older app that does not report the kind must not read as a proof.
+        assert!(passed(Value::Null).ends_with("\nevidence not reported"));
     }
 
     #[test]

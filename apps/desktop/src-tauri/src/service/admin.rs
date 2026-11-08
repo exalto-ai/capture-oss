@@ -1518,6 +1518,91 @@ mod tests {
         assert_eq!(body["outcome"], "failed");
         assert_eq!(body["failure_code"], "verification_failed");
         assert_eq!(body["trace_id"], serde_json::Value::Null);
+        assert_eq!(body["evidence_kind"], serde_json::Value::Null);
+    }
+
+    /// A Witnessed package signed by a fixed notary key. The signature covers
+    /// the domain-separated, bincode-encoded unsigned receipt
+    /// (`witness_receipt_message` in capture-core).
+    fn witnessed_package() -> (Vec<u8>, Vec<u8>) {
+        use capture_core::{
+            notarization::build_witnessed_trace_package_bytes,
+            witness::{WITNESS_RECEIPT_FORMAT, WitnessedExchange},
+        };
+        use k256::ecdsa::{Signature, SigningKey, signature::Signer as _};
+
+        const SERVER_NAME: &str = "test-server.io";
+        const CONNECTED_AT_UNIX_MS: u64 = 1_785_000_000_000;
+        let body = br#"{"model":"fixture","messages":[{"role":"user","content":"hello"}],"choices":[{"message":{"role":"assistant","content":"hello"},"finish_reason":"stop"}]}"#;
+        let chunked = |head: &[u8]| {
+            let mut message = head.to_vec();
+            message.extend_from_slice(format!("{:x}\r\n", body.len()).as_bytes());
+            message.extend_from_slice(body);
+            message.extend_from_slice(b"\r\n0\r\n\r\n");
+            message
+        };
+        let mut request_head = b"POST /echo HTTP/1.1\r\nauthorization: ".to_vec();
+        request_head.extend_from_slice(&[0; 21]);
+        request_head.extend_from_slice(b"\r\ntransfer-encoding: chunked\r\n\r\n");
+        let request = chunked(&request_head);
+        let response = chunked(b"HTTP/1.1 200 OK\r\ntransfer-encoding: chunked\r\n\r\n");
+        let request_sha256 = hex::decode(capture_core::sha256_hex(&request)).unwrap();
+        let response_sha256 = hex::decode(capture_core::sha256_hex(&response)).unwrap();
+
+        let mut message = b"Exalto witness receipt\0".to_vec();
+        for text in [WITNESS_RECEIPT_FORMAT, SERVER_NAME] {
+            message.extend_from_slice(&(text.len() as u64).to_le_bytes());
+            message.extend_from_slice(text.as_bytes());
+        }
+        message.extend_from_slice(&CONNECTED_AT_UNIX_MS.to_le_bytes());
+        message.extend_from_slice(&request_sha256);
+        message.extend_from_slice(&response_sha256);
+        let signing_key = SigningKey::from_slice(&[7; 32]).unwrap();
+        let signature: Signature = signing_key.sign(&message);
+        let notary_key = signing_key.verifying_key().to_sec1_bytes().to_vec();
+
+        let exchange: WitnessedExchange = serde_json::from_value(serde_json::json!({
+            "receipt": {
+                "format": WITNESS_RECEIPT_FORMAT,
+                "server_name": SERVER_NAME,
+                "connected_at_unix_ms": CONNECTED_AT_UNIX_MS,
+                "request_disclosed_sha256": hex::encode(request_sha256),
+                "response_disclosed_sha256": hex::encode(response_sha256),
+                "signature": hex::encode(signature.to_bytes()),
+            },
+            "provider_name": SERVER_NAME,
+            "request_disclosed": request,
+            "response_disclosed": response,
+        }))
+        .unwrap();
+        let package =
+            build_witnessed_trace_package_bytes(&exchange, "trc-witnessed".to_owned(), &notary_key)
+                .unwrap();
+        (package, notary_key)
+    }
+
+    #[tokio::test]
+    async fn portable_trace_verification_names_a_witnessed_package_evidence_kind() {
+        let (package, notary_key) = witnessed_package();
+        let directory = tempfile::tempdir().unwrap();
+        let response = router(state(directory.path()).await)
+            .oneshot(
+                Request::post("/v1/verify")
+                    .header(header::CONTENT_TYPE, ARCHIVE_CONTENT_TYPE)
+                    .header("x-notary-trusted-notary-key", hex::encode(&notary_key))
+                    .body(Body::from(package))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body: serde_json::Value =
+            serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes())
+                .unwrap();
+        assert_eq!(body["outcome"], "passed");
+        assert_eq!(body["trace_id"], "trc-witnessed");
+        assert_eq!(body["trust_source"], "explicit_key");
+        assert_eq!(body["evidence_kind"], "witnessed");
     }
 
     #[test]
