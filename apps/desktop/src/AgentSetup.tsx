@@ -12,6 +12,14 @@ export const CODEX_CONFIG = codexProfile('http://127.0.0.1:8787/codex');
 
 export const CLAUDE_COMMAND = claudeCommand('http://127.0.0.1:8787/anthropic');
 
+export const MCP_URL = 'http://127.0.0.1:8788/mcp';
+
+const CODEX_MCP_CONFIG = `[mcp_servers.exalto-capture]
+url = "${MCP_URL}"
+default_tools_approval_mode = "writes"`;
+
+const CLAUDE_MCP_COMMAND = `claude mcp add --transport http --scope user exalto-capture ${MCP_URL}`;
+
 export function agentSetupPrompt(client: 'codex' | 'claude') {
   const common = `Help configure my local ${client === 'codex' ? 'Codex CLI' : 'Claude Code CLI'} for Exalto Capture on this Mac. Make the configuration changes for me and explain how to undo them. Preserve unrelated settings and my current default workflow. Use a separate opt-in capture session. Do not read or print credentials, auth caches, or Keychain entries. Do not put a key or token in this conversation, a command argument, a URL, or a config file.
 
@@ -28,12 +36,18 @@ ${CODEX_CONFIG}
 
 API-key variant: use the same exalto-capture profile and provider name, but set base_url = "http://127.0.0.1:8787/openai/v1", replace requires_openai_auth = true with env_key = "OPENAI_API_KEY", and retain wire_api = "responses" and supports_websockets = false. Check only that OPENAI_API_KEY is nonempty; never read or print its value. API billing is separate from subscription usage.
 
-Launch the chosen separate session with codex --profile exalto-capture. Codex owns its login and attaches authorization. Capture does not import credentials. This CLI profile does not configure the desktop app's own chats.`
+Launch the chosen separate session with codex --profile exalto-capture. Codex owns its login and attaches authorization. Capture does not import credentials. This CLI profile does not configure the desktop app's own chats.
+
+Also merge this MCP server into the user config, so Codex can find, seal, and verify my Traces. It asks before any tool that is not read-only:
+${CODEX_MCP_CONFIG}`
       : `Use ANTHROPIC_API_KEY for a separate terminal CLI session. Check only whether that environment variable is nonempty. If missing, ask me to provision it privately in my shell or secret manager. API usage is billed separately from my subscription. Do not forward Claude subscription tokens through Exalto Capture. Keep the existing Claude subscription session and global settings unchanged. Do not alter Claude Desktop's own provider configuration. Prepare this launch command, or a clearly named opt-in shell function with the same behavior:
 
 ${CLAUDE_COMMAND}
 
-The key must be nonempty before launching; never fall back to subscription authentication. Explain that a newly launched CLI session is required.`) +
+The key must be nonempty before launching; never fall back to subscription authentication. Explain that a newly launched CLI session is required.
+
+Also add the Exalto Capture MCP server for my user, so Claude Code can find, seal, and verify my Traces:
+${CLAUDE_MCP_COMMAND}`) +
     `
 
 Do not send a provider request yet, start/stop the local service, or change capture/vault settings. Then return me to Exalto Capture. Configuration alone does not prove capture works: a request sent through the route appears in Capture's Traces.`

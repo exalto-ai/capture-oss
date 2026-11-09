@@ -488,6 +488,9 @@ describe('Exalto Capture desktop shell', () => {
       .element(setup)
       .toHaveValue(expect.stringContaining('Preserve its existing authentication method'));
     await expect
+      .element(setup)
+      .toHaveValue(expect.stringContaining('url = "http://127.0.0.1:8788/mcp"'));
+    await expect
       .element(page.getByRole('button', { name: 'Continue without a test' }))
       .not.toBeInTheDocument();
     await expect.element(page.getByRole('button', { name: 'Open Capture' })).toBeVisible();
