@@ -2,6 +2,7 @@
 
 use std::{
     collections::HashMap,
+    net::{IpAddr, SocketAddr},
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -10,10 +11,11 @@ use anyhow::Result;
 use axum::{
     Json, Router,
     extract::{
-        DefaultBodyLimit, Path, Query, State,
+        DefaultBodyLimit, Path, Query, Request, State,
         rejection::{JsonRejection, QueryRejection},
     },
-    http::{StatusCode, header},
+    http::{HeaderValue, StatusCode, header},
+    middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::get,
 };
@@ -148,9 +150,10 @@ async fn probe_dependencies(state: &AdminState) -> DependencyProbeResult {
         .await
 }
 /// The loopback administration API. It requires no credentials: it listens
-/// only on the configured loopback address, and CORS admits only the
-/// desktop's own web view.
+/// only on the configured loopback address, refuses requests from other web
+/// sites, and CORS admits only the desktop's own web view.
 pub(crate) fn router(state: AdminState) -> Router {
+    let listen = state.config.admin.listen;
     Router::new()
         .route("/healthz", get(health))
         .route("/readyz", get(readiness))
@@ -176,6 +179,10 @@ pub(crate) fn router(state: AdminState) -> Router {
         .method_not_allowed_fallback(|| async { StatusCode::NOT_FOUND })
         .layer(DefaultBodyLimit::max(1024 * 1024))
         .layer(desktop_api_cors())
+        .layer(middleware::from_fn_with_state(
+            listen,
+            reject_cross_site_requests,
+        ))
         .layer(PropagateRequestIdLayer::x_request_id())
         .layer(SetRequestIdLayer::new(
             header::HeaderName::from_static("x-request-id"),
@@ -199,6 +206,54 @@ pub(crate) fn router(state: AdminState) -> Router {
         )))
         .with_state(state)
 }
+/// Refuses browser requests that another web site started. CORS alone only
+/// stops such a page from reading responses: a page can still send a simple
+/// POST, and a DNS-rebinding page, whose own hostname resolves to this
+/// address, is same-origin and reads them too. Browsers always send `Host`,
+/// and send `Origin` on cross-site requests, so a foreign value in either is
+/// refused. Local processes, which send the loopback `Host` and no `Origin`,
+/// are unaffected.
+async fn reject_cross_site_requests(
+    State(listen): State<SocketAddr>,
+    request: Request,
+    next: Next,
+) -> Response {
+    let headers = request.headers();
+    let host_allowed = headers
+        .get(header::HOST)
+        .is_none_or(|host| local_host(host, listen));
+    let origin_allowed = headers.get(header::ORIGIN).is_none_or(desktop_origin);
+    if host_allowed && origin_allowed {
+        return next.run(request).await;
+    }
+    ApiError {
+        status: StatusCode::FORBIDDEN,
+        code: "cross_site_request",
+        message: "Only Exalto Capture and local tools may call this API",
+    }
+    .into_response()
+}
+
+fn local_host(host: &HeaderValue, listen: SocketAddr) -> bool {
+    let Ok(host) = host.to_str() else {
+        return false;
+    };
+    let port = listen.port();
+    let address = match listen.ip() {
+        IpAddr::V4(ip) => format!("{ip}:{port}"),
+        IpAddr::V6(ip) => format!("[{ip}]:{port}"),
+    };
+    host.eq_ignore_ascii_case(&address) || host.eq_ignore_ascii_case(&format!("localhost:{port}"))
+}
+
+fn desktop_origin(origin: &HeaderValue) -> bool {
+    origin.to_str().is_ok_and(|value| {
+        DESKTOP_API_ORIGINS
+            .iter()
+            .any(|allowed| value.eq_ignore_ascii_case(allowed))
+    })
+}
+
 fn desktop_api_cors() -> CorsLayer {
     CorsLayer::new()
         .allow_origin(tower_http::cors::AllowOrigin::predicate(
@@ -230,7 +285,7 @@ fn desktop_api_cors() -> CorsLayer {
         title = "Exalto Capture local administration API",
         license(name = "MIT", identifier = "MIT"),
         version = "1.0.0",
-        description = "Loopback administration API of the desktop app's local capture service. It listens only on the configured loopback address and requires no credentials."
+        description = "Loopback administration API of the desktop app's local capture service. It listens only on the configured loopback address and requires no credentials. It refuses, with 403 cross_site_request, any request whose Host is not that address or localhost on its port, or whose Origin is not the desktop app's own."
     ),
     paths(
         health,
@@ -1407,6 +1462,58 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn admin_routes_refuse_requests_from_other_sites() {
+        let directory = tempfile::tempdir().unwrap();
+        let app = router(state(directory.path()).await);
+        let send = |host: &'static str, origin: Option<&'static str>| {
+            let app = app.clone();
+            async move {
+                let mut request = Request::get("/v1/status").header(header::HOST, host);
+                if let Some(origin) = origin {
+                    request = request.header(header::ORIGIN, origin);
+                }
+                app.oneshot(request.body(Body::empty()).unwrap())
+                    .await
+                    .unwrap()
+            }
+        };
+
+        for (host, origin) in [
+            ("127.0.0.1:8788", None),
+            ("localhost:8788", None),
+            ("LOCALHOST:8788", None),
+            ("127.0.0.1:8788", Some("tauri://localhost")),
+            ("127.0.0.1:8788", Some("http://localhost:1420")),
+        ] {
+            assert_eq!(
+                send(host, origin).await.status(),
+                StatusCode::OK,
+                "{host} {origin:?}"
+            );
+        }
+
+        for (host, origin) in [
+            // DNS rebinding: an attacker's hostname that resolves to loopback.
+            ("rebind.example:8788", None),
+            ("127.0.0.1:8789", None),
+            ("localhost", None),
+            // A cross-site page sending to the real address.
+            ("127.0.0.1:8788", Some("https://attacker.example")),
+            ("127.0.0.1:8788", Some("null")),
+        ] {
+            let response = send(host, origin).await;
+            assert_eq!(
+                response.status(),
+                StatusCode::FORBIDDEN,
+                "{host} {origin:?}"
+            );
+            let body = response.into_body().collect().await.unwrap().to_bytes();
+            let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(body["error"]["code"], "cross_site_request");
+        }
     }
 
     #[tokio::test]

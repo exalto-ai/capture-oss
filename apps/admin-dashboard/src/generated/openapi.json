@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Exalto Capture local administration API",
-    "description": "Loopback administration API of the desktop app's local capture service. It listens only on the configured loopback address and requires no credentials.",
+    "description": "Loopback administration API of the desktop app's local capture service. It listens only on the configured loopback address and requires no credentials. It refuses, with 403 cross_site_request, any request whose Host is not that address or localhost on its port, or whose Origin is not the desktop app's own.",
     "license": {
       "name": "MIT",
       "identifier": "MIT"
