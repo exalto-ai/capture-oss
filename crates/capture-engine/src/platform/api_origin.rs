@@ -106,8 +106,8 @@ mod tests {
         let secure = ApiOrigin::parse("https://EXAMPLE.test:443/").unwrap();
         assert_eq!(secure.to_string(), "https://example.test");
         assert_eq!(
-            secure.api_url("/api/device-session").as_str(),
-            "https://example.test/api/device-session"
+            secure.api_url("/api/registry").as_str(),
+            "https://example.test/api/registry"
         );
         assert_eq!(
             ApiOrigin::parse("http://[::1]:8787").unwrap().to_string(),

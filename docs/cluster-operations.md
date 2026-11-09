@@ -45,7 +45,7 @@ Every provider request authenticates as an organization with `Capture-Authorizat
   organization = "acme"
   ```
 
-- `kind = "hosted"`: tokens are Exalto API keys or Device access tokens with the `capture:request` scope, checked against the configured Exalto API origin (`CAPTURE_PLATFORM_API_ORIGIN`). Each replica caches a successful check for 60 seconds, so a revoked credential can keep working for up to a minute. Failed checks are not cached.
+- `kind = "hosted"`: tokens are Exalto API keys with the `capture:request` scope, checked against the configured Exalto API origin (`CAPTURE_PLATFORM_API_ORIGIN`). Each replica caches a successful check for 60 seconds, so a revoked credential can keep working for up to a minute. Failed checks are not cached.
 
 The admin routes serve only the `default` organization, so the reference setup's token records for `default`.
 

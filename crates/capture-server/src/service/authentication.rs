@@ -107,9 +107,8 @@ fn token_digest(token: &str) -> [u8; 32] {
     Sha256::digest(token.as_bytes()).into()
 }
 
-/// Accepts Exalto credentials (API keys and Device access tokens) with the
-/// `capture:request` scope by asking capture-api which organization each
-/// one records for.
+/// Accepts Exalto API keys with the `capture:request` scope by asking
+/// capture-api which organization each one records for.
 ///
 /// Successful answers are cached by the token's SHA-256 digest for
 /// [`HOSTED_CACHE_TTL`], so a revoked credential keeps working on a replica
