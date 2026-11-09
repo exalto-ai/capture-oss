@@ -869,7 +869,7 @@
           "local-admin"
         ],
         "summary": "Get a Trace",
-        "description": "Returns one continuing Trace with capture facts, current state and operational status, retained evidence facts, notarization attempt history, and its canonical share summary.",
+        "description": "Returns one continuing Trace with capture facts, current state and operational status, retained evidence facts, and notarization attempt history.",
         "operationId": "trace",
         "parameters": [
           {
@@ -934,7 +934,7 @@
           "local-admin"
         ],
         "summary": "Delete a local Trace",
-        "description": "Idempotently removes one terminal Trace and its private local artifacts. Active capture, sealing, share verification, or enabled public sharing must finish or be stopped first. An expired share whose hosted access is already disabled can be removed safely. This action does not delete a separately retained hosted Trace.",
+        "description": "Idempotently removes one terminal Trace and its private local artifacts. Active capture or sealing must finish first. This action does not delete a separately retained hosted Trace.",
         "operationId": "delete_trace",
         "parameters": [
           {
@@ -1920,23 +1920,6 @@
           }
         }
       },
-      "ShareProgress": {
-        "type": "string",
-        "enum": [
-          "verifying",
-          "shared",
-          "stopped",
-          "rejected",
-          "failed"
-        ]
-      },
-      "ShareVisibility": {
-        "type": "string",
-        "enum": [
-          "unlisted",
-          "listed"
-        ]
-      },
       "StatusResponse": {
         "type": "object",
         "required": [
@@ -2160,8 +2143,7 @@
             "type": "object",
             "required": [
               "artifacts",
-              "notarization",
-              "share"
+              "notarization"
             ],
             "properties": {
               "artifacts": {
@@ -2177,16 +2159,6 @@
                   },
                   {
                     "$ref": "#/components/schemas/TechnicalOperation"
-                  }
-                ]
-              },
-              "share": {
-                "oneOf": [
-                  {
-                    "type": "null"
-                  },
-                  {
-                    "$ref": "#/components/schemas/TraceShare"
                   }
                 ]
               }
@@ -2222,65 +2194,6 @@
               "string",
               "null"
             ]
-          }
-        }
-      },
-      "TraceShare": {
-        "type": "object",
-        "required": [
-          "trace_id",
-          "progress",
-          "visibility",
-          "access_enabled",
-          "password_protected",
-          "updated_at_unix_ms"
-        ],
-        "properties": {
-          "access_enabled": {
-            "type": "boolean"
-          },
-          "expires_at_unix_ms": {
-            "type": [
-              "integer",
-              "null"
-            ],
-            "format": "int64",
-            "minimum": 0
-          },
-          "failure_code": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "package_url": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "password_protected": {
-            "type": "boolean"
-          },
-          "progress": {
-            "$ref": "#/components/schemas/ShareProgress"
-          },
-          "share_url": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "trace_id": {
-            "type": "string"
-          },
-          "updated_at_unix_ms": {
-            "type": "integer",
-            "format": "int64",
-            "minimum": 0
-          },
-          "visibility": {
-            "$ref": "#/components/schemas/ShareVisibility"
           }
         }
       },

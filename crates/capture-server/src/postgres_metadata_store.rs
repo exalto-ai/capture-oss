@@ -7,8 +7,8 @@
 //! Every organization's metadata shares one database. Isolation is enforced
 //! here, not by row-level security: every query that reads or writes a Trace,
 //! operation, event or capture setting names the organization explicitly, and
-//! child rows (artifacts, attempts, search documents, shares) are reached only
-//! through a parent row of that organization in the same statement.
+//! child rows (artifacts, attempts, search documents) are reached only through
+//! a parent row of that organization in the same statement.
 
 use std::{sync::Arc, time::Duration};
 
@@ -27,7 +27,7 @@ use crate::{
     metadata::{
         CaptureCompletion, CaptureMode, Event, EventFilters, EventSnapshot, IncompleteCapture,
         MetadataCounts, NewTrace, Operation, OperationAttempt, OperationFilters, RegistrySnapshot,
-        TerminalOperationResult, TraceFilters, TraceShareRecord, TraceSummary, trace_search_parts,
+        TerminalOperationResult, TraceFilters, TraceSummary, trace_search_parts,
     },
     metadata_store::{
         CaptureClaim, CaptureRecoveryClaim, MetadataResult, MetadataStore, MetadataStoreError,
@@ -40,14 +40,16 @@ use crate::{
 
 const JOURNAL: &str = "captured.schema_migrations";
 const MIGRATION_LOCK_NAMESPACE: &str = "ecp/captured-postgres-migrations/v1";
-const LATEST_SCHEMA_VERSION: i64 = 4;
+const LATEST_SCHEMA_VERSION: i64 = 5;
 const INITIAL_MIGRATION: &str = include_str!("../migrations-postgres-daemon/0001_initial.sql");
 const CAPTURE_MODES_MIGRATION: &str =
     include_str!("../migrations-postgres-daemon/0002_capture_modes.sql");
 const ORGANIZATIONS_MIGRATION: &str =
     include_str!("../migrations-postgres-daemon/0003_organizations.sql");
 const VAULT_PIN_MIGRATION: &str = include_str!("../migrations-postgres-daemon/0004_vault_pin.sql");
-const MIGRATIONS: [(i64, &str, &str); 4] = [
+const DROP_TRACE_SHARES_MIGRATION: &str =
+    include_str!("../migrations-postgres-daemon/0005_drop_trace_shares.sql");
+const MIGRATIONS: [(i64, &str, &str); 5] = [
     (1, "initial captured metadata schema", INITIAL_MIGRATION),
     (
         2,
@@ -56,6 +58,7 @@ const MIGRATIONS: [(i64, &str, &str); 4] = [
     ),
     (3, "organizations", ORGANIZATIONS_MIGRATION),
     (4, "pin only the vault key", VAULT_PIN_MIGRATION),
+    (5, "drop trace shares", DROP_TRACE_SHARES_MIGRATION),
 ];
 
 /// A pooled PostgreSQL metadata backend whose schema has already been migrated.
@@ -243,8 +246,8 @@ async fn migrate_database_through(
     .fetch_all(&mut *transaction)
     .await
     .context("reading daemon migration journal")?;
-    // A journal ahead of this binary is a newer release's, which keeps its
-    // migrations compatible with this one: there is nothing to apply.
+    // A journal ahead of this binary is a newer release's: there is nothing to
+    // apply.
     for (index, (version, description, migration)) in migrations.iter().enumerate() {
         let checksum = hex::encode(Sha256::digest(migration.as_bytes()));
         if let Some(row) = rows.get(index) {
@@ -345,8 +348,8 @@ fn pg_ssl_mode(mode: PostgresSslMode) -> sqlx::postgres::PgSslMode {
 }
 
 /// Refuses to start before `capture-server migrate` has applied every
-/// migration this binary knows. A newer release's migrations stay compatible
-/// with it, so a journal ahead of this binary is fine.
+/// migration this binary knows. A journal ahead of this binary is a newer
+/// release's, and is accepted so that a rolling deploy can finish.
 async fn require_migrated_schema(pool: &PgPool) -> MetadataResult<()> {
     let journal_exists: bool =
         sqlx::query_scalar(&format!("SELECT to_regclass('{JOURNAL}') IS NOT NULL"))
@@ -542,22 +545,6 @@ fn event_from_row(row: &PgRow) -> anyhow::Result<Event> {
         operation_id: row.try_get("operation_id")?,
         severity: row.try_get("severity")?,
         message: row.try_get("message")?,
-    })
-}
-
-fn trace_share_from_row(row: &PgRow) -> anyhow::Result<TraceShareRecord> {
-    Ok(TraceShareRecord {
-        trace_id: row.try_get("trace_id")?,
-        hosted_trace_id: row.try_get("hosted_trace_id")?,
-        progress: row.try_get("progress")?,
-        visibility: row.try_get("visibility")?,
-        access_enabled: row.try_get("access_enabled")?,
-        password_protected: row.try_get("password_protected")?,
-        expires_at_unix_ms: row_optional_u64(row, "expires_at_unix_ms")?,
-        failure_code: row.try_get("failure_code")?,
-        share_url: row.try_get("share_url")?,
-        package_url: row.try_get("package_url")?,
-        updated_at_unix_ms: row_u64(row, "updated_at_unix_ms")?,
     })
 }
 
@@ -818,8 +805,8 @@ fn settings_from_row(row: &PgRow) -> MetadataResult<(CaptureMode, bool)> {
 }
 
 /// A server records captures and notarizations only through a replica's
-/// claimed writes, and the cluster manages auto-seal, Trace deletion and
-/// sharing, so the organization view refuses those local mutations.
+/// claimed writes, and the cluster manages auto-seal and Trace deletion, so
+/// the organization view refuses those local mutations.
 fn server_requires_claim() -> MetadataStoreError {
     MetadataStoreError::InvalidInput("server_requires_claim")
 }
@@ -1145,35 +1132,6 @@ impl MetadataStore for PostgresOrganizationStore {
             capturing: value("capturing").map_err(db)?,
             capture_failed: value("capture_failed").map_err(db)?,
         })
-    }
-
-    async fn trace_share(&self, trace_id: &str) -> MetadataResult<Option<TraceShareRecord>> {
-        validate_trace_id(trace_id)?;
-        sqlx::query(
-            "SELECT s.trace_id, s.hosted_trace_id, s.progress, s.visibility, s.access_enabled,
-                    s.password_protected, s.expires_at_unix_ms, s.failure_code,
-                    s.share_url, s.package_url, s.updated_at_unix_ms
-             FROM captured.trace_shares s
-             JOIN captured.traces t ON t.trace_id = s.trace_id
-             WHERE s.trace_id = $1 AND t.organization_id = $2",
-        )
-        .bind(trace_id)
-        .bind(self.organization.as_str())
-        .fetch_optional(self.pool())
-        .await
-        .map_err(|error| db(anyhow!(error).context("querying trace share")))?
-        .as_ref()
-        .map(trace_share_from_row)
-        .transpose()
-        .map_err(db)
-    }
-
-    async fn put_trace_share(&self, _share: TraceShareRecord) -> MetadataResult<()> {
-        Err(server_requires_claim())
-    }
-
-    async fn delete_trace_share(&self, _trace_id: &str) -> MetadataResult<bool> {
-        Err(server_requires_claim())
     }
 
     async fn enqueue_notarization(
@@ -2948,7 +2906,6 @@ mod tests {
         for id in [failed, running, queued, active] {
             assert!(second.trace(id).await.unwrap().is_none());
             assert!(second.artifacts(id).await.unwrap().is_empty());
-            assert!(second.trace_share(id).await.unwrap().is_none());
         }
         for operation in [
             &failed_claim.operation,
@@ -3918,7 +3875,13 @@ mod tests {
                 .fetch_all(&pool)
                 .await
                 .unwrap();
-        assert_eq!(versions, [1, 2, 3, 4]);
+        assert_eq!(versions, [1, 2, 3, 4, 5]);
+        let trace_shares: bool =
+            sqlx::query_scalar("SELECT to_regclass('captured.trace_shares') IS NOT NULL")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert!(!trace_shares, "migration 5 drops share metadata");
         for table in ["traces", "operations", "events"] {
             let organizations: Vec<String> = sqlx::query_scalar(&format!(
                 "SELECT DISTINCT organization_id FROM captured.{table}"

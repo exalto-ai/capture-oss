@@ -489,7 +489,6 @@ mod tests {
             ("GET", "/assets/dashboard.js"),
             ("GET", "/openapi.json"),
             ("GET", "/v1/account"),
-            ("POST", "/v1/traces/trc-example/share"),
         ] {
             let (status, _, _) = send(
                 &listener.app,

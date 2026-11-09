@@ -32,7 +32,7 @@ use crate::{
     artifact_store::{ArtifactKey, ArtifactKind, ArtifactRecord, ArtifactStoreError},
     metadata::{
         CaptureMode, Event, EventFilters, EvidenceKind, Operation, OperationAttempt,
-        OperationFilters, RegistrySnapshot, TraceFilters, TracePagePosition, TraceShareRecord,
+        OperationFilters, RegistrySnapshot, TraceFilters, TracePagePosition,
         TraceSummary as StoredTraceSummary,
     },
     metadata_store::{
@@ -50,8 +50,8 @@ pub struct ApiContext {
     trust: Arc<dyn NotaryTrust>,
     /// Wakes the notarization worker when an operation is queued.
     work_available: Arc<Notify>,
-    /// Keeps Trace deletion from racing sealing, sharing and retained-package
-    /// reads. A cluster cannot delete Traces, so a cluster replica has none.
+    /// Keeps Trace deletion from racing sealing and retained-package reads. A
+    /// cluster cannot delete Traces, so a cluster replica has none.
     trace_lifecycle: Option<Arc<Mutex<()>>>,
     /// A cluster replica manages auto-seal and Trace deletion itself, so those
     /// routes refuse changes.
@@ -361,7 +361,7 @@ pub async fn traces(
     }))
 }
 
-#[utoipa::path(get, path = "/v1/traces/{trace_id}", summary = "Get a Trace", description = "Returns one continuing Trace with capture facts, current state and operational status, retained evidence facts, notarization attempt history, and its canonical share summary.", params(("trace_id" = String, Path)), responses((status = 200, body = TraceDetail), (status = 404, body = ErrorEnvelope), (status = 503, body = ErrorEnvelope)), tag = "local-admin")]
+#[utoipa::path(get, path = "/v1/traces/{trace_id}", summary = "Get a Trace", description = "Returns one continuing Trace with capture facts, current state and operational status, retained evidence facts, and notarization attempt history.", params(("trace_id" = String, Path)), responses((status = 200, body = TraceDetail), (status = 404, body = ErrorEnvelope), (status = 503, body = ErrorEnvelope)), tag = "local-admin")]
 pub async fn trace(
     Api(state): Api,
     Path(trace_id): Path<String>,
@@ -399,13 +399,6 @@ pub async fn trace(
         ),
         None => None,
     };
-    let share = state
-        .storage
-        .metadata
-        .trace_share(&trace_id)
-        .await
-        .map_err(|_| ApiError::internal("metadata_query_failed"))?
-        .map(TraceShare::from_record);
     Ok(Json(TraceDetail {
         trace: capture.into(),
         artifacts: artifacts
@@ -417,7 +410,6 @@ pub async fn trace(
             })
             .collect(),
         notarization,
-        share,
     }))
 }
 
@@ -426,7 +418,6 @@ pub async fn trace(
 pub enum TraceDeletionSkipReason {
     CaptureActive,
     SealingActive,
-    ShareActive,
     ArtifactCleanupFailed,
 }
 
@@ -458,18 +449,12 @@ pub async fn delete_local_trace_unlocked(
                 TraceDeletionSkipReason::SealingActive,
             ));
         }
-        TraceDeletionPreparation::ShareActive => {
-            return Ok(LocalTraceDeletion::Skipped(
-                TraceDeletionSkipReason::ShareActive,
-            ));
-        }
     }
 
     // The caller holds the lifecycle gate across this preflight, artifact
-    // cleanup, and metadata commit. Sealing and sharing therefore cannot
-    // activate between the safety check and deletion. Keep metadata until
-    // both exact artifact keys are gone so a failed cleanup remains retryable
-    // by exact Trace ID.
+    // cleanup, and metadata commit. Sealing therefore cannot activate between
+    // the safety check and deletion. Keep metadata until both exact artifact
+    // keys are gone so a failed cleanup remains retryable by exact Trace ID.
     let mut cleanup_failed = false;
     for kind in [ArtifactKind::CaptureCheckpoint, ArtifactKind::TracePackage] {
         let key = ArtifactKey::new(trace_id, kind)
@@ -500,13 +485,10 @@ pub async fn delete_local_trace_unlocked(
         TraceDeletionOutcome::NotarizationActive => Ok(LocalTraceDeletion::Skipped(
             TraceDeletionSkipReason::SealingActive,
         )),
-        TraceDeletionOutcome::ShareActive => Ok(LocalTraceDeletion::Skipped(
-            TraceDeletionSkipReason::ShareActive,
-        )),
     }
 }
 
-#[utoipa::path(delete, path = "/v1/traces/{trace_id}", summary = "Delete a local Trace", description = "Idempotently removes one terminal Trace and its private local artifacts. Active capture, sealing, share verification, or enabled public sharing must finish or be stopped first. An expired share whose hosted access is already disabled can be removed safely. This action does not delete a separately retained hosted Trace.", params(("trace_id" = String, Path)), responses((status = 204, description = "Local Trace and owned artifacts deleted, or already absent"), (status = 400, body = ErrorEnvelope), (status = 409, body = ErrorEnvelope), (status = 503, body = ErrorEnvelope)), tag = "local-admin")]
+#[utoipa::path(delete, path = "/v1/traces/{trace_id}", summary = "Delete a local Trace", description = "Idempotently removes one terminal Trace and its private local artifacts. Active capture or sealing must finish first. This action does not delete a separately retained hosted Trace.", params(("trace_id" = String, Path)), responses((status = 204, description = "Local Trace and owned artifacts deleted, or already absent"), (status = 400, body = ErrorEnvelope), (status = 409, body = ErrorEnvelope), (status = 503, body = ErrorEnvelope)), tag = "local-admin")]
 pub async fn delete_trace(
     Api(state): Api,
     Path(trace_id): Path<String>,
@@ -515,8 +497,6 @@ pub async fn delete_trace(
     if state.cluster_managed {
         return Err(ApiError::conflict("trace_deletion_cluster_managed"));
     }
-    // Sharing calls hold this gate across their hosted request and metadata
-    // update. Deletion therefore cannot strand newly activated public access.
     let _lifecycle = state.lifecycle_gate().await;
     match delete_local_trace_unlocked(&state, &trace_id).await? {
         LocalTraceDeletion::Deleted => Ok(StatusCode::NO_CONTENT),
@@ -525,9 +505,6 @@ pub async fn delete_trace(
         }
         LocalTraceDeletion::Skipped(TraceDeletionSkipReason::SealingActive) => {
             Err(ApiError::conflict("trace_sealing_active"))
-        }
-        LocalTraceDeletion::Skipped(TraceDeletionSkipReason::ShareActive) => {
-            Err(ApiError::trace_share_active_for_deletion())
         }
         LocalTraceDeletion::Skipped(TraceDeletionSkipReason::ArtifactCleanupFailed) => Err(
             ApiError::service_unavailable("trace_artifact_deletion_failed"),
@@ -977,13 +954,6 @@ pub async fn activity(
     }))
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Serialize, ToSchema)]
-#[serde(rename_all = "lowercase")]
-pub enum ShareVisibility {
-    Unlisted,
-    Listed,
-}
-
 pub async fn artifact_record(
     persistence: &Storage,
     trace_id: &str,
@@ -1240,8 +1210,6 @@ pub struct TraceDetail {
     artifacts: Vec<EvidenceArtifact>,
     #[schema(required)]
     notarization: Option<TechnicalOperation>,
-    #[schema(required)]
-    share: Option<TraceShare>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -1439,69 +1407,6 @@ pub struct VerificationResult {
     failure_code: Option<String>,
 }
 
-#[derive(Clone, Copy, Debug, Serialize, ToSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum ShareProgress {
-    Verifying,
-    Shared,
-    Stopped,
-    Rejected,
-    Failed,
-}
-
-impl ShareProgress {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Verifying => "verifying",
-            Self::Shared => "shared",
-            Self::Stopped => "stopped",
-            Self::Rejected => "rejected",
-            Self::Failed => "failed",
-        }
-    }
-}
-
-#[derive(Debug, Serialize, ToSchema)]
-pub struct TraceShare {
-    trace_id: String,
-    progress: ShareProgress,
-    visibility: ShareVisibility,
-    access_enabled: bool,
-    password_protected: bool,
-    expires_at_unix_ms: Option<u64>,
-    failure_code: Option<String>,
-    share_url: Option<String>,
-    package_url: Option<String>,
-    updated_at_unix_ms: u64,
-}
-
-impl TraceShare {
-    pub fn from_record(record: TraceShareRecord) -> Self {
-        Self {
-            trace_id: record.trace_id,
-            progress: match record.progress.as_str() {
-                "verifying" => ShareProgress::Verifying,
-                "shared" => ShareProgress::Shared,
-                "stopped" => ShareProgress::Stopped,
-                "rejected" => ShareProgress::Rejected,
-                _ => ShareProgress::Failed,
-            },
-            visibility: if record.visibility == "listed" {
-                ShareVisibility::Listed
-            } else {
-                ShareVisibility::Unlisted
-            },
-            access_enabled: record.access_enabled,
-            password_protected: record.password_protected,
-            expires_at_unix_ms: record.expires_at_unix_ms,
-            failure_code: record.failure_code,
-            share_url: record.share_url,
-            package_url: record.package_url,
-            updated_at_unix_ms: record.updated_at_unix_ms,
-        }
-    }
-}
-
 #[derive(Debug, Serialize, ToSchema)]
 pub struct ErrorBody {
     code: String,
@@ -1580,13 +1485,6 @@ impl ApiError {
             status: StatusCode::CONFLICT,
             code: "trace_witnessed_sealed",
             message: "This Trace was sealed by its witness receipt when it was captured",
-        }
-    }
-    pub fn trace_share_active_for_deletion() -> Self {
-        Self {
-            status: StatusCode::CONFLICT,
-            code: "trace_share_active",
-            message: "Stop sharing this Trace before deleting its local copy",
         }
     }
     pub fn artifact_conflict() -> Self {

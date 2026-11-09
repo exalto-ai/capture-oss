@@ -33,10 +33,9 @@ use capture_engine::{
         ActivityItem, ActivityPage, ApiContext, ApiError, AutoSealSettingResponse,
         CaptureSettingResponse, ErrorBody, ErrorEnvelope, EvidenceArtifact, NotarizationAttempt,
         NotarizationRequest, OperationProgressResponse, OperationProofProgressResponse,
-        ShareProgress, ShareVisibility, TechnicalOperation, TraceContent, TraceDetail,
-        TraceOperationalStatus, TracePage, TraceShare, TraceState, TraceSummary,
-        UpdateAutoSealSetting, UpdateCaptureSetting, VerificationOutcome, VerificationResult,
-        now_ms,
+        TechnicalOperation, TraceContent, TraceDetail, TraceOperationalStatus, TracePage,
+        TraceState, TraceSummary, UpdateAutoSealSetting, UpdateCaptureSetting, VerificationOutcome,
+        VerificationResult, now_ms,
     },
 };
 
@@ -290,8 +289,7 @@ fn embedded_dashboard_response(path: &str) -> Response {
         TechnicalOperation, OperationProgressResponse,
         OperationProofProgressResponse, NotarizationAttempt,
         NotarizationRequest, ActivityItem, ActivityPage, TraceContent, VerificationResult,
-        VerificationOutcome, ShareVisibility, ShareProgress, TraceShare,
-        ErrorBody, ErrorEnvelope
+        VerificationOutcome, ErrorBody, ErrorEnvelope
     )),
     modifiers(&SecurityAddon),
     tags((name = "local-admin", description = "Loopback-only administration"))
@@ -985,11 +983,7 @@ mod tests {
         let body = serde_json::to_value(openapi_document()).unwrap();
         assert_eq!(body["openapi"], "3.1.0");
         assert!(body["components"]["securitySchemes"]["basicAuth"].is_object());
-        for path in [
-            "/v1/account",
-            "/v1/account/{request_id}",
-            "/v1/traces/{trace_id}/share",
-        ] {
+        for path in ["/v1/account", "/v1/account/{request_id}"] {
             assert!(
                 body["paths"].get(path).is_none(),
                 "server must not serve {path}"

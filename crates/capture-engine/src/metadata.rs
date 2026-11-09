@@ -194,23 +194,6 @@ pub struct Event {
     pub message: String,
 }
 
-/// Durable local association between a trace and its one canonical hosted share.
-/// Secret inputs are never persisted here.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct TraceShareRecord {
-    pub trace_id: String,
-    pub hosted_trace_id: String,
-    pub progress: String,
-    pub visibility: String,
-    pub access_enabled: bool,
-    pub password_protected: bool,
-    pub expires_at_unix_ms: Option<u64>,
-    pub failure_code: Option<String>,
-    pub share_url: Option<String>,
-    pub package_url: Option<String>,
-    pub updated_at_unix_ms: u64,
-}
-
 #[derive(Clone, Debug, Default)]
 pub struct TraceFilters {
     pub query: Option<String>,

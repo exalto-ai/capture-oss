@@ -13,7 +13,7 @@ use crate::artifact_store::{ArtifactKey, ArtifactKind, ArtifactLocator, Artifact
 use crate::metadata::{
     CaptureCompletion, CaptureMode, Event, EventFilters, IncompleteCapture, MetadataCounts,
     NewTrace, Operation, OperationAttempt, OperationFilters, TerminalOperationResult, TraceFilters,
-    TraceShareRecord, TraceSummary, trace_search_expression,
+    TraceSummary, trace_search_expression,
 };
 use crate::metadata_store::{TraceDeletionOutcome, TraceDeletionPreparation};
 
@@ -593,17 +593,6 @@ impl SqliteMetadata {
         if matches!(notarization_status.as_str(), "queued" | "running") || active_operation {
             return Ok(TraceDeletionPreparation::NotarizationActive);
         }
-        let active_share = connection
-            .query_row(
-                "SELECT progress, access_enabled FROM trace_shares WHERE trace_id = ?",
-                params![trace_id],
-                |row| Ok((row.get::<_, String>(0)?, row.get::<_, bool>(1)?)),
-            )
-            .optional()?
-            .is_some_and(|(progress, access_enabled)| progress == "verifying" || access_enabled);
-        if active_share {
-            return Ok(TraceDeletionPreparation::ShareActive);
-        }
         Ok(TraceDeletionPreparation::Ready)
     }
 
@@ -635,17 +624,6 @@ impl SqliteMetadata {
         if matches!(notarization_status.as_str(), "queued" | "running") || active_operation {
             return Ok(TraceDeletionOutcome::NotarizationActive);
         }
-        let active_share = transaction
-            .query_row(
-                "SELECT progress, access_enabled FROM trace_shares WHERE trace_id = ?",
-                params![trace_id],
-                |row| Ok((row.get::<_, String>(0)?, row.get::<_, bool>(1)?)),
-            )
-            .optional()?
-            .is_some_and(|(progress, access_enabled)| progress == "verifying" || access_enabled);
-        if active_share {
-            return Ok(TraceDeletionOutcome::ShareActive);
-        }
 
         // Delete references in dependency order. Activity belongs to the
         // private local Trace, so it must not retain identifiers after removal.
@@ -669,10 +647,6 @@ impl SqliteMetadata {
         )?;
         transaction.execute(
             "DELETE FROM artifacts WHERE trace_id = ?",
-            params![trace_id],
-        )?;
-        transaction.execute(
-            "DELETE FROM trace_shares WHERE trace_id = ?",
             params![trace_id],
         )?;
         transaction.execute(
@@ -735,61 +709,6 @@ impl SqliteMetadata {
                 },
             )
             .map_err(Into::into)
-    }
-
-    pub fn trace_share(&self, trace_id: &str) -> Result<Option<TraceShareRecord>> {
-        let connection = self.connection()?;
-        connection
-            .query_row(
-                "SELECT trace_id, hosted_trace_id, progress, visibility, access_enabled,
-                        password_protected, expires_at_unix_ms, failure_code,
-                        share_url, package_url, updated_at_unix_ms
-                 FROM trace_shares WHERE trace_id = ?",
-                params![trace_id],
-                trace_share_from_row,
-            )
-            .optional()
-            .map_err(Into::into)
-    }
-
-    pub fn put_trace_share(&self, share: &TraceShareRecord) -> Result<()> {
-        let connection = self.connection()?;
-        connection.execute(
-            "INSERT INTO trace_shares (
-                trace_id, hosted_trace_id, progress, visibility, access_enabled, password_protected,
-                expires_at_unix_ms, failure_code, share_url, package_url, updated_at_unix_ms
-             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-             ON CONFLICT(trace_id) DO UPDATE SET
-                hosted_trace_id = excluded.hosted_trace_id, progress = excluded.progress,
-                visibility = excluded.visibility, access_enabled = excluded.access_enabled,
-                password_protected = excluded.password_protected,
-                expires_at_unix_ms = excluded.expires_at_unix_ms,
-                failure_code = excluded.failure_code, share_url = excluded.share_url,
-                package_url = excluded.package_url,
-                updated_at_unix_ms = excluded.updated_at_unix_ms",
-            params![
-                share.trace_id,
-                share.hosted_trace_id,
-                share.progress,
-                share.visibility,
-                share.access_enabled,
-                share.password_protected,
-                share.expires_at_unix_ms.map(i64::try_from).transpose()?,
-                share.failure_code,
-                share.share_url,
-                share.package_url,
-                i64::try_from(share.updated_at_unix_ms)?,
-            ],
-        )?;
-        Ok(())
-    }
-
-    pub fn delete_trace_share(&self, trace_id: &str) -> Result<bool> {
-        let connection = self.connection()?;
-        Ok(connection.execute(
-            "DELETE FROM trace_shares WHERE trace_id = ?",
-            params![trace_id],
-        )? > 0)
     }
 
     /// Queues, resumes, or returns the one durable notarization operation for
@@ -1542,21 +1461,6 @@ fn apply_initial_migration(transaction: &rusqlite::Transaction<'_>) -> Result<()
                 message TEXT NOT NULL
             );
             CREATE INDEX events_created_idx ON events(created_at_unix_ms DESC);
-            CREATE TABLE trace_shares (
-                trace_id TEXT PRIMARY KEY REFERENCES traces(trace_id) ON DELETE CASCADE,
-                hosted_trace_id TEXT NOT NULL UNIQUE CHECK (length(hosted_trace_id) BETWEEN 1 AND 256),
-                progress TEXT NOT NULL CHECK (
-                    progress IN ('verifying', 'shared', 'stopped', 'rejected', 'failed')
-                ),
-                visibility TEXT NOT NULL CHECK (visibility IN ('listed', 'unlisted')),
-                access_enabled INTEGER NOT NULL CHECK (access_enabled IN (0, 1)),
-                password_protected INTEGER NOT NULL CHECK (password_protected IN (0, 1)),
-                expires_at_unix_ms INTEGER,
-                failure_code TEXT,
-                share_url TEXT,
-                package_url TEXT,
-                updated_at_unix_ms INTEGER NOT NULL
-            );
             CREATE TABLE settings (
                 singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
                 capture_enabled INTEGER NOT NULL CHECK (capture_enabled IN (0, 1)),
@@ -1850,43 +1754,6 @@ fn event_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Event> {
         operation_id: row.get("operation_id")?,
         severity: row.get("severity")?,
         message: row.get("message")?,
-    })
-}
-
-fn trace_share_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<TraceShareRecord> {
-    let expires_at_unix_ms = row
-        .get::<_, Option<i64>>("expires_at_unix_ms")?
-        .map(TryInto::try_into)
-        .transpose()
-        .map_err(|error| {
-            rusqlite::Error::FromSqlConversionFailure(
-                6,
-                rusqlite::types::Type::Integer,
-                Box::new(error),
-            )
-        })?;
-    let updated_at_unix_ms = row
-        .get::<_, i64>("updated_at_unix_ms")?
-        .try_into()
-        .map_err(|error| {
-            rusqlite::Error::FromSqlConversionFailure(
-                10,
-                rusqlite::types::Type::Integer,
-                Box::new(error),
-            )
-        })?;
-    Ok(TraceShareRecord {
-        trace_id: row.get("trace_id")?,
-        hosted_trace_id: row.get("hosted_trace_id")?,
-        progress: row.get("progress")?,
-        visibility: row.get("visibility")?,
-        access_enabled: row.get("access_enabled")?,
-        password_protected: row.get("password_protected")?,
-        expires_at_unix_ms,
-        failure_code: row.get("failure_code")?,
-        share_url: row.get("share_url")?,
-        package_url: row.get("package_url")?,
-        updated_at_unix_ms,
     })
 }
 

@@ -15,7 +15,7 @@ use crate::{
     metadata::{
         CaptureCompletion, CaptureMode, EventFilters, EventSnapshot, IncompleteCapture,
         MetadataCounts, NewTrace, Operation, OperationAttempt, OperationFilters,
-        TerminalOperationResult, TraceFilters, TraceShareRecord, TraceSummary,
+        TerminalOperationResult, TraceFilters, TraceSummary,
     },
     organization::OrganizationId,
 };
@@ -166,7 +166,6 @@ pub enum TraceDeletionOutcome {
     NotFound,
     CaptureActive,
     NotarizationActive,
-    ShareActive,
 }
 
 /// Result of atomically checking a Trace for local deletion.
@@ -180,7 +179,6 @@ pub enum TraceDeletionPreparation {
     NotFound,
     CaptureActive,
     NotarizationActive,
-    ShareActive,
 }
 
 /// Complete metadata behavior required by every local-daemon backend.
@@ -231,11 +229,10 @@ pub trait MetadataStore: Send + Sync {
     async fn traces(&self, filters: TraceFilters) -> MetadataResult<Vec<TraceSummary>>;
     async fn trace(&self, trace_id: &str) -> MetadataResult<Option<TraceSummary>>;
     async fn artifacts(&self, trace_id: &str) -> MetadataResult<Vec<ArtifactRecord>>;
-    /// Checks that one Trace has no active capture, notarization, or share.
+    /// Checks that one Trace has no active capture or notarization.
     ///
     /// The caller must serialize this preflight with every local operation
-    /// which can activate sealing or sharing until [`Self::delete_trace`]
-    /// finishes.
+    /// which can activate sealing until [`Self::delete_trace`] finishes.
     async fn prepare_trace_deletion(
         &self,
         trace_id: &str,
@@ -244,14 +241,9 @@ pub trait MetadataStore: Send + Sync {
     ///
     /// Implementations must refuse both an in-progress capture and a queued or
     /// running notarization. A successful deletion also removes dependent
-    /// operations, attempts, events, search documents, artifacts, and sharing
-    /// metadata.
+    /// operations, attempts, events, search documents, and artifacts.
     async fn delete_trace(&self, trace_id: &str) -> MetadataResult<TraceDeletionOutcome>;
     async fn counts(&self) -> MetadataResult<MetadataCounts>;
-
-    async fn trace_share(&self, trace_id: &str) -> MetadataResult<Option<TraceShareRecord>>;
-    async fn put_trace_share(&self, share: TraceShareRecord) -> MetadataResult<()>;
-    async fn delete_trace_share(&self, trace_id: &str) -> MetadataResult<bool>;
 
     async fn enqueue_notarization(
         &self,

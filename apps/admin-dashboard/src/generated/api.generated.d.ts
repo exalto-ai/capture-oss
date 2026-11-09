@@ -265,14 +265,14 @@ export interface paths {
         };
         /**
          * Get a Trace
-         * @description Returns one continuing Trace with capture facts, current state and operational status, retained evidence facts, notarization attempt history, and its canonical share summary.
+         * @description Returns one continuing Trace with capture facts, current state and operational status, retained evidence facts, and notarization attempt history.
          */
         get: operations["trace"];
         put?: never;
         post?: never;
         /**
          * Delete a local Trace
-         * @description Idempotently removes one terminal Trace and its private local artifacts. Active capture, sealing, share verification, or enabled public sharing must finish or be stopped first. An expired share whose hosted access is already disabled can be removed safely. This action does not delete a separately retained hosted Trace.
+         * @description Idempotently removes one terminal Trace and its private local artifacts. Active capture or sealing must finish first. This action does not delete a separately retained hosted Trace.
          */
         delete: operations["delete_trace"];
         options?: never;
@@ -525,10 +525,6 @@ export interface components {
             service: string;
             status: string;
         };
-        /** @enum {string} */
-        ShareProgress: "verifying" | "shared" | "stopped" | "rejected" | "failed";
-        /** @enum {string} */
-        ShareVisibility: "unlisted" | "listed";
         StatusResponse: {
             admin_listener: string;
             admin_origin: string;
@@ -589,27 +585,12 @@ export interface components {
         TraceDetail: components["schemas"]["TraceSummary"] & {
             artifacts: components["schemas"]["EvidenceArtifact"][];
             notarization: null | components["schemas"]["TechnicalOperation"];
-            share: null | components["schemas"]["TraceShare"];
         };
         /** @enum {string} */
         TraceOperationalStatus: "capturing" | "capture_failed" | "needs_attention" | "notarizing" | "notarization_failed" | "notarization_interrupted";
         TracePage: {
             items: components["schemas"]["TraceSummary"][];
             next_cursor?: string | null;
-        };
-        TraceShare: {
-            access_enabled: boolean;
-            /** Format: int64 */
-            expires_at_unix_ms?: number | null;
-            failure_code?: string | null;
-            package_url?: string | null;
-            password_protected: boolean;
-            progress: components["schemas"]["ShareProgress"];
-            share_url?: string | null;
-            trace_id: string;
-            /** Format: int64 */
-            updated_at_unix_ms: number;
-            visibility: components["schemas"]["ShareVisibility"];
         };
         /** @enum {string} */
         TraceState: "captured" | "notarized";

@@ -49,7 +49,6 @@ describe('Notary admin dashboard', () => {
       .toEqual(['Overview', 'Traces4', 'Activity', 'Providers', 'Settings']);
     await expect.element(page.getByText('Captures', { exact: true })).not.toBeInTheDocument();
     await expect.element(page.getByText('Notarizations', { exact: true })).not.toBeInTheDocument();
-    await expect.element(page.getByText('Share', { exact: true })).not.toBeInTheDocument();
   });
 
   test('shows the four canonical trace counts and routes all of them to Traces', async () => {
@@ -203,9 +202,6 @@ describe('Notary admin dashboard', () => {
       .element(page.getByText('Private on the capture server', { exact: true }))
       .toBeVisible();
     await expect.element(page.getByRole('button', { name: 'Copy Trace ID' })).toBeVisible();
-    await expect
-      .element(page.getByRole('button', { name: 'Share', exact: true }))
-      .not.toBeInTheDocument();
     await page.getByRole('tab', { name: 'Sealing' }).click();
     await expect
       .element(page.getByRole('progressbar', { name: 'Private transcript bytes authenticated' }))

@@ -12,7 +12,7 @@ use crate::{
     metadata::{
         CaptureCompletion, CaptureMode, EventFilters, EventSnapshot, IncompleteCapture,
         MetadataCounts, NewTrace, Operation, OperationAttempt, OperationFilters,
-        TerminalOperationResult, TraceFilters, TraceShareRecord, TraceSummary,
+        TerminalOperationResult, TraceFilters, TraceSummary,
     },
     metadata_store::{
         MetadataResult, MetadataStore, MetadataStoreError, TraceDeletionOutcome,
@@ -267,30 +267,6 @@ impl MetadataStore for SqliteMetadataStore {
 
     async fn counts(&self) -> MetadataResult<MetadataCounts> {
         self.blocking(SqliteMetadata::counts).await
-    }
-
-    async fn trace_share(&self, trace_id: &str) -> MetadataResult<Option<TraceShareRecord>> {
-        validate_trace_id(trace_id)?;
-        let trace_id = trace_id.to_owned();
-        self.blocking(move |metadata| metadata.trace_share(&trace_id))
-            .await
-    }
-
-    async fn put_trace_share(&self, share: TraceShareRecord) -> MetadataResult<()> {
-        validate_trace_id(&share.trace_id)?;
-        if let Some(expires_at) = share.expires_at_unix_ms {
-            validate_i64(expires_at, "timestamp_out_of_range")?;
-        }
-        validate_i64(share.updated_at_unix_ms, "timestamp_out_of_range")?;
-        self.blocking(move |metadata| metadata.put_trace_share(&share))
-            .await
-    }
-
-    async fn delete_trace_share(&self, trace_id: &str) -> MetadataResult<bool> {
-        validate_trace_id(trace_id)?;
-        let trace_id = trace_id.to_owned();
-        self.blocking(move |metadata| metadata.delete_trace_share(&trace_id))
-            .await
     }
 
     async fn enqueue_notarization(

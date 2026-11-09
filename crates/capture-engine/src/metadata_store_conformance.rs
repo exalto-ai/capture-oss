@@ -21,7 +21,6 @@ use crate::{
     metadata::{
         CaptureCompletion, CaptureMode, EventFilters, NewTrace, OperationAttempt, OperationFilters,
         OperationPagePosition, TerminalOperationResult, TraceFilters, TracePagePosition,
-        TraceShareRecord,
     },
 };
 
@@ -41,7 +40,6 @@ where
     auto_seal_is_off_by_default_durable_and_evented(make_store()).await;
     capture_lifecycle(make_store().await).await;
     witnessed_capture_is_sealed_on_completion(make_store().await).await;
-    canonical_trace_share_is_durable(make_store().await).await;
     terminal_trace_deletion_is_atomic_and_safe(make_store().await).await;
     preview_search(make_store().await, full_text_search).await;
     capture_filters_pagination_and_counts(make_store().await).await;
@@ -166,144 +164,6 @@ async fn terminal_trace_deletion_is_atomic_and_safe(store: Arc<dyn MetadataStore
         store.delete_trace("trc-delete-notarization").await.unwrap(),
         TraceDeletionOutcome::NotFound
     );
-
-    insert_completed(&store, new_capture("trc-delete-share", 20), 200).await;
-    let active_share = TraceShareRecord {
-        trace_id: "trc-delete-share".into(),
-        hosted_trace_id: "trc-delete-share-hosted".into(),
-        progress: "verifying".into(),
-        visibility: "unlisted".into(),
-        access_enabled: true,
-        password_protected: false,
-        expires_at_unix_ms: None,
-        failure_code: None,
-        share_url: None,
-        package_url: None,
-        updated_at_unix_ms: 21,
-    };
-    store.put_trace_share(active_share.clone()).await.unwrap();
-    assert_eq!(
-        store
-            .prepare_trace_deletion("trc-delete-share")
-            .await
-            .unwrap(),
-        TraceDeletionPreparation::ShareActive
-    );
-    assert_eq!(
-        store.delete_trace("trc-delete-share").await.unwrap(),
-        TraceDeletionOutcome::ShareActive
-    );
-    store
-        .put_trace_share(TraceShareRecord {
-            progress: "stopped".into(),
-            access_enabled: false,
-            updated_at_unix_ms: 22,
-            ..active_share
-        })
-        .await
-        .unwrap();
-    assert_eq!(
-        store
-            .prepare_trace_deletion("trc-delete-share")
-            .await
-            .unwrap(),
-        TraceDeletionPreparation::Ready
-    );
-    assert_eq!(
-        store.delete_trace("trc-delete-share").await.unwrap(),
-        TraceDeletionOutcome::Deleted
-    );
-    assert!(
-        store
-            .trace_share("trc-delete-share")
-            .await
-            .unwrap()
-            .is_none()
-    );
-
-    insert_completed(&store, new_capture("trc-delete-expired-share", 30), 200).await;
-    store
-        .put_trace_share(TraceShareRecord {
-            trace_id: "trc-delete-expired-share".into(),
-            hosted_trace_id: "trc-delete-expired-share-hosted".into(),
-            progress: "shared".into(),
-            visibility: "unlisted".into(),
-            access_enabled: false,
-            password_protected: false,
-            expires_at_unix_ms: Some(29),
-            failure_code: None,
-            share_url: None,
-            package_url: None,
-            updated_at_unix_ms: 30,
-        })
-        .await
-        .unwrap();
-    assert_eq!(
-        store
-            .prepare_trace_deletion("trc-delete-expired-share")
-            .await
-            .unwrap(),
-        TraceDeletionPreparation::Ready
-    );
-    assert_eq!(
-        store
-            .delete_trace("trc-delete-expired-share")
-            .await
-            .unwrap(),
-        TraceDeletionOutcome::Deleted
-    );
-}
-
-async fn canonical_trace_share_is_durable(store: Arc<dyn MetadataStore>) {
-    insert_completed(&store, new_capture("trc-share", 1), 200).await;
-    assert!(store.trace_share("trc-share").await.unwrap().is_none());
-
-    let initial = TraceShareRecord {
-        trace_id: "trc-share".into(),
-        hosted_trace_id: "trc-hosted-one".into(),
-        progress: "verifying".into(),
-        visibility: "unlisted".into(),
-        access_enabled: true,
-        password_protected: false,
-        expires_at_unix_ms: None,
-        failure_code: None,
-        share_url: None,
-        package_url: None,
-        updated_at_unix_ms: 10,
-    };
-    store.put_trace_share(initial.clone()).await.unwrap();
-    assert_eq!(store.trace_share("trc-share").await.unwrap(), Some(initial));
-
-    let updated = TraceShareRecord {
-        hosted_trace_id: "trc-hosted-one".into(),
-        progress: "shared".into(),
-        visibility: "listed".into(),
-        password_protected: true,
-        expires_at_unix_ms: Some(20),
-        share_url: Some("https://notary.example/traces/share-one".into()),
-        package_url: Some(
-            "https://notary.example/api/public/traces/share-one/package.llmtrace".into(),
-        ),
-        updated_at_unix_ms: 11,
-        ..store.trace_share("trc-share").await.unwrap().unwrap()
-    };
-    store.put_trace_share(updated.clone()).await.unwrap();
-    assert_eq!(store.trace_share("trc-share").await.unwrap(), Some(updated));
-    let mut invalid = store.trace_share("trc-share").await.unwrap().unwrap();
-    invalid.updated_at_unix_ms = u64::MAX;
-    assert_invalid(
-        store.put_trace_share(invalid).await,
-        "timestamp_out_of_range",
-    );
-    let mut invalid = store.trace_share("trc-share").await.unwrap().unwrap();
-    invalid.expires_at_unix_ms = Some(u64::MAX);
-    assert_invalid(
-        store.put_trace_share(invalid).await,
-        "timestamp_out_of_range",
-    );
-    assert!(store.delete_trace_share("trc-share").await.unwrap());
-    assert!(!store.delete_trace_share("trc-share").await.unwrap());
-    assert!(store.trace_share("trc-share").await.unwrap().is_none());
 }
 
 async fn capture_mode_is_durable_and_evented<Fut>(store: Fut)

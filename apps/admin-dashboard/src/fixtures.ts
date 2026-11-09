@@ -536,7 +536,6 @@ function detail(captureId: string, captures: TraceSummary[], operations: Operati
         : []),
     ],
     notarization: operations.find((operation) => operation.trace_id === capture.trace_id) ?? null,
-    share: null,
   };
 }
 
