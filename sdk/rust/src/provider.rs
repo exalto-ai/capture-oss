@@ -1,59 +1,18 @@
-//! The fixed provider hosts and the exact request the notary session sends.
-
-use std::collections::HashSet;
+//! The exact provider request the notary session sends, to one of the fixed
+//! provider hosts capture-core allows.
 
 use anyhow::{Context as _, Result, bail};
 use bytes::Bytes;
-use capture_core::{HttpRequestBody, attestable_request_header_bytes, chunked_request_body};
+use capture_core::{
+    HttpRequestBody, attestable_request_header_bytes, chunked_request_body,
+    providers::{PROVIDER_HOSTS, ProviderHost, hop_by_hop_header_names, provider_host},
+};
 use http::{HeaderMap, HeaderName, HeaderValue, Method, Uri};
 use url::Url;
 
-/// A provider the notary will connect to. The caller chooses it by URL, but
-/// only these hosts exist: a request can never name an arbitrary upstream.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct Provider {
-    pub(crate) name: &'static str,
-    pub(crate) host: &'static str,
-    /// The only paths that may be captured, or `None` for any path.
-    paths: Option<&'static [&'static str]>,
-}
-
-const PROVIDERS: [Provider; 5] = [
-    Provider {
-        name: "openai",
-        host: "api.openai.com",
-        paths: None,
-    },
-    // ChatGPT's API is only Codex's: its consumer endpoints are not capture
-    // targets.
-    Provider {
-        name: "openai",
-        host: "chatgpt.com",
-        paths: Some(&[
-            "/backend-api/codex/responses",
-            "/backend-api/codex/responses/compact",
-        ]),
-    },
-    Provider {
-        name: "anthropic",
-        host: "api.anthropic.com",
-        paths: None,
-    },
-    Provider {
-        name: "deepseek",
-        host: "api.deepseek.com",
-        paths: None,
-    },
-    Provider {
-        name: "openrouter",
-        host: "openrouter.ai",
-        paths: None,
-    },
-];
-
 /// The provider request, shaped exactly as a capture service sends it.
 pub(crate) struct ProviderRequest {
-    pub(crate) provider: Provider,
+    pub(crate) provider: &'static ProviderHost,
     pub(crate) method: Method,
     pub(crate) uri: Uri,
     pub(crate) headers: HeaderMap,
@@ -76,19 +35,17 @@ impl ProviderRequest {
             bail!("provider URLs must use the default HTTPS port");
         }
         let host = url.host_str().context("provider URL has no host")?;
-        let provider = PROVIDERS
-            .into_iter()
-            .find(|provider| provider.host.eq_ignore_ascii_case(host))
-            .with_context(|| {
-                format!(
-                    "{host} is not a supported provider; use one of {}",
-                    PROVIDERS.map(|provider| provider.host).join(", ")
-                )
-            })?;
-        if provider
-            .paths
-            .is_some_and(|paths| !paths.contains(&url.path()))
-        {
+        let provider = provider_host(host).with_context(|| {
+            format!(
+                "{host} is not a supported provider; use one of {}",
+                PROVIDER_HOSTS
+                    .iter()
+                    .map(|provider| provider.host)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        })?;
+        if !provider.allows_path(url.path()) {
             bail!(
                 "{} is not a path that can be captured on {host}",
                 url.path()
@@ -146,36 +103,6 @@ impl ProviderRequest {
         }
         Ok(request.body(chunked_request_body(self.body))?)
     }
-}
-
-fn hop_by_hop_header_names(headers: &HeaderMap) -> HashSet<HeaderName> {
-    let mut names = [
-        http::header::CONNECTION,
-        HeaderName::from_static("keep-alive"),
-        http::header::PROXY_AUTHENTICATE,
-        http::header::PROXY_AUTHORIZATION,
-        http::header::TE,
-        http::header::TRAILER,
-        http::header::TRANSFER_ENCODING,
-        http::header::UPGRADE,
-    ]
-    .into_iter()
-    .collect::<HashSet<_>>();
-    for value in headers.get_all(http::header::CONNECTION) {
-        let Ok(value) = value.to_str() else {
-            continue;
-        };
-        for token in value
-            .split(',')
-            .map(str::trim)
-            .filter(|token| !token.is_empty())
-        {
-            if let Ok(name) = HeaderName::from_bytes(token.as_bytes()) {
-                names.insert(name);
-            }
-        }
-    }
-    names
 }
 
 #[cfg(test)]

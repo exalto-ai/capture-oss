@@ -258,6 +258,81 @@ pub fn parse_registry(bytes: &[u8]) -> Result<Registry> {
     Ok(registry)
 }
 
+/// Parses a Registry as Exalto's API publishes it, which names each notary's
+/// key `verification_key`. A record still carrying the retired `public_key`
+/// field is refused.
+pub fn parse_hosted_registry(bytes: &[u8]) -> Result<Registry> {
+    let mut document: serde_json::Value =
+        serde_json::from_slice(bytes).context("decoding hosted Notary Registry")?;
+    let notaries = document
+        .get_mut("notaries")
+        .and_then(serde_json::Value::as_array_mut)
+        .context("hosted Notary Registry is missing its notaries")?;
+    for notary in notaries {
+        let notary = notary
+            .as_object_mut()
+            .context("hosted Notary Registry contains an invalid notary")?;
+        if notary.contains_key("public_key") {
+            bail!("hosted Notary Registry uses a retired public_key field");
+        }
+        let verification_key = notary
+            .remove("verification_key")
+            .context("hosted Notary Registry is missing a verification_key")?;
+        notary.insert("public_key".to_owned(), verification_key);
+    }
+    let internal = serde_json::to_vec(&document).context("adapting hosted Notary Registry")?;
+    parse_registry(&internal)
+}
+
+/// The key of the first record trusted at `at_unix_ms` for which `signed`
+/// succeeds.
+pub fn trusted_key_at(
+    records: &[RegistryRecord],
+    at_unix_ms: u64,
+    signed: impl Fn(&[u8]) -> Result<()>,
+) -> Result<Vec<u8>> {
+    for record in records {
+        let key = record.public_key_bytes()?;
+        if record.trusted_at(at_unix_ms) && signed(&key).is_ok() {
+            return Ok(key);
+        }
+    }
+    bail!("no notary key trusted at that time signed it")
+}
+
+/// The Registry key that signed a witness receipt and was trusted when the
+/// notary opened the provider connection.
+pub fn witness_key(
+    records: &[RegistryRecord],
+    exchange: &crate::witness::WitnessedExchange,
+) -> Result<Vec<u8>> {
+    trusted_key_at(records, exchange.receipt().connected_at_unix_ms(), |key| {
+        exchange.verify(key)
+    })
+    .context("no trusted notary key signed this witness receipt")
+}
+
+/// The key and record that can seal `checkpoint` at `now_unix_ms`: a record
+/// trusted when the provider connection opened, still accepting sealing, whose
+/// key signed the capture receipt.
+pub fn sealing_record<'a>(
+    records: &'a [RegistryRecord],
+    checkpoint: &crate::CaptureCheckpoint,
+    now_unix_ms: u64,
+) -> Result<(Vec<u8>, &'a RegistryRecord)> {
+    let connected_at = checkpoint.authenticated_connection_time_unix_ms()?;
+    for record in records {
+        let key = record.public_key_bytes()?;
+        if record.trusted_at(connected_at)
+            && record.accepts_notarization_at(now_unix_ms)
+            && checkpoint.verify_notary_key(&key).is_ok()
+        {
+            return Ok((key, record));
+        }
+    }
+    bail!("no active or retiring notary can seal this capture")
+}
+
 pub fn key_id(public_key: &[u8]) -> String {
     format!("sha256:{}", sha256_hex(public_key))
 }
@@ -301,6 +376,39 @@ fn validate_record(record: &RegistryRecord) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hosted_registry_uses_the_canonical_verification_key_field() {
+        let document = serde_json::json!({
+            "format": "ecp/registry/v1",
+            "generation": 1,
+            "active_key_id": "sha256:0f715baf5d4c2ed329785cef29e562f73488c8a2bb9dbc5700b361d54b9b0554",
+            "notaries": [{
+                "name": "Test Notary",
+                "operator": "Exalto",
+                "host": "notary.example.com",
+                "port": 7047,
+                "transport": "tcp",
+                "key_id": "sha256:0f715baf5d4c2ed329785cef29e562f73488c8a2bb9dbc5700b361d54b9b0554",
+                "verification_key": "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
+                "status": "active",
+                "valid_from_unix_ms": 0,
+                "valid_until_unix_ms": null,
+                "notarize_until_unix_ms": null
+            }]
+        });
+        let registry = parse_hosted_registry(&serde_json::to_vec(&document).unwrap()).unwrap();
+        assert_eq!(
+            registry.notaries[0].public_key,
+            "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"
+        );
+
+        let mut retired = document;
+        let record = retired["notaries"][0].as_object_mut().unwrap();
+        let key = record.remove("verification_key").unwrap();
+        record.insert("public_key".to_owned(), key);
+        assert!(parse_hosted_registry(&serde_json::to_vec(&retired).unwrap()).is_err());
+    }
 
     fn record(seed: u8, status: NotaryKeyStatus) -> RegistryRecord {
         let signing = k256::ecdsa::SigningKey::from_slice(&[seed; 32]).unwrap();

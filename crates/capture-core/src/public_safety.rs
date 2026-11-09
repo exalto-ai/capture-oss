@@ -447,7 +447,7 @@ fn is_documented_public_protocol_id(
         return match context.request_path {
             "/v1/chat/completions" => has_public_id_format(value, "chatcmpl-"),
             "/v1/responses" => has_public_id_format(value, "resp_"),
-            "/backend-api/codex/responses" | "/backend-api/codex/responses/compact" => {
+            path if crate::providers::CODEX_PATHS.contains(&path) => {
                 has_public_id_format(value, "resp_")
             }
             _ => false,

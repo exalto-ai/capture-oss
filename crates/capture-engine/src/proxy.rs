@@ -3,7 +3,6 @@
 //! for notarization, as the capture mode in effect requires.
 
 use std::{
-    collections::HashSet,
     future::Future,
     sync::{
         Arc,
@@ -1503,42 +1502,12 @@ fn end_to_end_headers(source: &HeaderMap) -> HeaderMap {
 }
 
 fn copy_end_to_end_headers(target: &mut HeaderMap, source: &HeaderMap) {
-    let hop_by_hop = hop_by_hop_header_names(source);
+    let hop_by_hop = capture_core::providers::hop_by_hop_header_names(source);
     for (name, value) in source {
         if !hop_by_hop.contains(name) {
             target.append(name, value.clone());
         }
     }
-}
-
-fn hop_by_hop_header_names(headers: &HeaderMap) -> HashSet<HeaderName> {
-    let mut names = [
-        http::header::CONNECTION,
-        HeaderName::from_static("keep-alive"),
-        http::header::PROXY_AUTHENTICATE,
-        http::header::PROXY_AUTHORIZATION,
-        http::header::TE,
-        http::header::TRAILER,
-        http::header::TRANSFER_ENCODING,
-        http::header::UPGRADE,
-    ]
-    .into_iter()
-    .collect::<HashSet<_>>();
-    for value in headers.get_all(http::header::CONNECTION) {
-        let Ok(value) = value.to_str() else {
-            continue;
-        };
-        for token in value
-            .split(',')
-            .map(str::trim)
-            .filter(|token| !token.is_empty())
-        {
-            if let Ok(name) = HeaderName::from_bytes(token.as_bytes()) {
-                names.insert(name);
-            }
-        }
-    }
-    names
 }
 
 #[cfg(test)]

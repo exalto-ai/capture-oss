@@ -75,6 +75,7 @@ pub mod normalize;
 pub mod notarization;
 mod notary_link;
 pub mod pagination;
+pub mod providers;
 pub mod public;
 pub mod public_safety;
 pub mod registry;

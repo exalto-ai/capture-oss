@@ -35,7 +35,7 @@ use capture_core::{
         trace_package_created_at_unix_ms_bytes, trace_package_notary_key_bytes,
         verify_trace_package_bytes,
     },
-    registry::{NotaryEndpoint, Registry, RegistryRecord, parse_registry},
+    registry::{self, NotaryEndpoint, Registry, RegistryRecord, trusted_key_at},
     vault::Vault,
     witness::{WitnessConfig, WitnessedExchange, witness_streaming_request},
 };
@@ -160,7 +160,7 @@ impl Notary {
             Trust::Registry(records) => {
                 let embedded = trace_package_notary_key_bytes(trace)?;
                 let created_at = trace_package_created_at_unix_ms_bytes(trace)?;
-                trusted_record_key(records, created_at, |key| {
+                trusted_key_at(records, created_at, |key| {
                     if key == embedded.as_slice() {
                         Ok(())
                     } else {
@@ -202,19 +202,14 @@ impl Notary {
                 exchange.verify(key)?;
                 Ok(key.clone())
             }
-            Trust::Registry(records) => {
-                trusted_record_key(records, exchange.receipt().connected_at_unix_ms(), |key| {
-                    exchange.verify(key)
-                })
-                .context("no trusted Registry key signed this witness receipt")
-            }
+            Trust::Registry(records) => registry::witness_key(records, exchange),
         }
     }
 
     fn check_capture_key(&self, checkpoint: &CaptureCheckpoint) -> Result<()> {
         match &self.trust {
             Trust::Key(key) => checkpoint.verify_notary_key(key),
-            Trust::Registry(records) => trusted_record_key(
+            Trust::Registry(records) => trusted_key_at(
                 records,
                 checkpoint.authenticated_connection_time_unix_ms()?,
                 |key| checkpoint.verify_notary_key(key),
@@ -234,18 +229,9 @@ impl Notary {
                 Ok((key.clone(), self.endpoint.clone()))
             }
             Trust::Registry(records) => {
-                let connected_at = checkpoint.authenticated_connection_time_unix_ms()?;
-                let now = unix_ms()?;
-                for record in records {
-                    let key = record.public_key_bytes()?;
-                    if record.trusted_at(connected_at)
-                        && record.accepts_notarization_at(now)
-                        && checkpoint.verify_notary_key(&key).is_ok()
-                    {
-                        return Ok((key, record.endpoint()?));
-                    }
-                }
-                bail!("no Exalto notary can seal this capture any more")
+                let (key, record) = registry::sealing_record(records, checkpoint, unix_ms()?)
+                    .context("no Exalto notary can seal this capture any more")?;
+                Ok((key, record.endpoint()?))
             }
         }
     }
@@ -618,20 +604,6 @@ fn ensure_sealable(status: StatusCode) -> Result<()> {
     Ok(())
 }
 
-fn trusted_record_key(
-    records: &[RegistryRecord],
-    at_unix_ms: u64,
-    signed: impl Fn(&[u8]) -> Result<()>,
-) -> Result<Vec<u8>> {
-    for record in records {
-        let key = record.public_key_bytes()?;
-        if record.trusted_at(at_unix_ms) && signed(&key).is_ok() {
-            return Ok(key);
-        }
-    }
-    bail!("no matching trusted key")
-}
-
 fn parse_public_key(value: &str) -> Result<Vec<u8>> {
     let key = hex::decode(value.trim()).context("a notary public key is hexadecimal")?;
     VerifyingKey::from_sec1_bytes(&key).context("a notary public key is a SEC1 secp256k1 key")?;
@@ -656,8 +628,7 @@ fn parse_api_origin(value: &str) -> Result<Url> {
     Ok(url)
 }
 
-/// Reads Exalto's published Registry. It names each notary's key as
-/// `verification_key`, which the shared Registry model calls `public_key`.
+/// Reads Exalto's published Registry.
 async fn fetch_registry(http: &reqwest::Client, api_origin: &Url) -> Result<Registry> {
     let url = api_origin.join("/api/registry")?;
     let mut response = http
@@ -678,22 +649,7 @@ async fn fetch_registry(http: &reqwest::Client, api_origin: &Url) -> Result<Regi
         );
         bytes.extend_from_slice(&chunk);
     }
-    let mut document: serde_json::Value =
-        serde_json::from_slice(&bytes).context("decoding the notary Registry")?;
-    let notaries = document
-        .get_mut("notaries")
-        .and_then(serde_json::Value::as_array_mut)
-        .context("the notary Registry has no notaries")?;
-    for notary in notaries {
-        let notary = notary
-            .as_object_mut()
-            .context("the notary Registry has an invalid notary")?;
-        let key = notary
-            .remove("verification_key")
-            .context("a notary in the Registry has no verification_key")?;
-        notary.insert("public_key".to_owned(), key);
-    }
-    parse_registry(&serde_json::to_vec(&document)?)
+    registry::parse_hosted_registry(&bytes)
 }
 
 fn new_trace_id() -> Result<(String, u64)> {

@@ -1,6 +1,7 @@
 //! The fixed provider adapters and their configurable local routes. A caller
 //! selects an adapter by its route; it can never choose an upstream host.
 
+use capture_core::providers::{PROVIDER_HOSTS, ProviderHost};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -97,23 +98,23 @@ impl Provider {
         Self::Openrouter,
     ];
 
+    /// The adapter's entry in the shared provider allowlist.
+    fn provider_host(self) -> &'static ProviderHost {
+        &PROVIDER_HOSTS[match self {
+            Self::Openai => 0,
+            Self::OpenaiCodex => 1,
+            Self::Anthropic => 2,
+            Self::Deepseek => 3,
+            Self::Openrouter => 4,
+        }]
+    }
+
     pub fn host(self) -> &'static str {
-        match self {
-            Self::Openai => "api.openai.com",
-            Self::OpenaiCodex => "chatgpt.com",
-            Self::Anthropic => "api.anthropic.com",
-            Self::Deepseek => "api.deepseek.com",
-            Self::Openrouter => "openrouter.ai",
-        }
+        self.provider_host().host
     }
 
     pub fn name(self) -> &'static str {
-        match self {
-            Self::Openai | Self::OpenaiCodex => "openai",
-            Self::Anthropic => "anthropic",
-            Self::Deepseek => "deepseek",
-            Self::Openrouter => "openrouter",
-        }
+        self.provider_host().name
     }
 
     fn config(self, providers: &ProvidersConfig) -> &ProviderConfig {
@@ -154,17 +155,15 @@ pub fn provider_route(
         if !remainder.is_empty() && !remainder.starts_with('/') {
             continue;
         }
-        if provider == Provider::OpenaiCodex
-            && !matches!(remainder, "/responses" | "/responses/compact")
-        {
-            continue;
-        }
         let upstream_path = match (provider.upstream_path_prefix(), remainder) {
             ("", "") => "/".to_owned(),
             ("", remainder) => remainder.to_owned(),
             (base, "") => format!("{base}/"),
             (base, remainder) => format!("{base}{remainder}"),
         };
+        if !provider.provider_host().allows_path(&upstream_path) {
+            continue;
+        }
         let path_and_query = match uri.query() {
             Some(query) => format!("{upstream_path}?{query}"),
             None => upstream_path,
