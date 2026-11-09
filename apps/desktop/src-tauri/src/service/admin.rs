@@ -149,35 +149,15 @@ async fn probe_dependencies(state: &AdminState) -> DependencyProbeResult {
         })
         .await
 }
-/// The loopback administration API. It requires no credentials: it listens
-/// only on the configured loopback address, refuses requests from other web
-/// sites, and CORS admits only the desktop's own web view.
+/// The loopback administration API, with its MCP endpoint at `/mcp`. It
+/// requires no credentials: it listens only on the configured loopback
+/// address, refuses requests from other web sites, and CORS admits only the
+/// desktop's own web view.
 pub(crate) fn router(state: AdminState) -> Router {
     let listen = state.config.admin.listen;
-    Router::new()
-        .route("/healthz", get(health))
-        .route("/readyz", get(readiness))
-        .route("/openapi.json", get(openapi))
-        .route("/v1/status", get(status))
-        .route("/v1/notaries", get(notaries))
-        .route("/v1/notaries/readiness", get(notary_readiness))
-        .route("/v1/providers", get(providers))
-        .route(
-            "/v1/account",
-            get(account_status)
-                .post(start_account_connection)
-                .delete(end_account_connection),
-        )
-        .route("/v1/account/{request_id}", get(poll_account_connection))
-        .route(
-            "/v1/traces/{trace_id}/share",
-            get(get_trace_share)
-                .put(put_trace_share)
-                .delete(delete_trace_share),
-        )
-        .merge(capture_engine::api::routes().with_state(state.api.clone()))
-        .method_not_allowed_fallback(|| async { StatusCode::NOT_FOUND })
-        .layer(DefaultBodyLimit::max(1024 * 1024))
+    let api = routes(state);
+    api.clone()
+        .nest_service("/mcp", super::mcp::service(api))
         .layer(desktop_api_cors())
         .layer(middleware::from_fn_with_state(
             listen,
@@ -204,6 +184,34 @@ pub(crate) fn router(state: AdminState) -> Router {
         .layer(SetSensitiveRequestHeadersLayer::new(std::iter::once(
             header::AUTHORIZATION,
         )))
+}
+
+/// The administration routes themselves, which the MCP tools call in-process.
+fn routes(state: AdminState) -> Router {
+    Router::new()
+        .route("/healthz", get(health))
+        .route("/readyz", get(readiness))
+        .route("/openapi.json", get(openapi))
+        .route("/v1/status", get(status))
+        .route("/v1/notaries", get(notaries))
+        .route("/v1/notaries/readiness", get(notary_readiness))
+        .route("/v1/providers", get(providers))
+        .route(
+            "/v1/account",
+            get(account_status)
+                .post(start_account_connection)
+                .delete(end_account_connection),
+        )
+        .route("/v1/account/{request_id}", get(poll_account_connection))
+        .route(
+            "/v1/traces/{trace_id}/share",
+            get(get_trace_share)
+                .put(put_trace_share)
+                .delete(delete_trace_share),
+        )
+        .merge(capture_engine::api::routes().with_state(state.api.clone()))
+        .method_not_allowed_fallback(|| async { StatusCode::NOT_FOUND })
+        .layer(DefaultBodyLimit::max(1024 * 1024))
         .with_state(state)
 }
 /// Refuses browser requests that another web site started. CORS alone only
@@ -285,7 +293,7 @@ fn desktop_api_cors() -> CorsLayer {
         title = "Exalto Capture local administration API",
         license(name = "MIT", identifier = "MIT"),
         version = "1.0.0",
-        description = "Loopback administration API of the desktop app's local capture service. It listens only on the configured loopback address and requires no credentials. It refuses, with 403 cross_site_request, any request whose Host is not that address or localhost on its port, or whose Origin is not the desktop app's own."
+        description = "Loopback administration API of the desktop app's local capture service. It listens only on the configured loopback address and requires no credentials. It refuses, with 403 cross_site_request, any request whose Host is not that address or localhost on its port, or whose Origin is not the desktop app's own. Agents use the same routes through its Model Context Protocol endpoint, POST /mcp, which refuses any Origin."
     ),
     paths(
         health,
@@ -1513,6 +1521,228 @@ mod tests {
             let body = response.into_body().collect().await.unwrap().to_bytes();
             let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
             assert_eq!(body["error"]["code"], "cross_site_request");
+        }
+    }
+
+    async fn mcp_request(app: &Router, body: serde_json::Value) -> serde_json::Value {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::post("/mcp")
+                    .header(header::HOST, "127.0.0.1:8788")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .header(header::ACCEPT, "application/json, text/event-stream")
+                    .header("mcp-protocol-version", "2025-06-18")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        serde_json::from_slice(&body).unwrap()
+    }
+
+    async fn mcp_tool(app: &Router, name: &str, arguments: serde_json::Value) -> serde_json::Value {
+        mcp_request(
+            app,
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "tools/call",
+                "params": { "name": name, "arguments": arguments }
+            }),
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn mcp_describes_its_tools_and_marks_the_read_only_ones() {
+        let directory = tempfile::tempdir().unwrap();
+        let app = router(state(directory.path()).await);
+
+        let initialized = mcp_request(
+            &app,
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": "2025-06-18",
+                    "capabilities": {},
+                    "clientInfo": { "name": "test", "version": "0" }
+                }
+            }),
+        )
+        .await;
+        assert_eq!(
+            initialized["result"]["serverInfo"]["name"],
+            "exalto-capture"
+        );
+        let instructions = initialized["result"]["instructions"].as_str().unwrap();
+        assert!(instructions.contains("Ask the user before seal_trace"));
+
+        let listed = mcp_request(
+            &app,
+            serde_json::json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list" }),
+        )
+        .await;
+        let tools = listed["result"]["tools"].as_array().unwrap();
+        let read_only = |name: &str| {
+            tools
+                .iter()
+                .find(|tool| tool["name"] == name)
+                .unwrap_or_else(|| panic!("{name} is listed"))["annotations"]["readOnlyHint"]
+                .as_bool()
+        };
+        for name in [
+            "get_status",
+            "list_traces",
+            "get_trace",
+            "read_trace_content",
+            "verify_trace",
+            "verify_package",
+            "list_activity",
+            "list_notaries",
+        ] {
+            assert_eq!(read_only(name), Some(true), "{name}");
+        }
+        for name in [
+            "seal_trace",
+            "set_capture_mode",
+            "share_trace",
+            "stop_sharing",
+            "export_trace",
+        ] {
+            assert_eq!(read_only(name), Some(false), "{name}");
+        }
+        assert_eq!(tools.len(), 13);
+    }
+
+    #[tokio::test]
+    async fn mcp_tools_relay_the_admin_api_and_keep_previews_out_of_metadata() {
+        let directory = tempfile::tempdir().unwrap();
+        let state = state(directory.path()).await;
+        insert_completed_test_trace(&state, "trc-mcp").await;
+        let app = router(state);
+
+        let status = mcp_tool(&app, "get_status", serde_json::json!({})).await;
+        assert_ne!(status["result"]["isError"], true);
+        assert!(status["result"]["structuredContent"]["capture_mode"].is_string());
+
+        let listed = mcp_tool(
+            &app,
+            "list_traces",
+            serde_json::json!({ "state": "captured" }),
+        )
+        .await;
+        let item = &listed["result"]["structuredContent"]["items"][0];
+        assert_eq!(item["trace_id"], "trc-mcp");
+        assert!(item.get("prompt_preview").is_none());
+        let text = listed["result"]["content"][0]["text"].as_str().unwrap();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(text).unwrap(),
+            listed["result"]["structuredContent"]
+        );
+
+        let trace = mcp_tool(
+            &app,
+            "get_trace",
+            serde_json::json!({ "trace_id": "trc-mcp" }),
+        )
+        .await;
+        let trace = &trace["result"]["structuredContent"];
+        assert_eq!(trace["state"], "captured");
+        assert!(trace.get("prompt_preview").is_none());
+        assert!(trace.get("output_preview").is_none());
+
+        let content = mcp_tool(
+            &app,
+            "read_trace_content",
+            serde_json::json!({ "trace_id": "trc-mcp" }),
+        )
+        .await;
+        assert!(
+            content["result"]["structuredContent"]
+                .get("prompt_preview")
+                .is_some()
+        );
+
+        let missing = mcp_tool(
+            &app,
+            "seal_trace",
+            serde_json::json!({ "trace_id": "trc-missing" }),
+        )
+        .await;
+        assert_eq!(missing["result"]["isError"], true);
+        assert!(missing["result"]["structuredContent"]["error"]["code"].is_string());
+
+        let invalid = mcp_tool(
+            &app,
+            "get_trace",
+            serde_json::json!({ "trace_id": "../v1/status" }),
+        )
+        .await;
+        assert_eq!(invalid["error"]["code"], -32602);
+
+        // Paths come from the agent: only absolute paths to regular files are
+        // read, and an export never replaces an existing file.
+        for path in ["relative.llmtrace", directory.path().to_str().unwrap()] {
+            let refused =
+                mcp_tool(&app, "verify_package", serde_json::json!({ "path": path })).await;
+            assert_eq!(refused["error"]["code"], -32602, "{path}");
+        }
+        let package = directory.path().join("not-a-package.llmtrace");
+        std::fs::write(&package, b"not a zip").unwrap();
+        let verified = mcp_tool(
+            &app,
+            "verify_package",
+            serde_json::json!({ "path": package }),
+        )
+        .await;
+        assert!(verified["result"]["structuredContent"].is_object());
+        let existing = directory.path().join("existing.llmtrace");
+        std::fs::write(&existing, b"keep").unwrap();
+        let export = mcp_tool(
+            &app,
+            "export_trace",
+            serde_json::json!({ "trace_id": "trc-mcp", "path": "relative.llmtrace" }),
+        )
+        .await;
+        assert_eq!(export["error"]["code"], -32602);
+        let export = mcp_tool(
+            &app,
+            "export_trace",
+            serde_json::json!({ "trace_id": "trc-mcp", "path": existing }),
+        )
+        .await;
+        assert_eq!(export["result"]["isError"], true);
+        assert_eq!(std::fs::read(&existing).unwrap(), b"keep");
+    }
+
+    #[tokio::test]
+    async fn mcp_refuses_requests_from_web_pages() {
+        let directory = tempfile::tempdir().unwrap();
+        let app = router(state(directory.path()).await);
+        // The desktop window's own origin may call the API, but not MCP;
+        // another site may call neither.
+        for origin in ["tauri://localhost", "https://attacker.example"] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::post("/mcp")
+                        .header(header::HOST, "127.0.0.1:8788")
+                        .header(header::ORIGIN, origin)
+                        .header(header::CONTENT_TYPE, "application/json")
+                        .header(header::ACCEPT, "application/json, text/event-stream")
+                        .body(Body::from(
+                            r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#,
+                        ))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::FORBIDDEN, "{origin}");
         }
     }
 

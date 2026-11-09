@@ -3,6 +3,7 @@
 //! and the app's unlocked vault.
 
 pub mod admin;
+mod mcp;
 
 use std::{future::Future, path::Path, sync::Arc};
 
