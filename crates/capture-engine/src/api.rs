@@ -113,9 +113,8 @@ impl ApiContext {
     }
 }
 
-/// Gives each request the [`ApiContext`] it acts in. A host with one context,
-/// such as the desktop app's local service, is its own source; a host that
-/// serves many organizations resolves the context of the organization its
+/// Gives each request the [`ApiContext`] it acts in. A host with one context
+/// is its own source; a host that serves many organizations resolves the context of the organization its
 /// authentication established for the request.
 pub trait ApiContextSource: Clone + Send + Sync + 'static {
     fn api_context(&self, request: &Parts) -> Result<ApiContext, ApiError>;

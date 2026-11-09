@@ -6,7 +6,7 @@ use std::{fs, process::Command};
 use capture_server::config::CapturedConfig;
 
 #[test]
-fn local_configurations_are_refused_with_a_pointer_to_the_app() {
+fn local_configurations_are_refused() {
     let directory = tempfile::tempdir().unwrap();
     let config_path = directory.path().join("config.toml");
     fs::write(
@@ -24,8 +24,7 @@ fn local_configurations_are_refused_with_a_pointer_to_the_app() {
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("capture-server runs only as a server")
-            && stderr.contains("use the Exalto Capture app"),
+        stderr.contains("capture-server runs only as a server"),
         "unexpected startup failure: {stderr}"
     );
 }

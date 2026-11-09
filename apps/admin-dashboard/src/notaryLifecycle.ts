@@ -27,7 +27,7 @@ export function notaryLifecycle(status: string) {
       return {
         label: 'Explicit self-hosted configuration',
         description:
-          'Used because this endpoint and key are configured together locally. It has no hosted Registry lifecycle or health status.',
+          'Used because this endpoint and key are configured together in the server configuration. It has no hosted Registry lifecycle or health status.',
       };
     default:
       return {

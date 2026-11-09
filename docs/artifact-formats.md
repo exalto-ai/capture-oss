@@ -169,17 +169,15 @@ A model-emitted tool call is provider-authenticated output. A tool result in a
 later request is authenticated only as input supplied by the client. The trace
 does not claim that a local runtime executed the tool.
 
-## Local verification
+## Capture server verification
 
-The desktop app's local service verifies a retained Trace with
+The capture server verifies a retained Trace with
 `POST /v1/traces/{trace_id}/verify`, and a portable `.llmtrace` without
-importing or retaining it with `POST /v1/verify`. Agents reach the same routes
-through the MCP tools `verify_trace` and `verify_package`.
+importing or retaining it with `POST /v1/verify`.
 
 Package verification selects a key from the service's configured or cached
 trust by default. For an explicit self-hosted trust anchor, send the public key
-in the `x-notary-trusted-notary-key` header, or as `trusted_notary_key` to
-`verify_package`.
+in the `x-notary-trusted-notary-key` header.
 
 Full verification checks canonical archive bytes, entry hashes, trust-key
 selection, TLSNotary evidence, provider identity, selective disclosure,

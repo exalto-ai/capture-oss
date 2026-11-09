@@ -23,28 +23,23 @@ import {
   ShieldCheck,
   Unplug,
 } from 'lucide-react';
-import { type FormEvent, type ReactNode, useEffect, useState } from 'react';
+import { type FormEvent, useEffect, useState } from 'react';
 import '@mantine/core/styles.css';
 import '@mantine/notifications/styles.css';
 import './styles.css';
 import type { LocalApi, LocalApiError, Status } from './api';
-import { ErrorState, LoadingState } from './shared';
-import { ActivityView } from './views/ActivityView';
-import type { DesktopSettingsAction, DesktopSettingsState } from './views/DesktopSettingsView';
-import { DesktopSettingsView } from './views/DesktopSettingsView';
-import { OverviewView } from './views/OverviewView';
-import { ProvidersView } from './views/ProvidersView';
-import { StandaloneSettingsView } from './views/SettingsView';
-import { TracesView } from './views/TracesView';
-
-export type { DesktopSettingsAction, DesktopSettingsState } from './views/DesktopSettingsView';
-
 import {
   type DashboardRoute,
   type DashboardView,
   dashboardRouteFromHash,
   dashboardRouteHash,
 } from './routes';
+import { ErrorState, LoadingState } from './shared';
+import { ActivityView } from './views/ActivityView';
+import { OverviewView } from './views/OverviewView';
+import { ProvidersView } from './views/ProvidersView';
+import { StandaloneSettingsView } from './views/SettingsView';
+import { TracesView } from './views/TracesView';
 
 const logoUrl = new URL('./assets/notary-mark.svg', import.meta.url).href;
 
@@ -214,9 +209,7 @@ function TopNav({
         ))}
       </nav>
       <div className="local-topbar-status">
-        <span className="admin-context-label">
-          {status.runtime_profile === 'cluster' ? 'Cluster admin' : 'Local admin'}
-        </span>
+        <span className="admin-context-label">Cluster admin</span>
         <Burger opened={opened} onClick={onOpenNavigation} size="sm" aria-label="Open navigation" />
       </div>
     </header>
@@ -238,7 +231,7 @@ export function Dashboard({ api }: { api: LocalApi }) {
     goTo(next);
   };
 
-  if (statusQuery.isLoading) return <LoadingState label="Connecting to the local service" />;
+  if (statusQuery.isLoading) return <LoadingState label="Connecting to the capture server" />;
   if (statusQuery.error && (statusQuery.error as LocalApiError).status === 401) {
     return (
       <AuthGate
@@ -271,71 +264,9 @@ export function Dashboard({ api }: { api: LocalApi }) {
         <Sidebar route={route} status={status} onNavigate={navigate} />
       </Drawer>
       <AppShell.Main className="dashboard-main">
-        <View route={route} status={status} api={api} navigate={navigate} desktopShell={false} />
+        <View route={route} status={status} api={api} navigate={navigate} />
       </AppShell.Main>
     </AppShell>
-  );
-}
-
-/**
- * Renders the local service views without creating another browser shell.
- * The desktop app owns navigation, window chrome, and update controls; these
- * views contribute only the service-backed content and actions.
- */
-export function InlineDashboard({
-  api,
-  apiBaseUrl,
-  route,
-  desktopShell = false,
-  desktopSettings = null,
-  desktopConnections,
-  desktopTracesEmptyAction,
-  onDesktopSettingsAction,
-  onNavigate,
-}: {
-  api: LocalApi;
-  apiBaseUrl?: string;
-  route: Route;
-  desktopShell?: boolean;
-  desktopSettings?: DesktopSettingsState | null;
-  /** The desktop app's own Connections section, shown first in its Settings. */
-  desktopConnections?: ReactNode;
-  /** The desktop app's next step when no Trace has been captured yet. */
-  desktopTracesEmptyAction?: ReactNode;
-  onDesktopSettingsAction?: (action: DesktopSettingsAction) => void;
-  onNavigate: (route: Route) => void;
-}) {
-  const statusQuery = useQuery({
-    queryKey: ['status'],
-    queryFn: api.status,
-    retry: false,
-    refetchInterval: 10_000,
-  });
-
-  if (statusQuery.isLoading) return <LoadingState label="Connecting to the local service" />;
-  if (statusQuery.error || !statusQuery.data) {
-    return <ErrorState onRetry={() => statusQuery.refetch()} />;
-  }
-
-  const desktopBridge = {
-    state: desktopSettings,
-    connections: desktopConnections,
-    tracesEmptyAction: desktopTracesEmptyAction,
-    send: (action: DesktopSettingsAction) => onDesktopSettingsAction?.(action),
-  };
-
-  return (
-    <main className="dashboard-shell dashboard-shell--inline dashboard-main">
-      <View
-        route={route}
-        status={statusQuery.data}
-        api={api}
-        apiBaseUrl={apiBaseUrl}
-        navigate={onNavigate}
-        desktopShell={desktopShell}
-        desktopBridge={desktopBridge}
-      />
-    </main>
   );
 }
 
@@ -343,23 +274,12 @@ function View({
   route,
   status,
   api,
-  apiBaseUrl,
   navigate,
-  desktopShell,
-  desktopBridge,
 }: {
   route: Route;
   status: Status;
   api: LocalApi;
-  apiBaseUrl?: string;
   navigate: (route: Route) => void;
-  desktopShell: boolean;
-  desktopBridge?: {
-    state: DesktopSettingsState | null;
-    connections?: ReactNode;
-    tracesEmptyAction?: ReactNode;
-    send: (action: DesktopSettingsAction) => void;
-  };
 }) {
   switch (route.view) {
     case 'traces':
@@ -370,31 +290,15 @@ function View({
           initialAction={route.action}
           initialFilters={route.filters}
           navigate={navigate}
-          hideActivity={desktopShell}
-          emptyAction={desktopBridge?.tracesEmptyAction}
-          sharing={status.runtime_profile !== 'cluster'}
         />
       );
     case 'activity':
       return <ActivityView api={api} initialTraceId={route.filters?.traceId} navigate={navigate} />;
     case 'providers':
-      return <ProvidersView api={api} status={status} showHeading={!desktopBridge?.state} />;
+      return <ProvidersView api={api} status={status} />;
     case 'settings':
-      return desktopBridge?.state ? (
-        <DesktopSettingsView
-          status={status}
-          api={api}
-          apiBaseUrl={apiBaseUrl}
-          desktopSettings={desktopBridge.state}
-          connections={desktopBridge.connections}
-          onDesktopAction={desktopBridge.send}
-        />
-      ) : (
-        <StandaloneSettingsView status={status} api={api} />
-      );
+      return <StandaloneSettingsView status={status} api={api} />;
     default:
-      return (
-        <OverviewView api={api} status={status} navigate={navigate} hideActivity={desktopShell} />
-      );
+      return <OverviewView api={api} status={status} navigate={navigate} />;
   }
 }

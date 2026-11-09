@@ -4,7 +4,6 @@ export type Status = components['schemas']['StatusResponse'];
 export type CaptureSetting = components['schemas']['CaptureSettingResponse'];
 export type CaptureMode = components['schemas']['CaptureMode'];
 export type EvidenceKind = components['schemas']['EvidenceKind'];
-export type AutoSealSetting = components['schemas']['AutoSealSettingResponse'];
 export type Notaries = components['schemas']['NotariesResponse'];
 export type Notary = components['schemas']['Notary'];
 export type Providers = components['schemas']['ProvidersResponse'];
@@ -14,12 +13,6 @@ export type Operation = components['schemas']['TechnicalOperation'];
 export type Event = components['schemas']['ActivityItem'];
 export type TraceContent = components['schemas']['TraceContent'];
 export type Verification = components['schemas']['VerificationResult'];
-export type AccountConnection = components['schemas']['AccountConnectionResponse'];
-export type AccountConnectionStarted = components['schemas']['AccountConnectionStartedResponse'];
-export type Share = components['schemas']['TraceShare'];
-export type ShareVisibility = components['schemas']['ShareVisibility'];
-export type ShareSettings =
-  paths['/v1/traces/{trace_id}/share']['put']['requestBody']['content']['application/json'];
 type TraceList = paths['/v1/traces']['get']['responses'][200]['content']['application/json'];
 type TraceFilters = NonNullable<paths['/v1/traces']['get']['parameters']['query']>;
 type NotarizationResult =
@@ -43,11 +36,6 @@ type RequestOptions = {
   basicAuth?: { username: string; password: string };
 };
 
-type LocalApiOptions = {
-  /** Empty keeps the standalone dashboard same-origin; desktop passes the loopback origin. */
-  baseUrl?: string;
-};
-
 function basicAuthorization(username: string, password: string) {
   const bytes = new TextEncoder().encode(`${username}:${password}`);
   let binary = '';
@@ -66,16 +54,14 @@ function queryString(values: Record<string, string | number | boolean | undefine
   return encoded ? `?${encoded}` : '';
 }
 
-export function createLocalApi(options: LocalApiOptions = {}) {
-  const baseUrl = options.baseUrl?.replace(/\/$/, '') ?? '';
+export function createLocalApi() {
   let credentials: { username: string; password: string } | null = null;
-  const url = (path: string) => `${baseUrl}${path}`;
 
   async function request<T>(path: string, requestOptions: RequestOptions = {}): Promise<T> {
     const basicAuth = requestOptions.basicAuth ?? credentials;
-    const response = await fetch(url(path), {
+    const response = await fetch(path, {
       method: requestOptions.method ?? 'GET',
-      credentials: baseUrl ? 'omit' : 'same-origin',
+      credentials: 'same-origin',
       headers: {
         'x-notary-request': 'dashboard',
         ...(basicAuth
@@ -92,7 +78,7 @@ export function createLocalApi(options: LocalApiOptions = {}) {
       throw new LocalApiError(
         response.status,
         payload?.error?.code ?? 'request_failed',
-        payload?.error?.message ?? 'The local service could not complete the request.',
+        payload?.error?.message ?? 'The capture server could not complete the request.',
       );
     }
     if (response.status === 204) return undefined as T;
@@ -100,8 +86,8 @@ export function createLocalApi(options: LocalApiOptions = {}) {
   }
 
   async function requestBlob(path: string): Promise<Blob> {
-    const response = await fetch(url(path), {
-      credentials: baseUrl ? 'omit' : 'same-origin',
+    const response = await fetch(path, {
+      credentials: 'same-origin',
       headers: {
         'x-notary-request': 'dashboard',
         ...(credentials
@@ -116,7 +102,7 @@ export function createLocalApi(options: LocalApiOptions = {}) {
       throw new LocalApiError(
         response.status,
         payload?.error?.code ?? 'request_failed',
-        payload?.error?.message ?? 'The local service could not complete the request.',
+        payload?.error?.message ?? 'The capture server could not complete the request.',
       );
     }
     return response.blob();
@@ -136,12 +122,6 @@ export function createLocalApi(options: LocalApiOptions = {}) {
       request<CaptureSetting>('/v1/settings/capture', {
         method: 'PUT',
         body: { mode },
-      }),
-    autoSealSetting: () => request<AutoSealSetting>('/v1/settings/auto-seal'),
-    updateAutoSealSetting: (enabled: boolean) =>
-      request<AutoSealSetting>('/v1/settings/auto-seal', {
-        method: 'PUT',
-        body: { enabled },
       }),
     notaries: () => request<Notaries>('/v1/notaries'),
     providers: () => request<Providers>('/v1/providers'),
@@ -163,24 +143,6 @@ export function createLocalApi(options: LocalApiOptions = {}) {
       request<Verification>(`/v1/traces/${encodeURIComponent(traceId)}/verify`, {
         method: 'POST',
       }),
-    account: () => request<AccountConnection>('/v1/account'),
-    startAccountConnection: () =>
-      request<AccountConnectionStarted>('/v1/account', {
-        method: 'POST',
-        body: {},
-      }),
-    pollAccountConnection: (requestId: string) =>
-      request<AccountConnection>(`/v1/account/${encodeURIComponent(requestId)}`),
-    disconnectAccount: () => request<void>('/v1/account', { method: 'DELETE' }),
-    share: (traceId: string, settings: ShareSettings) =>
-      request<Share>(`/v1/traces/${encodeURIComponent(traceId)}/share`, {
-        method: 'PUT',
-        body: settings,
-      }),
-    shareStatus: (traceId: string) =>
-      request<Share>(`/v1/traces/${encodeURIComponent(traceId)}/share`),
-    stopSharing: (traceId: string) =>
-      request<Share>(`/v1/traces/${encodeURIComponent(traceId)}/share`, { method: 'DELETE' }),
   };
 
   return api;

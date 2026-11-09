@@ -6,9 +6,8 @@ key, and the included OpenTelemetry trace is the deterministic normalization
 of those bytes.
 
 The public runtime is independently buildable. It contains the protocol and
-evidence contracts, the desktop app and its local capture service,
-`capture-server`, the REST command client, generic remote notary,
-dashboard, updater, and verifier. Hosted account, billing, admission,
+evidence contracts, `capture-server` and its dashboard, the generic remote
+notary, the updater, and the verifier. Hosted account, billing, admission,
 upload, and website policy may integrate through explicit client and server
 seams, but those implementations are not part of this workspace.
 
@@ -17,29 +16,22 @@ seams, but those implementations are not part of this workspace.
 | Component | Sees application plaintext? | Durable state | Responsibility |
 | --- | --- | --- | --- |
 | Provider client | yes | provider credential | Sends an ordinary provider request to a fixed local route |
-| Desktop local service | yes | vault, SQLite metadata, operations, filesystem artifacts, trust cache | Proxies requests, captures private state, notarizes, and verifies, inside the desktop app |
-| `capture-server` | yes | shared vault key, PostgreSQL metadata, S3 artifacts, pinned Registry | The same for replicated deployments, with provider requests authenticated as organizations, authenticated administration, and an optional private customer API through which capture-api acts for any organization |
-| MCP client (agent) | only tool results it requests; previews and disclosed bodies only through `read_trace_content` | none | Calls the desktop local service's MCP tools at `/mcp`, which relay its administration API; clients ask before tools that are not read-only |
-| Local dashboard | only safe metadata store fields and deliberately opened notarized disclosures | browser session preference | Uses the local service's administration API |
+| `capture-server` | yes | shared vault key, PostgreSQL metadata, S3 artifacts, pinned Registry | Proxies requests, captures private state, notarizes, and verifies on replicated deployments, with provider requests authenticated as organizations, authenticated administration, and an optional private customer API through which capture-api acts for any organization |
+| Dashboard | only safe metadata store fields and deliberately opened notarized disclosures | browser session preference | Uses the capture server's administration API |
 | `capture-notary` | no in Notarized sessions; yes, in memory only, in Witnessed sessions | signing key | Resolves the provider, relays encrypted TLS records or Witnessed plaintext, witnesses sessions, and completes proof work |
 | Model provider | yes | provider-owned | Serves an ordinary HTTPS request without a Notary integration |
-| Artifact backend | encrypted capture or disclosed package bytes | filesystem or private S3-compatible objects | Retains immutable artifacts after size and SHA-256 validation |
+| Artifact backend | encrypted capture or disclosed package bytes | private S3-compatible objects | Retains immutable artifacts after size and SHA-256 validation |
 | Independent verifier | disclosed package contents | chosen trust policy | Verifies a portable `.llmtrace` without contacting the provider or notary |
 
-The capture service, either the desktop app's local service or a `capture-server`
-replica, is the only Capture runtime component that sees provider
+The capture service, a `capture-server` replica, is the only Capture runtime component that sees provider
 credentials, prompts, and response plaintext. The remote notary learns the
 selected provider hostname, ciphertext sizes, timing, and protocol metadata,
 but in a Notarized session it must not receive credential values or
 application plaintext. A Witnessed session is the deliberate exception
 described below.
 
-The desktop local service's MCP endpoint is intentionally a thin adapter: each
-tool calls one administration route in-process, so an agent receives exactly
-what that route returns and never opens the metadata store, vault, captures, or
-protocol implementation directly. The local dashboard uses the same generated
-OpenAPI contract and never receives a hosted credential or a decrypted source
-capture.
+The dashboard uses the capture server's generated OpenAPI contract and never
+receives a hosted credential or a decrypted source capture.
 
 ## Fixed provider boundary
 
@@ -162,8 +154,7 @@ existing capture.
 - A bare `trace.otlp.json` is useful for inspection but does not carry the
   package's cryptographic evidence.
 
-The desktop app's local service keeps SQLite metadata and filesystem
-artifacts. `capture-server` always runs as a cluster: PostgreSQL metadata,
+`capture-server` always runs as a cluster: PostgreSQL metadata,
 a private S3-compatible namespace, and one shared 32-byte vault key. The first
 migration pins that key's identity, and a replica with any other key refuses
 to start. S3 adds no evidence or encryption layer: captures are encrypted

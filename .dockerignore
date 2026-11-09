@@ -1,7 +1,6 @@
 /target/
 /apps/admin-dashboard/node_modules/
 /apps/admin-dashboard/.vitest-attachments/
-/apps/desktop/
 *.llmcapture
 *.llmbundle
 *.key

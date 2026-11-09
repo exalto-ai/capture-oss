@@ -1,9 +1,8 @@
-import { ActionIcon, Button, Group, Paper, Text, Title } from '@mantine/core';
+import { ActionIcon, Group, Paper, Text, Title } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
 import { useQuery } from '@tanstack/react-query';
 import { Copy, ShieldCheck, Unplug } from 'lucide-react';
 import type { LocalApi, Status } from '../api';
-import { claudeCommand, codexProfile } from '../clientSetup';
 import { ProviderIdentity } from '../ProviderIdentity';
 import { EmptyState, Fact, LoadingState, QueryError, StatusLabel } from '../shared';
 
@@ -50,20 +49,17 @@ function BaseUrl({
   );
 }
 
-function ClientSetupCard({
+function ClientRouteCard({
   client,
   route,
   onCopyBaseUrl,
-  onCopySetup,
 }: {
   client: 'codex' | 'claude';
   route: ProviderRoute;
   onCopyBaseUrl: (label: string, value: string) => void;
-  onCopySetup: (label: string, value: string) => void;
 }) {
   const codex = client === 'codex';
   const name = codex ? 'Codex CLI' : 'Claude Code';
-  const setup = codex ? codexProfile(route.proxy_base_url) : claudeCommand(route.proxy_base_url);
   return (
     <Paper className="settings-panel provider-route">
       <Group justify="space-between" align="flex-start">
@@ -76,38 +72,6 @@ function ClientSetupCard({
         <StatusLabel state={route.ready ? 'ready' : 'unavailable'} />
       </Group>
       <BaseUrl route={route} label={codex ? route.name : name} onCopy={onCopyBaseUrl} />
-      <details className="notary-details">
-        <summary>Setup {name}</summary>
-        <Text>
-          {codex
-            ? 'Add this profile to ~/.codex/config.toml, then run codex --profile exalto-capture. Your default Codex setup is unchanged.'
-            : 'Run Claude Code with this command. It needs ANTHROPIC_API_KEY and is billed to the API, not a Claude subscription.'}
-        </Text>
-        <dl className="receipt-list">
-          <Fact
-            label={codex ? 'Check sign-in' : 'Check key'}
-            value={<code>{codex ? 'codex login status' : 'test -n "$ANTHROPIC_API_KEY"'}</code>}
-          />
-          <Fact
-            label={codex ? 'Config key' : 'Environment variable'}
-            value={<code>{codex ? 'model_provider' : 'ANTHROPIC_BASE_URL'}</code>}
-          />
-          <Fact label="Local route" value={<code>{route.route_prefix}</code>} />
-        </dl>
-        <pre className="json-view">{setup}</pre>
-        <Button
-          variant="outline"
-          leftSection={<Copy size={14} />}
-          onClick={() => onCopySetup(codex ? 'Codex CLI config' : 'Claude Code command', setup)}
-        >
-          {codex ? 'Copy config' : 'Copy command'}
-        </Button>
-        {!codex && (
-          <Text className="provider-setup-note">
-            The native Claude desktop app cannot use this loopback route.
-          </Text>
-        )}
-      </details>
     </Paper>
   );
 }
@@ -152,7 +116,7 @@ function ApiRouteCard({
                 ? 'Witnessed, the notary receives requests and API keys and seals each trace'
                 : status.capture_mode === 'notarized'
                   ? 'Notarized, supported requests create traces'
-                  : 'Off, requests pass through locally and create no trace'
+                  : 'Off, requests pass through and create no trace'
             }
           />
         </dl>
@@ -161,17 +125,8 @@ function ApiRouteCard({
   );
 }
 
-export function ProvidersView({
-  api,
-  status,
-  showHeading = true,
-}: {
-  api: LocalApi;
-  status: Status;
-  showHeading?: boolean;
-}) {
+export function ProvidersView({ api, status }: { api: LocalApi; status: Status }) {
   const providers = useQuery({ queryKey: ['providers'], queryFn: api.providers, retry: false });
-  const isCluster = status.runtime_profile === 'cluster';
   const copyBaseUrl = async (label: string, baseUrl: string) => {
     await navigator.clipboard.writeText(baseUrl);
     notifications.show({
@@ -180,32 +135,22 @@ export function ProvidersView({
         'Model selection and the API key stay in the tool. Exalto Capture does not store a second provider credential.',
     });
   };
-  const copySetup = async (label: string, value: string) => {
-    await navigator.clipboard.writeText(value);
-    notifications.show({
-      title: `${label} copied`,
-      message: 'Review the destination before saving or running it.',
-    });
-  };
   const routes = providers.data?.providers ?? [];
   const codexRoute = routes.find((route) => route.id === 'openai_codex');
   const claudeRoute = routes.find((route) => route.id === 'anthropic');
   const apiRoutes = routes.filter((route) => route.id !== 'openai_codex');
   return (
     <div className="view-page providers-page">
-      {showHeading && (
-        <header className="view-heading">
-          <div>
-            <Text className="eyebrow">{isCluster ? 'Cluster admin' : 'Local admin'}</Text>
-            <Title order={1}>AI connections</Title>
-          </div>
-          <Text>
-            Connect the tool you already use by changing only its local endpoint. Model selection
-            and saved product logins stay there. API keys also remain client-owned; setup can hold
-            one temporarily only for its optional onboarding test.
-          </Text>
-        </header>
-      )}
+      <header className="view-heading">
+        <div>
+          <Text className="eyebrow">Cluster admin</Text>
+          <Title order={1}>AI connections</Title>
+        </div>
+        <Text>
+          Connect the tool you already use by changing its endpoint. Model selection and saved
+          product logins stay there. API keys also remain client-owned.
+        </Text>
+      </header>
       {providers.isLoading ? (
         <LoadingState label="Loading AI connections" />
       ) : providers.error ? (
@@ -223,25 +168,14 @@ export function ProvidersView({
               Connect your AI tool
             </Title>
             <Text className="provider-boundary-note">
-              Point the tool at its local route. It keeps its own sign-in and model setting; no API
-              key is needed and nothing moves into Exalto Capture.
+              Point the tool at its route. It keeps its own sign-in and model setting.
             </Text>
             <div className="provider-route-list provider-client-list">
               {codexRoute && (
-                <ClientSetupCard
-                  client="codex"
-                  route={codexRoute}
-                  onCopyBaseUrl={copyBaseUrl}
-                  onCopySetup={copySetup}
-                />
+                <ClientRouteCard client="codex" route={codexRoute} onCopyBaseUrl={copyBaseUrl} />
               )}
               {claudeRoute && (
-                <ClientSetupCard
-                  client="claude"
-                  route={claudeRoute}
-                  onCopyBaseUrl={copyBaseUrl}
-                  onCopySetup={copySetup}
-                />
+                <ClientRouteCard client="claude" route={claudeRoute} onCopyBaseUrl={copyBaseUrl} />
               )}
             </div>
           </section>
@@ -252,8 +186,7 @@ export function ProvidersView({
             <Text className="provider-boundary-note">
               Choose a provider route only when configuring an API or SDK client. Replace its base
               URL and keep the API key and model selection in that client; Exalto Capture never
-              stores or substitutes the key. The optional onboarding test holds a pasted key in
-              memory for one setup session only.
+              stores or substitutes the key.
             </Text>
             <div className="provider-route-list provider-api-list">
               {apiRoutes.map((route) => (

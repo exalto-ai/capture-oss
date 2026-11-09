@@ -135,8 +135,8 @@ impl CaptureService {
     }
 
     /// Issues a ticket charged to `organization`. Failures are the bounded,
-    /// user-safe hosted admission errors, so they reach clients and Activity
-    /// the same way as on the desktop.
+    /// user-safe hosted admission errors, so they can reach clients and
+    /// Activity unchanged.
     async fn issue(
         &self,
         organization: &OrganizationId,

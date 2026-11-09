@@ -14,7 +14,6 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { CodeXml, Copy, Moon, PanelLeft, ShieldCheck, Sun } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { useEffect, useState } from 'react';
-import { AccountConnectionCard } from '../AccountConnection';
 import type { CaptureMode, LocalApi, Notary, Status } from '../api';
 import { LocalApiError } from '../api';
 import { abbreviatedKeyId, formatNotaryBoundary, notaryLifecycle } from '../notaryLifecycle';
@@ -119,15 +118,11 @@ function SettingsNotaries({ api }: { api: LocalApi }) {
         )}
       </div>
       <Text className="settings-notaries-note">
-        This is the trust state used by the local service. It describes key lifecycle and permitted
+        This is the trust state used by the capture server. It describes key lifecycle and permitted
         work, not endpoint health or availability.
       </Text>
       {notaries.isLoading ? (
-        <div
-          className="local-notary-loading"
-          role="status"
-          aria-label="Loading local sealing trust"
-        >
+        <div className="local-notary-loading" role="status" aria-label="Loading sealing trust">
           <i />
           <i />
           <i />
@@ -137,12 +132,12 @@ function SettingsNotaries({ api }: { api: LocalApi }) {
           <b>
             {errorCode === 'registry_state_invalid'
               ? 'Pinned trust state is malformed'
-              : 'Local sealing trust is unavailable'}
+              : 'Sealing trust is unavailable'}
           </b>
           <span>
             {errorCode === 'registry_state_invalid'
               ? 'The cached Registry could not be validated. No sealing service is presented as usable.'
-              : 'The local service could not return its configured trust metadata. No endpoint status can be inferred.'}
+              : 'The capture server could not return its configured trust metadata. No endpoint status can be inferred.'}
           </span>
           <Button variant="outline" onClick={() => notaries.refetch()}>
             Try again
@@ -152,7 +147,7 @@ function SettingsNotaries({ api }: { api: LocalApi }) {
         <div className="local-notary-state-panel">
           <b>No pinned sealing records</b>
           <span>
-            The local service has not retained a Registry generation. No sealing service is
+            The capture server has not retained a Registry generation. No sealing service is
             presented as available.
           </span>
         </div>
@@ -173,8 +168,8 @@ function SettingsNotaries({ api }: { api: LocalApi }) {
           </dl>
           {notaries.data?.source === 'explicit_configuration' && (
             <Text className="explicit-notary-note">
-              This endpoint and key come from local configuration and are not members of the hosted
-              Registry.
+              This endpoint and key come from the server configuration and are not members of the
+              hosted Registry.
             </Text>
           )}
           <div className="local-notary-list">
@@ -261,7 +256,6 @@ export function StandaloneSettingsView({ status, api }: { status: Status; api: L
     onError: (error) => mutationError('Capture mode did not change', error),
   });
   useEffect(() => setCaptureMode(status.capture_mode), [status.capture_mode]);
-  const isCluster = status.runtime_profile === 'cluster';
   const openApiUrl = `${window.location.origin}/openapi.json`;
   const copyOpenApi = async () => {
     await navigator.clipboard.writeText(openApiUrl);
@@ -270,18 +264,6 @@ export function StandaloneSettingsView({ status, api }: { status: Status; api: L
       message: 'Use this URL to discover admin routes and request bodies.',
     });
   };
-  // A capture server is deployed, never self-updated, and reports no build.
-  const updateState = isCluster
-    ? null
-    : !status.updates.enabled
-      ? 'Disabled for source builds'
-      : status.updates.update_available
-        ? `Available: ${status.updates.latest_build_id}`
-        : status.updates.error_code
-          ? 'Check failed'
-          : status.updates.last_checked_unix_ms
-            ? 'Up to date'
-            : 'Not checked yet';
 
   return (
     <div className="view-page settings-page">
@@ -311,11 +293,6 @@ export function StandaloneSettingsView({ status, api }: { status: Status; api: L
           </Paper>
         </SimpleGrid>
       </SettingsGroup>
-      {!isCluster && (
-        <SettingsGroup id="settings-account" title="Account">
-          <AccountConnectionCard api={api} />
-        </SettingsGroup>
-      )}
       <SettingsGroup id="settings-notarization" title="Sealing">
         <SettingsNotaries api={api} />
       </SettingsGroup>
@@ -325,7 +302,7 @@ export function StandaloneSettingsView({ status, api }: { status: Status; api: L
           <Title order={2}>Preview storage</Title>
           <Text>
             Up to {status.preview_chars.toLocaleString()} characters of known text fields are
-            indexed {isCluster ? 'in shared metadata' : 'locally'}. Raw headers are never indexed.
+            indexed in shared metadata. Raw headers are never indexed.
           </Text>
           <dl className="receipt-list">
             <Fact label="Vault" value={status.vault} />
@@ -342,21 +319,13 @@ export function StandaloneSettingsView({ status, api }: { status: Status; api: L
       </SettingsGroup>
       <SettingsGroup id="settings-service" title="Service">
         <Paper className="settings-panel">
-          <Text className="eyebrow">{isCluster ? 'Deployment' : 'Listeners'}</Text>
-          <Title order={2}>{isCluster ? 'Cluster endpoints' : 'Listener addresses'}</Title>
+          <Text className="eyebrow">Deployment</Text>
+          <Title order={2}>Cluster endpoints</Title>
           <dl className="receipt-list">
-            <Fact
-              label="Provider proxy"
-              value={isCluster ? status.proxy_origin : status.proxy_listener}
-            />
-            <Fact
-              label="Admin & dashboard"
-              value={isCluster ? status.admin_origin : status.admin_listener}
-            />
-            {isCluster && (
-              <Fact label="Replica" value={status.instance_id ?? 'Assigned automatically'} />
-            )}
-            {isCluster && <Fact label="Lifecycle" value={status.lifecycle} />}
+            <Fact label="Provider proxy" value={status.proxy_origin} />
+            <Fact label="Admin & dashboard" value={status.admin_origin} />
+            <Fact label="Replica" value={status.instance_id ?? 'Assigned automatically'} />
+            <Fact label="Lifecycle" value={status.lifecycle} />
             <Fact
               label="Metadata"
               value={`${status.metadata_backend} (${status.metadata_status})`}
@@ -367,14 +336,10 @@ export function StandaloneSettingsView({ status, api }: { status: Status; api: L
             />
             <Fact label="API version" value="v1" />
             <Fact label="Service version" value={status.version} />
-            {updateState && <Fact label="Build" value={status.build_id} />}
-            {updateState && <Fact label="Updates" value={updateState} />}
           </dl>
           <Text className="safe-note">
-            <ShieldCheck size={15} />{' '}
-            {isCluster
-              ? 'Public traffic uses the configured TLS ingress; provider requests must never be replayed.'
-              : 'Both listeners are restricted to loopback.'}
+            <ShieldCheck size={15} /> Public traffic uses the configured TLS ingress; provider
+            requests must never be replayed.
           </Text>
         </Paper>
       </SettingsGroup>

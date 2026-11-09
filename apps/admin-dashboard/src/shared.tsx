@@ -2,7 +2,7 @@ import { Button, Center, Loader, Select, Stack, Text, Title } from '@mantine/cor
 import { notifications } from '@mantine/notifications';
 import { Archive, Check, RefreshCw, Unplug } from 'lucide-react';
 import type { ReactNode } from 'react';
-import { type AccountConnection, LocalApiError } from './api';
+import { LocalApiError } from './api';
 
 export const localModalClassNames = {
   overlay: 'axis-local-dialog-overlay',
@@ -75,28 +75,6 @@ export function AxisSelect({
   );
 }
 
-export function accountDisplayName(account: AccountConnection) {
-  return account.display_name || account.provider_display_name || 'Exalto account';
-}
-
-export function authProviderLabel(provider?: string | null) {
-  if (!provider) return 'Hosted account';
-  return provider === 'google' ? 'Google' : provider === 'github' ? 'GitHub' : provider;
-}
-
-const plans: Record<string, string> = {
-  free: 'Free plan',
-  one_gb: '1 GB plan',
-  ten_gb: '10 GB plan',
-};
-
-export function planLabel(plan: string, billingStatus?: string | null) {
-  const label = plans[plan] ?? plan.replaceAll('_', ' ');
-  return billingStatus && billingStatus !== 'active'
-    ? `${label} (${billingStatus.replaceAll('_', ' ')})`
-    : label;
-}
-
 export function formatDate(value?: number | null) {
   if (!value) return 'Not yet';
   return new Intl.DateTimeFormat(undefined, {
@@ -164,7 +142,7 @@ export function EmptyState({
 }
 
 export function ErrorState({
-  title = 'The local service is unavailable',
+  title = 'The capture server is unavailable',
   onRetry,
 }: {
   title?: string;
@@ -175,7 +153,7 @@ export function ErrorState({
       <Stack align="center" gap="md">
         <Unplug aria-hidden="true" />
         <Title order={2}>{title}</Title>
-        <Text>Check that the foreground service is running on this loopback address.</Text>
+        <Text>Check that the capture server is running and reachable.</Text>
         {onRetry && (
           <Button variant="outline" leftSection={<RefreshCw size={15} />} onClick={onRetry}>
             Try again
@@ -211,7 +189,7 @@ export function timeRangeStart(range: string | null) {
   return Date.now() - milliseconds;
 }
 
-export function LoadingState({ label = 'Loading local evidence' }: { label?: string }) {
+export function LoadingState({ label = 'Loading evidence' }: { label?: string }) {
   return (
     <Center className="loading-state">
       <Stack align="center" gap="sm">

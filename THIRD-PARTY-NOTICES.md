@@ -1,11 +1,9 @@
 # Third-party notices
 
-Exalto-authored Runtime code is distributed under `LICENSE-MIT`. The desktop
-application uses the same MIT license. Third-party components retain their own
-licenses. Release archives include the MIT license, this notice, and the
-vendored license texts under `third-party-licenses/`.
+Exalto-authored Runtime code is distributed under `LICENSE-MIT`. Third-party components retain their own
+licenses.
 
-The desktop app and services link third-party Rust crates. Their exact, reproducible
+The services link third-party Rust crates. Their exact, reproducible
 set is recorded in the committed `Cargo.lock`; each crate's declared SPDX
 license is available from its `Cargo.toml` in the crates.io source archive.
 The web application dependencies are equivalently pinned in

@@ -1,12 +1,9 @@
 import type {
-  AccountConnection,
   CaptureMode,
   Event,
   LocalApi,
   Notaries,
   Operation,
-  Share,
-  ShareVisibility,
   Status,
   TraceContent,
   TraceDetail,
@@ -17,17 +14,6 @@ import { LocalApiError } from './api';
 
 const hour = 60 * 60 * 1000;
 const fixtureNow = Date.UTC(2026, 6, 28, 16, 42, 0);
-
-type FixtureShareState = {
-  captureId: string;
-  progress: 'verifying' | 'shared' | 'stopped' | 'rejected' | 'failed';
-  visibility: ShareVisibility;
-  accessEnabled: boolean;
-  passwordProtected: boolean;
-  expiresAt: number | null;
-  failureCode: string | null;
-  updatedAt: number;
-};
 
 const proofProgress = (
   bytesCompleted: number,
@@ -354,19 +340,20 @@ const captureModeEvents: Record<CaptureMode, [string, string]> = {
 
 export const fixtureStatus: Status = {
   version: '0.1.0',
-  build_id: 'dev',
-  runtime_profile: 'local',
+  runtime_profile: 'cluster',
+  instance_id: 'capture-1',
+  incarnation_id: 'capture-1-incarnation',
   lifecycle: 'ready',
   capture_mode: 'notarized',
   proxy_listener: '127.0.0.1:8787',
   admin_listener: '127.0.0.1:8788',
   proxy_origin: 'http://127.0.0.1:8787',
   admin_origin: 'http://127.0.0.1:8788',
-  metadata_backend: 'sqlite',
+  metadata_backend: 'postgres',
   metadata_status: 'ready',
-  artifact_backend: 'filesystem',
+  artifact_backend: 's3',
   artifact_status: 'ready',
-  vault: 'OS vault',
+  vault: 'shared cluster key',
   notary: 'registry',
   preview_chars: 1000,
   counts: {
@@ -376,14 +363,6 @@ export const fixtureStatus: Status = {
     needs_attention: 1,
     capturing: 1,
     capture_failed: 0,
-  },
-  updates: {
-    enabled: false,
-    current_build_id: 'dev',
-    latest_build_id: null,
-    update_available: false,
-    last_checked_unix_ms: null,
-    error_code: null,
   },
 };
 
@@ -535,12 +514,7 @@ const fixtureVerification: Verification = {
   trust_source: 'registry',
 };
 
-function detail(
-  captureId: string,
-  captures: TraceSummary[],
-  operations: Operation[],
-  share: Share | null = null,
-): TraceDetail {
+function detail(captureId: string, captures: TraceSummary[], operations: Operation[]): TraceDetail {
   const capture = captures.find((item) => item.trace_id === captureId);
   if (!capture) throw new LocalApiError(404, 'capture_not_found', 'Trace not found');
   return {
@@ -562,7 +536,7 @@ function detail(
         : []),
     ],
     notarization: operations.find((operation) => operation.trace_id === capture.trace_id) ?? null,
-    share,
+    share: null,
   };
 }
 
@@ -699,19 +673,7 @@ function traceForCapture(capture: TraceSummary): TraceContent {
   return { ...trace, trace_id: capture.trace_id };
 }
 
-export function createFixtureApi({
-  initialShare,
-}: {
-  initialShare?: {
-    traceId: string;
-    visibility: ShareVisibility;
-    accessEnabled: boolean;
-    passwordProtected?: boolean;
-    expiresAt?: number | null;
-    progress?: FixtureShareState['progress'];
-    failureCode?: string | null;
-  };
-} = {}): LocalApi {
+export function createFixtureApi(): LocalApi {
   const clock = Date.now();
   const offset = clock - fixtureNow;
   let captures = fixtureCaptures.map((capture) => shiftCapture(structuredClone(capture), offset));
@@ -727,61 +689,11 @@ export function createFixtureApi({
       .filter((capture) => capture.state === 'notarized')
       .map((capture) => [capture.trace_id, traceForCapture(capture)]),
   );
-  let account: AccountConnection = {
-    signed_in: true,
-    connection_state: 'connected',
-    provider_display_name: 'sample-user',
-    display_name: 'Sample User',
-    auth_provider: 'github',
-    device_name: 'Admin dashboard',
-    credential_kind: 'device_session',
-    credential_name: 'Admin dashboard',
-    billing: { plan: 'one_gb', billing_status: 'active', purchase_mode: 'test' },
-    credits: {
-      reset_at: Math.floor((fixtureNow + hour * 24 * 10) / 1000),
-      capture: {
-        total_granted_bytes: 10_000_000,
-        total_used_bytes: 1_000_000,
-        total_remaining_bytes: 9_000_000,
-        included_monthly_remaining_bytes: 9_000_000,
-        supplemental_remaining_bytes: 0,
-        next_grant_expiration: null,
-      },
-      notarization: {
-        total_granted_bytes: 10_000_000,
-        total_used_bytes: 2_000_000,
-        total_remaining_bytes: 8_000_000,
-        included_monthly_remaining_bytes: 8_000_000,
-        supplemental_remaining_bytes: 0,
-        next_grant_expiration: null,
-      },
-    },
-    links: {
-      account: 'https://capture.exalto.ai/app/overview',
-      usage: 'https://capture.exalto.ai/app/usage',
-      plans: 'https://capture.exalto.ai/app/usage',
-      settings: 'https://capture.exalto.ai/app/settings',
-    },
-  };
   let nextEventId = Math.max(...events.map((event) => event.event_id)) + 1;
   let nextActionTime = clock;
   let captureMode = fixtureStatus.capture_mode;
-  let autoSealEnabled = false;
   const progressingOperations = new Set<string>();
   const operationPolls = new Map<string, number>();
-  const shares = new Map<string, FixtureShareState>();
-  if (initialShare) {
-    shares.set('share-fixture', {
-      captureId: initialShare.traceId,
-      progress: initialShare.progress ?? 'shared',
-      visibility: initialShare.visibility,
-      accessEnabled: initialShare.accessEnabled,
-      passwordProtected: initialShare.passwordProtected ?? false,
-      expiresAt: initialShare.expiresAt ?? null,
-      failureCode: initialShare.failureCode ?? null,
-      updatedAt: clock,
-    });
-  }
   const actionTimestamp = () => {
     nextActionTime += 1000;
     return nextActionTime;
@@ -907,24 +819,6 @@ export function createFixtureApi({
     progressingOperations.delete(operationId);
     operationPolls.delete(operationId);
   };
-  const fixtureShare = (shareId: string, share: FixtureShareState): Share => ({
-    trace_id: share.captureId,
-    progress: share.progress,
-    visibility: share.visibility,
-    access_enabled: share.accessEnabled,
-    password_protected: share.passwordProtected,
-    expires_at_unix_ms: share.expiresAt,
-    updated_at_unix_ms: share.updatedAt,
-    failure_code: share.failureCode,
-    share_url:
-      share.progress === 'shared' && share.accessEnabled
-        ? `https://notary.example/traces/${shareId}`
-        : null,
-    package_url:
-      share.progress === 'shared' && share.accessEnabled
-        ? `https://notary.example/api/public/traces/${shareId}/package.llmtrace`
-        : null,
-  });
   const status = (): Status => ({
     ...fixtureStatus,
     capture_mode: captureMode,
@@ -986,7 +880,7 @@ export function createFixtureApi({
   const cursor = (kind: string, position: number) => `fixture:${kind}:${position}`;
   const traceDeletionSkipReason = (
     capture: TraceSummary,
-  ): 'capture_active' | 'sealing_active' | 'share_active' | null => {
+  ): 'capture_active' | 'sealing_active' | null => {
     if (capture.status === 'capturing') return 'capture_active';
     if (
       capture.status === 'notarizing' ||
@@ -997,15 +891,6 @@ export function createFixtureApi({
       )
     ) {
       return 'sealing_active';
-    }
-    if (
-      [...shares.values()].some(
-        (share) =>
-          share.captureId === capture.trace_id &&
-          (share.progress === 'verifying' || share.accessEnabled),
-      )
-    ) {
-      return 'share_active';
     }
     return null;
   };
@@ -1021,9 +906,6 @@ export function createFixtureApi({
       (event) => event.trace_id !== captureId && !operationIds.has(event.operation_id ?? ''),
     );
     traces.delete(captureId);
-    for (const [shareId, share] of shares) {
-      if (share.captureId === captureId) shares.delete(shareId);
-    }
   };
   return {
     session: async () => undefined,
@@ -1036,11 +918,6 @@ export function createFixtureApi({
         recordEvent(eventType, message, 'info');
       }
       return { mode: captureMode };
-    },
-    autoSealSetting: async () => ({ enabled: autoSealEnabled }),
-    updateAutoSealSetting: async (enabled) => {
-      autoSealEnabled = enabled;
-      return { enabled: autoSealEnabled };
     },
     notaries: async () => structuredClone(fixtureNotaries),
     providers: async () => ({
@@ -1108,25 +985,14 @@ export function createFixtureApi({
       if (operation && progressingOperations.has(operation.operation_id)) {
         advanceFixtureOperation(operation.operation_id);
       }
-      const share = [...shares.entries()].find(([, value]) => value.captureId === captureId);
-      return detail(
-        captureId,
-        captures,
-        operations,
-        share ? fixtureShare(share[0], share[1]) : null,
-      );
+      return detail(captureId, captures, operations);
     },
     deleteTrace: async (captureId) => {
       const capture = captures.find((item) => item.trace_id === captureId);
       if (!capture) return;
       const reason = traceDeletionSkipReason(capture);
       if (reason) {
-        const code =
-          reason === 'capture_active'
-            ? 'trace_capture_active'
-            : reason === 'sealing_active'
-              ? 'trace_sealing_active'
-              : 'trace_share_active';
+        const code = reason === 'capture_active' ? 'trace_capture_active' : 'trace_sealing_active';
         throw new LocalApiError(409, code, 'Trace cannot be deleted while work is active');
       }
       removeTrace(captureId);
@@ -1242,89 +1108,6 @@ export function createFixtureApi({
         trace_id: captureId,
         verified_at_unix_ms: fixtureVerification.verified_at_unix_ms + offset,
       };
-    },
-    account: async () => account,
-    startAccountConnection: async () => ({
-      request_id: 'auth-docs-fixture',
-      user_code: '7A3C-91F2',
-      verification_uri_complete: 'https://notary.example/authorize?user_code=7A3C-91F2',
-      expires_in_seconds: 600,
-      poll_interval_seconds: 0,
-      state: 'pending',
-    }),
-    pollAccountConnection: async () => {
-      account = {
-        ...account,
-        signed_in: true,
-        connection_state: 'connected',
-        provider_display_name: 'sample-user',
-        display_name: 'Sample User',
-        device_name: 'Admin dashboard',
-        credential_kind: 'device_session',
-        credential_name: 'Admin dashboard',
-      };
-      return account;
-    },
-    disconnectAccount: async () => {
-      account = { signed_in: false, connection_state: 'disconnected', links: account.links };
-    },
-    share: async (captureId, settings) => {
-      if (!traces.has(captureId))
-        throw new LocalApiError(404, 'notarized_trace_not_found', 'Sealed trace not found');
-      const existing = [...shares.entries()].find(([, share]) => share.captureId === captureId);
-      const shareId = existing?.[0] ?? 'share-fixture';
-      const previous = existing?.[1];
-      const updatedAt = actionTimestamp();
-      const share: FixtureShareState = {
-        captureId,
-        progress:
-          previous?.progress === 'stopped'
-            ? settings.reactivate
-              ? 'shared'
-              : 'stopped'
-            : previous?.progress === 'shared'
-              ? 'shared'
-              : 'verifying',
-        visibility: settings.visibility,
-        accessEnabled:
-          previous?.progress === 'stopped'
-            ? Boolean(settings.reactivate)
-            : previous?.progress === 'shared' && previous.accessEnabled === false
-              ? settings.expires_in_days != null
-              : true,
-        passwordProtected:
-          settings.password == null
-            ? (previous?.passwordProtected ?? false)
-            : settings.password.length > 0,
-        expiresAt:
-          settings.expires_in_days == null
-            ? (previous?.expiresAt ?? null)
-            : settings.expires_in_days === 0
-              ? null
-              : updatedAt + settings.expires_in_days * 24 * hour,
-        failureCode: null,
-        updatedAt,
-      };
-      shares.set(shareId, share);
-      return fixtureShare(shareId, share);
-    },
-    shareStatus: async (captureId) => {
-      const entry = [...shares.entries()].find(([, share]) => share.captureId === captureId);
-      if (!entry) throw new LocalApiError(404, 'share_not_found', 'Share not found');
-      const [shareId, share] = entry;
-      const result = fixtureShare(shareId, share);
-      if (share.progress === 'verifying') share.progress = 'shared';
-      share.updatedAt = actionTimestamp();
-      return result;
-    },
-    stopSharing: async (captureId) => {
-      const entry = [...shares.entries()].find(([, share]) => share.captureId === captureId);
-      if (!entry) throw new LocalApiError(404, 'share_not_found', 'Share not found');
-      const [shareId, share] = entry;
-      share.accessEnabled = false;
-      share.progress = 'stopped';
-      share.updatedAt = actionTimestamp();
-      return fixtureShare(shareId, share);
     },
   };
 }

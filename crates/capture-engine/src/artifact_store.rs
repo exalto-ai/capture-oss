@@ -379,7 +379,7 @@ pub trait ArtifactStore: Send + Sync {
     async fn delete(&self, key: &ArtifactKey) -> ArtifactResult<()>;
 }
 
-/// Local filesystem artifact storage used by the default desktop daemon.
+/// Local filesystem artifact storage.
 #[derive(Clone, Debug)]
 pub struct FileSystemArtifactStore {
     checkpoint_dir: PathBuf,

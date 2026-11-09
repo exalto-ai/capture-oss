@@ -1,8 +1,7 @@
 //! The organization a request, Trace, or setting belongs to.
 //!
 //! A multi-customer capture server keeps every organization's metadata,
-//! artifacts and settings apart. The desktop app's local service is one user
-//! and never needs more than the implicit organization its stores imply.
+//! artifacts and settings apart.
 
 use std::fmt;
 

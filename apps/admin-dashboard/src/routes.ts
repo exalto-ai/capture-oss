@@ -9,7 +9,7 @@ export type TraceRouteFilter = {
 
 export type ActivityRouteFilter = { traceId?: string };
 
-export type TraceRouteAction = 'export' | 'share';
+export type TraceRouteAction = 'export';
 
 export type DashboardRoute = {
   view: DashboardView;
@@ -27,9 +27,7 @@ export function dashboardRouteFromHash(hash: string): DashboardRoute {
   const params = new URLSearchParams(query);
   if (id) {
     const action = params.get('action');
-    return view === 'traces' && (action === 'export' || action === 'share')
-      ? { view, id, action }
-      : { view, id };
+    return view === 'traces' && action === 'export' ? { view, id, action } : { view, id };
   }
   if (view === 'activity') {
     const traceId = params.get('trace_id')?.trim();

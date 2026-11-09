@@ -13,19 +13,15 @@ export function OverviewView({
   api,
   status,
   navigate,
-  hideActivity = false,
 }: {
   api: LocalApi;
   status: Status;
   navigate: (route: Route) => void;
-  hideActivity?: boolean;
 }) {
-  const isCluster = status.runtime_profile === 'cluster';
   const queryClient = useQueryClient();
   const events = useQuery({
     queryKey: ['events'],
     queryFn: () => api.events(),
-    enabled: !hideActivity,
   });
   const enableCapture = useMutation({
     mutationFn: () => api.updateCaptureSetting('notarized'),
@@ -51,20 +47,16 @@ export function OverviewView({
       <SimpleGrid cols={{ base: 1, sm: 2, lg: 4 }} spacing={0} className="service-grid">
         <ServiceFact
           icon={CheckCircle2}
-          label={isCluster ? 'Cluster' : 'Service'}
+          label="Cluster"
           value={captureOn ? 'Online' : 'Online · Capture off'}
-          detail={
-            isCluster
-              ? `${status.instance_id ?? 'replica'} · v${status.version}`
-              : `v${status.version}`
-          }
+          detail={`${status.instance_id ?? 'replica'} · v${status.version}`}
           tone="ready"
         />
         <ServiceFact
           icon={KeyRound}
           label="Vault"
           value={status.vault}
-          detail={isCluster ? 'Shared by cluster replicas' : 'Key material stays local'}
+          detail="Shared by cluster replicas"
         />
         <ServiceFact
           icon={ShieldCheck}
@@ -105,7 +97,7 @@ export function OverviewView({
             {status.counts.captured
               ? `${status.counts.captured} trace${status.counts.captured === 1 ? ' is' : 's are'} captured.`
               : captureOn
-                ? `Point an SDK at the ${isCluster ? 'cluster' : 'local'} provider proxy to create a private capture.`
+                ? 'Point an SDK at the cluster provider proxy to create a private capture.'
                 : 'Requests still use the provider proxy, but go directly to the provider and create no evidence.'}
           </Text>
           <Button
@@ -124,26 +116,24 @@ export function OverviewView({
           </Button>
         </Paper>
       </section>
-      {!hideActivity && (
-        <section className="recent-section">
-          <Group justify="space-between">
-            <div>
-              <Text className="eyebrow">Recent activity</Text>
-              <Title order={2}>What changed</Title>
-            </div>
-            <Button variant="subtle" onClick={() => navigate({ view: 'activity' })}>
-              All activity
-            </Button>
-          </Group>
-          {events.isLoading ? (
-            <LoadingState />
-          ) : events.error ? (
-            <QueryError error={events.error} title="Recent activity is unavailable" />
-          ) : (
-            <EventList events={events.data?.items.slice(0, 4) ?? []} navigate={navigate} />
-          )}
-        </section>
-      )}
+      <section className="recent-section">
+        <Group justify="space-between">
+          <div>
+            <Text className="eyebrow">Recent activity</Text>
+            <Title order={2}>What changed</Title>
+          </div>
+          <Button variant="subtle" onClick={() => navigate({ view: 'activity' })}>
+            All activity
+          </Button>
+        </Group>
+        {events.isLoading ? (
+          <LoadingState />
+        ) : events.error ? (
+          <QueryError error={events.error} title="Recent activity is unavailable" />
+        ) : (
+          <EventList events={events.data?.items.slice(0, 4) ?? []} navigate={navigate} />
+        )}
+      </section>
     </div>
   );
 }

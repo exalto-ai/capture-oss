@@ -1,6 +1,5 @@
 //! The capture server: the provider proxy and administration API for a
 //! replicated deployment on shared PostgreSQL metadata and S3 artifacts.
-//! Local capture is the desktop app's.
 //!
 //! The hosted public origin remains a distribution default in this package.
 //! Evidence formats and Proxy-TLS protocol behavior are provided by

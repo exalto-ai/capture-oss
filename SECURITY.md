@@ -12,5 +12,5 @@ including its credentials. Redact sensitive content from logs and screenshots.
 
 This project is pre-release. Security fixes target the current release and
 `main`; older versions do not have a separate security maintenance commitment.
-Reports about the runtime, desktop application, protocol, or Exalto’s hosted
-service can all use the same address.
+Reports about the runtime, protocol, or Exalto’s hosted service can all use
+the same address.

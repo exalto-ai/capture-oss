@@ -335,11 +335,10 @@ impl NotaryTrust for DaemonNotaryTrust {
 pub async fn run(args: ProxyArgs) -> Result<()> {
     let (config, config_path) = load_captured_config(Some(&args.config))?;
     // Server mode needs PostgreSQL metadata, S3 artifacts and admin
-    // authentication, which `[cluster]` validation already requires; local
-    // capture belongs to the desktop app.
+    // authentication, which `[cluster]` validation already requires.
     let Some(cluster) = config.cluster.as_ref() else {
         bail!(
-            "capture-server runs only as a server: configure [cluster] with PostgreSQL metadata and S3 storage. For local capture, use the Exalto Capture app"
+            "capture-server runs only as a server: configure [cluster] with PostgreSQL metadata and S3 storage"
         );
     };
     // Provider requests are authenticated as organizations; a bad token file

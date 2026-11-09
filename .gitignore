@@ -4,13 +4,6 @@
 **/dist/
 /apps/admin-dashboard/node_modules/
 /apps/admin-dashboard/.vitest-attachments/
-/apps/desktop/node_modules/
-/apps/desktop/dist/
-/apps/desktop/.vitest-attachments/
-/apps/desktop/src-tauri/target/
-/apps/desktop/src-tauri/gen/
-/apps/desktop/src-tauri/icons/android/
-/apps/desktop/src-tauri/icons/ios/
 /bundles/
 /captures/
 /traces/

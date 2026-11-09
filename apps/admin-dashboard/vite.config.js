@@ -27,7 +27,9 @@ export default defineConfig({
       configureServer(server) {
         server.middlewares.use('/openapi.json', (request, response, next) => {
           if (!['GET', 'HEAD'].includes(request.method ?? '')) return next();
-          const body = readFileSync(new URL('./src/generated/openapi.json', import.meta.url));
+          const body = readFileSync(
+            new URL('../../crates/capture-server/openapi.json', import.meta.url),
+          );
           response.statusCode = 200;
           response.setHeader('Content-Type', 'application/json; charset=utf-8');
           response.setHeader('Cache-Control', 'no-store');

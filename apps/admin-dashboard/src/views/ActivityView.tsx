@@ -174,11 +174,7 @@ export function EventList({
 }) {
   if (!events.length)
     return (
-      <EmptyState
-        icon={Activity}
-        title="No recent activity"
-        copy="The local event history is empty."
-      />
+      <EmptyState icon={Activity} title="No recent activity" copy="The event history is empty." />
     );
   return (
     <div className="event-list">
