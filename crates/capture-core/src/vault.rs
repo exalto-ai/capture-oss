@@ -107,6 +107,15 @@ impl Vault {
         })
     }
 
+    /// A vault over a 32-byte key the caller generated and keeps, such as an
+    /// SDK user's capture key.
+    pub fn from_key(key: [u8; 32]) -> Self {
+        Self {
+            key,
+            server_key: false,
+        }
+    }
+
     /// Identifies the exact shared cluster key without exposing key material.
     pub fn cluster_identity_sha256(&self) -> Result<String> {
         if !self.server_key {

@@ -6,16 +6,17 @@ key, and the included OpenTelemetry trace is the deterministic normalization
 of those bytes.
 
 The public runtime is independently buildable. It contains the protocol and
-evidence contracts, `capture-server` and its dashboard, the generic remote
-notary, and the verifier. Hosted account, billing, admission, upload, and
-website policy may integrate through explicit client and server seams, but
-those implementations are not part of this workspace.
+evidence contracts, the capture SDKs, `capture-server` and its dashboard, the
+generic remote notary, and the verifier. Hosted account, billing, admission,
+upload, and website policy may integrate through explicit client and server
+seams, but those implementations are not part of this workspace.
 
 ## Components and plaintext ownership
 
 | Component | Sees application plaintext? | Durable state | Responsibility |
 | --- | --- | --- | --- |
-| Provider client | yes | provider credential | Sends an ordinary provider request to a fixed local route |
+| Provider client | yes | provider credential | Sends an ordinary provider request to a fixed route, or through an SDK in its own process |
+| SDK (`exalto-capture`) | yes | none; returns each artifact to the caller as bytes, a `.llmcapture` encrypted under the caller's 32-byte capture key | Runs the capture service in the caller's process: shapes the request for a fixed provider host, captures, seals on request, and verifies |
 | `capture-server` | yes | shared vault key, PostgreSQL metadata, S3 artifacts, pinned Registry | Proxies requests, captures private state, notarizes, and verifies on replicated deployments, with provider requests authenticated as organizations, authenticated administration, and an optional private customer API through which capture-api acts for any organization |
 | Dashboard | only safe metadata store fields and deliberately opened notarized disclosures | browser session preference | Uses the capture server's administration API |
 | `capture-notary` | no in Notarized sessions; yes, in memory only, in Witnessed sessions | signing key | Resolves the provider, relays encrypted TLS records or Witnessed plaintext, witnesses sessions, and completes proof work |
@@ -23,8 +24,9 @@ those implementations are not part of this workspace.
 | Artifact backend | encrypted capture or disclosed package bytes | private S3-compatible objects | Retains immutable artifacts after size and SHA-256 validation |
 | Independent verifier | disclosed package contents | chosen trust policy | Verifies a portable `.llmtrace` without contacting the provider or notary |
 
-The capture service, a `capture-server` replica, is the only Capture runtime component that sees provider
-credentials, prompts, and response plaintext. The remote notary learns the
+The capture service, an SDK in the caller's process or a `capture-server`
+replica, is the only Capture runtime component that sees provider credentials,
+prompts, and response plaintext. The remote notary learns the
 selected provider hostname, ciphertext sizes, timing, and protocol metadata,
 but in a Notarized session it must not receive credential values or
 application plaintext. A Witnessed session is the deliberate exception
@@ -47,7 +49,10 @@ fixed upstream hosts:
 | `/openrouter` | `openrouter.ai` | OpenRouter |
 
 Configuration can disable a route or change its local prefix. It cannot direct
-that adapter to an arbitrary upstream. The remote notary separately enforces
+that adapter to an arbitrary upstream. The SDK selects the same five hosts from
+the request URL and refuses any other host, scheme, port, or a method other
+than `POST`; it then follows the flows below in the caller's process and hands
+the resulting artifact back instead of storing it. The remote notary separately enforces
 an explicit hostname allowlist before it resolves or connects.
 
 ## Notarized request flow

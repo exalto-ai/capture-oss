@@ -22,6 +22,7 @@ regexes = [
   '''authorization: Bearer offline-(server|daemon-e2e)-secret''',
   '''x-notary-trusted-notary-key: 0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798''',
   '''"verification_key": "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"''',
+  '''NOTARY_KEY = ["']0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798["']''',
   '''"eyJhbGciOiJIUzI1NiJ9\.eyJzdWIiOiJmaXh0dXJlIn0\.signaturevalue1234"''',
   '''["']-----BEGIN (OPENSSH )?PRIVATE KEY-----["'] in text''',
   '''\("-----BEGIN (OPENSSH )?PRIVATE KEY-----", "-----END (OPENSSH )?PRIVATE KEY-----"\),''',

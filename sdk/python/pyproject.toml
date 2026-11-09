@@ -1,0 +1,19 @@
+[build-system]
+requires = ["maturin>=1.16,<2"]
+build-backend = "maturin"
+
+[project]
+name = "exalto-capture"
+version = "0.0.1"
+description = "Seal model-provider calls with an Exalto Capture notary and get the evidence back as bytes"
+license = "MIT"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.optional-dependencies]
+httpx = ["httpx>=0.27", "anyio>=4.1"]
+
+[tool.maturin]
+python-source = "python"
+module-name = "exalto_capture._native"
+features = ["pyo3/extension-module"]

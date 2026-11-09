@@ -4,8 +4,9 @@ members = [
     "crates/capture-engine",
     "crates/capture-server",
     "crates/capture-notary",
+    "sdk/rust",
 ]
-exclude = ["vendor/tlsn", "vendor/tlsn-utils"]
+exclude = ["vendor/tlsn", "vendor/tlsn-utils", "sdk/python", "sdk/js"]
 resolver = "2"
 
 [workspace.package]

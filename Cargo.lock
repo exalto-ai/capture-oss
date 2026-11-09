@@ -1994,6 +1994,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "exalto-capture"
+version = "0.0.1"
+dependencies = [
+ "anyhow",
+ "bytes",
+ "capture-core",
+ "hex",
+ "http",
+ "k256",
+ "rand 0.9.5",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "tokio",
+ "url",
+ "uuid",
+ "zeroize",
+]
+
+[[package]]
 name = "fallible-iterator"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

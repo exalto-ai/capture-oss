@@ -7,15 +7,17 @@ The open-source foundation of **Exalto Capture** and the **Exalto Capture Protoc
 Capture model-provider HTTP exchanges, seal them with Exalto's notary or a
 compatible self-hosted notary, and verify portable Traces.
 
-The public source includes the capture server and its dashboard, the generic
-remote notary, and protocol and verification code. Exalto’s hosted accounts,
-billing, uploads, and sharing implementation are proprietary and maintained
-separately. The capture engine keeps optional clients for hosted admission and
-the notary Registry, and hosted notary admission integrates through the notary
+The public source includes the capture SDKs for Rust, Python and Node.js, the
+capture server and its dashboard, the generic remote notary, and protocol and
+verification code. Exalto’s hosted accounts, billing, uploads, and sharing
+implementation are proprietary and maintained separately. The capture engine
+keeps optional clients for hosted admission and the notary Registry, and hosted
+notary admission integrates through the notary
 server's admission-policy seam. Self-hosting does not require an Exalto account.
 
 ## Get started
 
+- [Capture from your own code with the SDKs](sdk/README.md)
 - [Build the capture server](#build-from-source)
 - [Run your own notary](docs/self-hosting.md)
 - [Read the architecture and trust model](docs/architecture.md)
@@ -25,11 +27,12 @@ This is pre-release software. Compatibility and artifact formats may change.
 
 ## Trust boundary
 
-The capture service (a capture server) sees plaintext model traffic and
-provider credentials. The remote notary resolves and connects to allowlisted provider hosts. In Notarized
-mode it must not receive plaintext or credentials. In the optional Witnessed
-mode it receives both over TLS, relays the exchange, and signs a receipt over
-the redacted request and response: trust in the notary operator, not a proof. A
+The capture service (an SDK in your process, or a capture server) sees
+plaintext model traffic and provider credentials. The remote notary resolves
+and connects to allowlisted provider hosts. In Notarized mode it must not
+receive plaintext or credentials. In the optional Witnessed mode it receives
+both over TLS, relays the exchange, and signs a receipt over the redacted
+request and response: trust in the notary operator, not a proof. A
 `.llmcapture` is sensitive, vault-encrypted retry state capable of
 reconstructing the original request; a Sealed `.llmtrace` contains selectively
 disclosed evidence. Never treat the two as interchangeable. See the

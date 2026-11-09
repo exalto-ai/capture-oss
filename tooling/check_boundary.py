@@ -14,7 +14,7 @@ PATH_DEPENDENCY = re.compile(r"\bpath\s*=\s*['\"]([^'\"]+)['\"]")
 SOURCE_INCLUDE = re.compile(
     r"\b(?:include_str|include_bytes)!\s*\(\s*['\"]([^'\"]+)['\"]\s*\)"
 )
-IGNORED_DIRECTORIES = {".git", "target", "node_modules", ".vitest-attachments"}
+IGNORED_DIRECTORIES = {".git", "target", "node_modules", ".vitest-attachments", ".venv", "__pycache__"}
 SENSITIVE_SUFFIXES = {".key", ".llmcapture", ".llmbundle", ".sqlite"}
 
 

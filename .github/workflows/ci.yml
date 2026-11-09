@@ -29,13 +29,46 @@ jobs:
           cache-dependency-path: apps/admin-dashboard/package-lock.json
       - run: >-
           cargo fmt --check
-          -p capture-core -p capture-engine -p capture-server -p capture-notary
+          -p capture-core -p capture-engine -p capture-server -p capture-notary -p exalto-capture
       - run: tooling/check-boundary.sh
       - run: python3 -m unittest tooling/test_check_boundary.py
       - run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
       - run: cargo test --locked --workspace --all-targets --all-features
       - run: npm --prefix apps/admin-dashboard ci
       - run: npm --prefix apps/admin-dashboard run build
+
+  sdk-bindings:
+    runs-on: ubuntu-24.04
+    env:
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install Rust toolchain from rust-toolchain.toml
+        run: |
+          rustup toolchain install --no-self-update
+          rustup component add rustfmt clippy
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: sdk/js/package-lock.json
+      - run: cargo fmt --manifest-path sdk/python/Cargo.toml --check
+      - run: cargo fmt --manifest-path sdk/js/Cargo.toml --check
+      - run: cargo clippy --locked --manifest-path sdk/python/Cargo.toml --all-targets -- -D warnings
+      - run: cargo clippy --locked --manifest-path sdk/js/Cargo.toml --all-targets -- -D warnings
+      - name: Test the Python SDK
+        working-directory: sdk/python
+        run: |
+          python3 -m venv .venv
+          .venv/bin/pip install --quiet maturin==1.16.0 httpx==0.28.1
+          VIRTUAL_ENV="$PWD/.venv" .venv/bin/maturin develop --locked
+          .venv/bin/python -m unittest discover -s tests -v
+      - name: Test the JS SDK
+        working-directory: sdk/js
+        run: |
+          npm ci
+          npm run build:debug
+          npm test
 
   gitleaks:
     runs-on: ubuntu-24.04

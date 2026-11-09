@@ -1,0 +1,22 @@
+[package]
+name = "exalto-capture"
+version.workspace = true
+edition = "2024"
+license = "MIT"
+description = "Seal model-provider calls with an Exalto Capture notary and get the evidence back as bytes"
+
+[dependencies]
+anyhow = { workspace = true }
+bytes = { workspace = true }
+capture-core = { workspace = true, features = ["vault"] }
+hex = { workspace = true }
+http = { workspace = true }
+k256 = { workspace = true, features = ["ecdsa"] }
+rand = "0.9"
+reqwest = { workspace = true, features = ["json", "rustls-tls"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = ["full"] }
+url = { workspace = true }
+uuid = { workspace = true, features = ["v4"] }
+zeroize = { workspace = true }
