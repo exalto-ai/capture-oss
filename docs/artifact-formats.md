@@ -5,9 +5,9 @@ Do not describe them interchangeably.
 
 | Artifact | Location | Contains proof? | Shareable? |
 | --- | --- | --- | --- |
-| `.llmcapture` | local vault-backed storage | no, deferred private state | no |
-| `.llmtrace` (Notarized) | local sealed storage | yes, a TLSNotary proof checked with an external trusted key | only after reviewing disclosed bodies |
-| `.llmtrace` (Witnessed) | local sealed storage | no proof; a notary-signed receipt checked with an external trusted key | only after reviewing disclosed bodies |
+| `.llmcapture` | the capture server's private store, encrypted under its organization's vault key | no, deferred private state | no |
+| `.llmtrace` (Notarized) | the capture server's private store | yes, a TLSNotary proof checked with an external trusted key | only after reviewing disclosed bodies |
+| `.llmtrace` (Witnessed) | the capture server's private store | no proof; a notary-signed receipt checked with an external trusted key | only after reviewing disclosed bodies |
 | Public `trace.otlp.json` | hosted public Traces | no portable evidence | yes, for inspection |
 
 ## Encrypted capture checkpoint
@@ -175,7 +175,7 @@ The capture server verifies a retained Trace with
 `POST /v1/traces/{trace_id}/verify`, and a portable `.llmtrace` without
 importing or retaining it with `POST /v1/verify`.
 
-Package verification selects a key from the service's configured or cached
+Package verification selects a key from the server's configured or pinned
 trust by default. For an explicit self-hosted trust anchor, send the public key
 in the `x-notary-trusted-notary-key` header.
 

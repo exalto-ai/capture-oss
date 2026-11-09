@@ -2,8 +2,9 @@
 
 `GET /api/registry` publishes the official Registry of notary endpoints and secp256k1
 verification keys. The public origin authenticates the response with HTTPS;
-the JSON document is not separately signed. Clients cache successful responses
-so existing evidence remains verifiable when a deployment changes keys.
+the JSON document is not separately signed. A capture server pins accepted
+generations in its shared metadata so existing evidence remains verifiable when
+a deployment changes keys.
 
 ## Registry format
 
@@ -58,7 +59,7 @@ anchor. Every Registry record must state its transport explicitly.
 | `revoked` | no | no | no after the client refreshes the directory |
 
 The active key is used for new proxy sessions. A deferred capture contains a
-notary-signed receipt, so the notarization worker tries cached active and
+notary-signed receipt, so the notarization worker tries the pinned active and
 retiring records and selects the endpoint whose key verifies that receipt.
 This lets a planned rotation drain old bundles without making the notary store
 per-user state.
@@ -68,12 +69,10 @@ the key may sign. `notarize_until_unix_ms` is the later wall-clock drain
 deadline for already-created bundles. The authenticated provider-connection
 timestamp in a capture or notarized package selects the historical trust
 window. `POST /v1/traces/{trace_id}/verify` remains offline and
-therefore uses the last cached Registry. Sharing always refreshes the Registry
-and enforces current revocation state before sending any bytes, even
-when a configured explicit key was used for the initial local verification.
+therefore uses the last pinned Registry.
 
-Setting `notary.endpoint` and `notary.public_key` together in the local
-service's `config.toml` is an operator override. It does not use Registry
+Setting `notary.endpoint` and `notary.public_key` together in the capture
+server's `config.toml` is an operator override. It does not use Registry
 lifecycle policy. Explicit endpoints
 use `tls://host:port` or `tcp://host:port`. Bare `host:port` values are
 rejected so transport can never be selected implicitly.

@@ -8,10 +8,10 @@ Capture model-provider HTTP exchanges, seal them with Exalto's notary or a
 compatible self-hosted notary, and verify portable Traces.
 
 The public source includes the capture server and its dashboard, the generic
-remote notary, the updater, and protocol and verification code. Exalto’s hosted
-accounts, billing, uploads, and sharing implementation are proprietary and
-maintained separately. The capture engine keeps optional clients for those
-hosted services, and hosted notary admission integrates through the notary
+remote notary, and protocol and verification code. Exalto’s hosted accounts,
+billing, uploads, and sharing implementation are proprietary and maintained
+separately. The capture engine keeps optional clients for hosted admission and
+the notary Registry, and hosted notary admission integrates through the notary
 server's admission-policy seam. Self-hosting does not require an Exalto account.
 
 ## Get started

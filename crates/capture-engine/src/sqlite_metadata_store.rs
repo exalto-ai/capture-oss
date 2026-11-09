@@ -1,4 +1,4 @@
-//! Asynchronous adapter for the daemon's SQLite metadata metadata.
+//! Asynchronous adapter for the SQLite metadata test backend.
 
 use std::{path::PathBuf, sync::Arc};
 

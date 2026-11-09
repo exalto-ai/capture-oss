@@ -33,7 +33,7 @@ clap = { workspace = true, features = ["derive", "string"] }
 http = { workspace = true }
 hex = { workspace = true }
 k256 = { workspace = true, features = ["ecdsa"] }
-capture-core = { workspace = true, features = ["cli", "openapi"] }
+capture-core = { workspace = true, features = ["openapi", "vault"] }
 capture-engine = { workspace = true }
 mime_guess = "2.0"
 reqwest = { workspace = true, features = ["json", "rustls-tls", "stream"] }

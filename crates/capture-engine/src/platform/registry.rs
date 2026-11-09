@@ -1,14 +1,9 @@
 use std::{
     collections::BTreeMap,
-    fs,
-    fs::OpenOptions,
-    path::{Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
 };
 
 use anyhow::{Context, Result, anyhow, bail};
-use k256::ecdsa::VerifyingKey;
-use serde::{Deserialize, Serialize};
 
 use capture_core::{
     CaptureCheckpoint,
@@ -17,13 +12,12 @@ use capture_core::{
     },
 };
 
-use super::{api_origin::ApiOrigin, http_client_builder, storage};
+use super::{api_origin::ApiOrigin, http_client_builder};
 use crate::metadata::RegistrySnapshot;
 
 pub use capture_core::registry::parse_registry;
 
-#[derive(Clone, Default, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Clone, Default)]
 struct RegistryStore {
     format: String,
     generation: u64,
@@ -50,33 +44,6 @@ impl From<RegistrySnapshot> for PinnedRegistryState {
             records: value.records,
         }
     }
-}
-
-pub fn pin(registry: Registry, registry_source: &str) -> Result<()> {
-    let path = registry_store_path()?;
-    pin_at_path(&path, registry, registry_source)
-}
-
-fn pin_at_path(path: &Path, registry: Registry, registry_source: &str) -> Result<()> {
-    registry.validate()?;
-    let parent = path.parent().expect("registry store has a parent");
-    fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
-    let lock_path = path.with_extension("json.lock");
-    let lock = OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .read(true)
-        .write(true)
-        .open(&lock_path)
-        .with_context(|| format!("open {}", lock_path.display()))?;
-    lock.lock()
-        .with_context(|| format!("lock {}", lock_path.display()))?;
-    // The read must happen after acquiring the cross-process lock. Otherwise a
-    // slower process could overwrite a newer generation or cached revocation.
-    let mut store = merge_store(load_store(path)?, registry)?;
-    store.registry_source = Some(registry_source.to_owned());
-    validate_registry_store(&store)?;
-    write_store(path, &store)
 }
 
 fn merge_store(mut store: RegistryStore, registry: Registry) -> Result<RegistryStore> {
@@ -243,58 +210,6 @@ fn shared_from_store(store: RegistryStore) -> RegistrySnapshot {
     }
 }
 
-pub fn cached_registry_key_at(
-    public_key: &[u8],
-    authenticated_unix_ms: u64,
-) -> Result<(String, String)> {
-    let requested_id = key_id(public_key);
-    let store = validated_store()?;
-    let record = store
-        .records
-        .iter()
-        .find(|record| {
-            record
-                .public_key
-                .eq_ignore_ascii_case(&hex::encode(public_key))
-        })
-        .ok_or_else(|| {
-            anyhow!(
-                "notary key {requested_id} is not present in the local registry store; configure notary.public_key with an explicit endpoint for a self-hosted notary"
-            )
-        })?;
-    if !record.trusted_at(authenticated_unix_ms) {
-        bail!(
-            "notary key {} was not trusted at the authenticated connection time",
-            record.key_id
-        );
-    }
-    Ok((record.key_id.clone(), "registry".to_owned()))
-}
-
-pub fn cached_registry_record_for_checkpoint(
-    checkpoint: &CaptureCheckpoint,
-) -> Result<(Vec<u8>, RegistryRecord)> {
-    let connection_time = checkpoint.authenticated_connection_time_unix_ms()?;
-    let now = unix_time_ms()?;
-    for record in validated_store()?.records {
-        let key = record.public_key_bytes()?;
-        if record.trusted_at(connection_time)
-            && record.accepts_notarization_at(now)
-            && checkpoint.verify_notary_key(&key).is_ok()
-        {
-            return Ok((key, record));
-        }
-    }
-    bail!(
-        "no cached active or retiring notary can notarize this checkpoint; refresh the registry or configure notary.endpoint and notary.public_key together"
-    )
-}
-
-/// Returns the records of the locally pinned Registry.
-pub fn cached_registry_records() -> Result<Vec<RegistryRecord>> {
-    Ok(validated_store()?.records)
-}
-
 /// Finds the Registry key that signed a witness receipt and was trusted when
 /// the notary opened the provider connection.
 pub fn witness_key_from_records(
@@ -309,36 +224,6 @@ pub fn witness_key_from_records(
         }
     }
     bail!("no trusted notary key signed this witness receipt")
-}
-
-pub fn explicit_key(value: &str) -> Result<(Vec<u8>, String)> {
-    let key = hex::decode(value).context("trusted notary key must be hexadecimal")?;
-    VerifyingKey::from_sec1_bytes(&key)
-        .context("trusted notary key must be a SEC1 secp256k1 key")?;
-    Ok((key.clone(), key_id(&key)))
-}
-
-pub fn pinned_state() -> Result<Option<PinnedRegistryState>> {
-    let path = registry_store_path()?;
-    if !path.exists() {
-        return Ok(None);
-    }
-    let store = load_store(&path)?;
-    validate_registry_store(&store)?;
-    Ok(Some(PinnedRegistryState {
-        registry_source: store.registry_source,
-        generation: store.generation,
-        active_key_id: store
-            .active_key_id
-            .expect("validated registry store has an active key"),
-        records: store.records,
-    }))
-}
-
-fn validated_store() -> Result<RegistryStore> {
-    let store = load_store(&registry_store_path()?)?;
-    validate_registry_store(&store)?;
-    Ok(store)
 }
 
 fn validate_registry_store(store: &RegistryStore) -> Result<()> {
@@ -393,34 +278,6 @@ fn validate_registry_store(store: &RegistryStore) -> Result<()> {
     Ok(())
 }
 
-fn registry_store_path() -> Result<PathBuf> {
-    storage::config_file("registry.json")
-}
-
-fn load_store(path: &Path) -> Result<RegistryStore> {
-    if !path.exists() {
-        return Ok(RegistryStore::default());
-    }
-    let bytes = fs::read(path).with_context(|| format!("read {}", path.display()))?;
-    let value: serde_json::Value =
-        serde_json::from_slice(&bytes).context("parse local notary registry store")?;
-    match value.get("format").and_then(serde_json::Value::as_str) {
-        Some(REGISTRY_FORMAT) => {
-            serde_json::from_value(value).context("parse v3 local notary registry store")
-        }
-        Some(format) => bail!(
-            "unsupported local notary registry store format: {format}; remove the cache and refresh the notary registry"
-        ),
-        None => bail!(
-            "local notary registry store format is missing; remove the cache and refresh the notary registry"
-        ),
-    }
-}
-
-fn write_store(path: &Path, store: &RegistryStore) -> Result<()> {
-    storage::write_private_file_atomically(path, &serde_json::to_vec_pretty(store)?)
-}
-
 fn unix_time_ms() -> Result<u64> {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -428,32 +285,6 @@ fn unix_time_ms() -> Result<u64> {
         .as_millis()
         .try_into()
         .context("current time does not fit in u64 milliseconds")
-}
-
-pub async fn discover_notary() -> Result<NotaryEndpoint> {
-    let registry = refresh_registry().await?;
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .context("system clock is before the Unix epoch")?
-        .as_millis()
-        .try_into()
-        .context("current time does not fit in u64 milliseconds")?;
-    resolve_notary(registry.active_at(now)?).await
-}
-
-pub async fn refresh_registry() -> Result<Registry> {
-    refresh_registry_from(&super::auth::configured_api_origin()?).await
-}
-
-pub async fn refresh_registry_from(api_origin: &ApiOrigin) -> Result<Registry> {
-    let (registry, registry_source_url) = fetch_registry_from(api_origin).await?;
-    pin(registry.clone(), registry_source_url.as_str())?;
-    tracing::info!(
-        key_id = %registry.active_key_id,
-        key_count = registry.notaries.len(),
-        "pinned trusted notary registry"
-    );
-    Ok(registry)
 }
 
 pub async fn fetch_registry_from(api_origin: &ApiOrigin) -> Result<(Registry, url::Url)> {
@@ -506,8 +337,6 @@ pub async fn resolve_notary(record: &RegistryRecord) -> Result<NotaryEndpoint> {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Arc, Barrier};
-
     use capture_core::registry::NotaryTransport;
 
     use super::*;
@@ -608,32 +437,6 @@ mod tests {
     }
 
     #[test]
-    fn write_store_atomically_replaces_an_existing_file() {
-        let temp = tempfile::tempdir().unwrap();
-        let path = temp.path().join("registry.json");
-        fs::write(&path, b"old registry").unwrap();
-        let active = record(8, NotaryKeyStatus::Active);
-        let store = RegistryStore {
-            format: REGISTRY_FORMAT.into(),
-            generation: 2,
-            registry_sha256: Some("registry-sha".into()),
-            registry_source: Some("https://example.test/api/registry".into()),
-            active_key_id: Some(active.key_id.clone()),
-            records: vec![active],
-        };
-
-        write_store(&path, &store).unwrap();
-
-        let loaded = load_store(&path).unwrap();
-        assert_eq!(loaded.generation, 2);
-        assert_eq!(loaded.registry_sha256.as_deref(), Some("registry-sha"));
-        assert_eq!(
-            loaded.registry_source.as_deref(),
-            Some("https://example.test/api/registry")
-        );
-    }
-
-    #[test]
     fn trust_store_rejects_a_non_public_registry_source() {
         let active = record(8, NotaryKeyStatus::Active);
         let mut store = RegistryStore {
@@ -718,71 +521,6 @@ mod tests {
         }
         assert_eq!(store.records.len(), 40);
         validate_registry_store(&store).unwrap();
-    }
-
-    #[test]
-    fn concurrent_pins_cannot_overwrite_a_newer_generation() {
-        let root = std::env::temp_dir().join(format!(
-            "notary-registry-lock-{}-{}",
-            std::process::id(),
-            uuid::Uuid::new_v4().simple()
-        ));
-        fs::create_dir(&root).unwrap();
-        let path = root.join("registry.json");
-        let older = record(7, NotaryKeyStatus::Active);
-        let newer = record(8, NotaryKeyStatus::Active);
-        let barrier = Arc::new(Barrier::new(3));
-        let spawn_pin =
-            |generation: u64, active: RegistryRecord, barrier: Arc<Barrier>, path: PathBuf| {
-                std::thread::spawn(move || {
-                    barrier.wait();
-                    pin_at_path(
-                        &path,
-                        Registry {
-                            format: REGISTRY_FORMAT.into(),
-                            generation,
-                            active_key_id: active.key_id.clone(),
-                            notaries: vec![active],
-                        },
-                        "https://example.test/api/registry",
-                    )
-                })
-            };
-        let old_thread = spawn_pin(1, older, Arc::clone(&barrier), path.clone());
-        let new_key_id = newer.key_id.clone();
-        let new_thread = spawn_pin(2, newer, Arc::clone(&barrier), path.clone());
-        barrier.wait();
-        let old_result = old_thread.join().unwrap();
-        let new_result = new_thread.join().unwrap();
-        assert!(new_result.is_ok());
-        let _ = old_result;
-
-        let store = load_store(&path).unwrap();
-        assert_eq!(store.generation, 2);
-        assert_eq!(store.active_key_id.as_deref(), Some(new_key_id.as_str()));
-        validate_registry_store(&store).unwrap();
-        let _ = fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn load_store_rejects_legacy_cache_formats() {
-        let path = std::env::temp_dir().join(format!(
-            "notary-legacy-registry-{}-{}.json",
-            std::process::id(),
-            uuid::Uuid::new_v4().simple()
-        ));
-        for format in [
-            "llm-notary/notary-directory/v1",
-            "llm-notary/notary-directory/v2",
-        ] {
-            std::fs::write(
-                &path,
-                serde_json::to_vec(&serde_json::json!({ "format": format })).unwrap(),
-            )
-            .unwrap();
-            assert!(load_store(&path).is_err());
-        }
-        let _ = std::fs::remove_file(path);
     }
 
     #[test]

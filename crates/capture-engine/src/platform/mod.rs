@@ -1,16 +1,13 @@
 //! Clients for Exalto's hosted platform that every Capture host shares: the
-//! API origin, account credentials and one-operation admission, the notary
-//! Registry and its local cache, and hosted Trace sharing.
+//! API origin, one-operation admission responses, and the notary Registry.
 
 pub mod api_origin;
 pub mod auth;
 pub mod registry;
-pub mod sharing;
-pub mod storage;
 
-/// Public API origin compiled into released clients. Override it at build time
-/// with `CAPTURE_API_PUBLIC_ORIGIN` when producing a self-hosted distribution.
-pub use capture_updater::{BUILD_ID, DEFAULT_API_ORIGIN};
+/// Exalto's API origin. A server uses another when `CAPTURE_PLATFORM_API_ORIGIN`
+/// is set.
+pub const DEFAULT_API_ORIGIN: &str = "https://api.capture.exalto.ai";
 
 pub const DAEMON_USER_AGENT: &str = concat!("exalto-capture/", env!("CARGO_PKG_VERSION"));
 

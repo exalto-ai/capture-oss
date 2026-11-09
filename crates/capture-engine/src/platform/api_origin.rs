@@ -38,8 +38,7 @@ impl ApiOrigin {
     }
 
     pub fn default_public() -> Self {
-        Self::parse(super::DEFAULT_API_ORIGIN)
-            .expect("CAPTURE_API_PUBLIC_ORIGIN must be a secure API origin")
+        Self::parse(super::DEFAULT_API_ORIGIN).expect("the default API origin is a secure origin")
     }
 
     /// Builds an absolute URL for an API path rooted at `/api/`.
@@ -51,31 +50,6 @@ impl ApiOrigin {
         self.0
             .join(path)
             .expect("an absolute API path always joins a validated origin")
-    }
-
-    /// Builds a Capture URL for the hosted API, or a route on the same validated
-    /// origin. Account links must stay on the configured hosted origin so a
-    /// self-hosted daemon never sends a user to the public service by
-    /// accident.
-    pub fn web_url(&self, route: &str) -> Url {
-        let mut url = if self == &Self::default_public() {
-            Url::parse(capture_updater::DEFAULT_CAPTURE_ORIGIN).expect("validated Capture origin")
-        } else {
-            self.0.clone()
-        };
-        let route = route.strip_prefix('/').unwrap_or(route);
-        url.set_path(&format!("/{route}"));
-        url.set_query(None);
-        url.set_fragment(None);
-        url
-    }
-
-    pub fn url(&self) -> &Url {
-        &self.0
-    }
-
-    pub fn is_loopback(&self) -> bool {
-        is_loopback_url(&self.0)
     }
 }
 
@@ -117,18 +91,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn hosted_account_links_use_capture_while_api_calls_use_api() {
-        let origin = ApiOrigin::default_public();
+    fn the_default_origin_is_the_compiled_public_api() {
         assert_eq!(
-            origin
-                .api_url("/api/account")
+            ApiOrigin::default_public()
+                .api_url("/api/registry")
                 .origin()
                 .ascii_serialization(),
-            capture_updater::DEFAULT_API_ORIGIN
-        );
-        assert_eq!(
-            origin.web_url("/app/settings").as_str(),
-            format!("{}/app/settings", capture_updater::DEFAULT_CAPTURE_ORIGIN)
+            crate::platform::DEFAULT_API_ORIGIN
         );
     }
 
@@ -139,10 +108,6 @@ mod tests {
         assert_eq!(
             secure.api_url("/api/device-session").as_str(),
             "https://example.test/api/device-session"
-        );
-        assert_eq!(
-            secure.web_url("/account/usage").as_str(),
-            "https://example.test/account/usage"
         );
         assert_eq!(
             ApiOrigin::parse("http://[::1]:8787").unwrap().to_string(),

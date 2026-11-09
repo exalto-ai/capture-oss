@@ -7,17 +7,26 @@
 use std::{
     fmt,
     fs::{self, File, OpenOptions},
-    io::{Read as _, Seek as _, SeekFrom, Write as _},
-    path::{Component, Path, PathBuf},
+    path::{Component, Path},
     pin::Pin,
     task::{Context as TaskContext, Poll},
 };
 
 use anyhow::{Context as _, Result, anyhow, bail, ensure};
 use async_trait::async_trait;
-use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
-use sha2::{Digest as _, Sha256};
-use tokio::io::{AsyncRead, AsyncReadExt as _, AsyncWriteExt as _, ReadBuf};
+use tokio::io::{AsyncRead, AsyncReadExt as _, ReadBuf};
+
+// Only the filesystem test backend uses these.
+#[cfg(any(test, feature = "test-support"))]
+use {
+    base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD},
+    sha2::{Digest as _, Sha256},
+    std::{
+        io::{Read as _, Seek as _, SeekFrom, Write as _},
+        path::PathBuf,
+    },
+    tokio::io::AsyncWriteExt as _,
+};
 
 const MAX_ARTIFACT_LOCATOR_BYTES: usize = 8 * 1024;
 
@@ -42,6 +51,7 @@ impl ArtifactKind {
         }
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     const fn extension(self) -> &'static str {
         match self {
             Self::CaptureCheckpoint => "llmcapture",
@@ -379,13 +389,15 @@ pub trait ArtifactStore: Send + Sync {
     async fn delete(&self, key: &ArtifactKey) -> ArtifactResult<()>;
 }
 
-/// Local filesystem artifact storage.
+/// Local filesystem artifact storage, the engine's offline test backend.
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Clone, Debug)]
 pub struct FileSystemArtifactStore {
     checkpoint_dir: PathBuf,
     package_dir: PathBuf,
 }
 
+#[cfg(any(test, feature = "test-support"))]
 impl FileSystemArtifactStore {
     pub fn new(checkpoint_dir: impl Into<PathBuf>, package_dir: impl Into<PathBuf>) -> Self {
         Self {
@@ -481,6 +493,7 @@ impl FileSystemArtifactStore {
     }
 }
 
+#[cfg(any(test, feature = "test-support"))]
 #[async_trait]
 impl ArtifactStore for FileSystemArtifactStore {
     async fn put(
@@ -582,6 +595,7 @@ fn validate_trace_id(trace_id: &str) -> Result<()> {
     Ok(())
 }
 
+#[cfg(any(test, feature = "test-support"))]
 fn validate_root(path: &Path) -> Result<()> {
     ensure!(
         !path.as_os_str().is_empty(),
@@ -606,6 +620,7 @@ fn validate_sha256(value: &str) -> Result<()> {
     Ok(())
 }
 
+#[cfg(any(test, feature = "test-support"))]
 fn locator_for_path(path: &Path) -> Result<ArtifactLocator> {
     let value = path
         .to_str()
@@ -639,6 +654,7 @@ pub fn backend(source: anyhow::Error) -> ArtifactStoreError {
     ArtifactStoreError::Backend { source }
 }
 
+#[cfg(any(test, feature = "test-support"))]
 fn inspect_artifact(
     path: &Path,
     key: ArtifactKey,
@@ -749,6 +765,7 @@ fn open_regular_file(path: &Path) -> ArtifactResult<File> {
     }
 }
 
+#[cfg(any(test, feature = "test-support"))]
 fn delete_artifact(path: &Path) -> ArtifactResult<()> {
     let parent = path
         .parent()
@@ -781,12 +798,14 @@ fn delete_artifact(path: &Path) -> ArtifactResult<()> {
     sync_directory(parent).map_err(backend)
 }
 
+#[cfg(any(test, feature = "test-support"))]
 struct StagedArtifact {
     pending: PendingArtifact,
     size_bytes: u64,
     sha256: String,
 }
 
+#[cfg(any(test, feature = "test-support"))]
 async fn stage_source(path: &Path, mut source: ArtifactSource) -> ArtifactResult<StagedArtifact> {
     let path = path.to_owned();
     let (pending, file) = tokio::task::spawn_blocking(move || create_staged_file(&path))
@@ -849,6 +868,7 @@ async fn stage_source(path: &Path, mut source: ArtifactSource) -> ArtifactResult
     })
 }
 
+#[cfg(any(test, feature = "test-support"))]
 fn create_staged_file(path: &Path) -> Result<(PendingArtifact, File)> {
     let parent = path
         .parent()
@@ -881,6 +901,7 @@ fn create_staged_file(path: &Path) -> Result<(PendingArtifact, File)> {
     Ok((pending, file))
 }
 
+#[cfg(any(test, feature = "test-support"))]
 fn commit_artifact(
     path: &Path,
     key: ArtifactKey,
@@ -934,6 +955,7 @@ fn commit_artifact(
     }
 }
 
+#[cfg(any(test, feature = "test-support"))]
 fn files_are_exactly_equal(
     first_path: &Path,
     second_path: &Path,
@@ -988,11 +1010,13 @@ fn files_are_exactly_equal(
     }
 }
 
+#[cfg(any(test, feature = "test-support"))]
 struct PrivateSpool {
     file: File,
     path: tempfile::TempPath,
 }
 
+#[cfg(any(test, feature = "test-support"))]
 fn copy_verified_to_private_spool(
     path: &Path,
     record: &ArtifactRecord,
@@ -1095,6 +1119,7 @@ fn copy_verified_to_private_spool(
     Ok(PrivateSpool { file, path })
 }
 
+#[cfg(any(test, feature = "test-support"))]
 fn create_private_directory(path: &Path) -> Result<()> {
     let mut created_directories = Vec::new();
     let mut cursor = path;
@@ -1152,16 +1177,19 @@ pub fn restrict_file(path: &Path) -> Result<()> {
         .with_context(|| format!("restricting artifact {}", path.display()))
 }
 
+#[cfg(any(test, feature = "test-support"))]
 fn sync_directory(path: &Path) -> Result<()> {
     File::open(path)
         .and_then(|directory| directory.sync_all())
         .with_context(|| format!("syncing artifact directory {}", path.display()))
 }
 
+#[cfg(any(test, feature = "test-support"))]
 struct PendingArtifact {
     path: PathBuf,
 }
 
+#[cfg(any(test, feature = "test-support"))]
 impl PendingArtifact {
     fn new(path: PathBuf) -> Self {
         Self { path }
@@ -1172,6 +1200,7 @@ impl PendingArtifact {
     }
 }
 
+#[cfg(any(test, feature = "test-support"))]
 impl Drop for PendingArtifact {
     fn drop(&mut self) {
         let _ = fs::remove_file(&self.path);

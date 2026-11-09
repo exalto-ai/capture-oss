@@ -333,7 +333,7 @@ impl NotaryTrust for DaemonNotaryTrust {
 }
 
 pub async fn run(args: ProxyArgs) -> Result<()> {
-    let (config, config_path) = load_captured_config(Some(&args.config))?;
+    let config = load_captured_config(&args.config)?;
     // Server mode needs PostgreSQL metadata, S3 artifacts and admin
     // authentication, which `[cluster]` validation already requires.
     let Some(cluster) = config.cluster.as_ref() else {
@@ -476,7 +476,7 @@ pub async fn run(args: ProxyArgs) -> Result<()> {
         operator_capture_mode = operator_stored_mode.as_str(),
         authentication = authentication_kind,
         admission = admission.kind(),
-        config = %config_path.display(),
+        config = %args.config.display(),
         providers = ?Provider::ALL,
         "Notary daemon proxy listening"
     );

@@ -79,7 +79,7 @@ pub mod public;
 pub mod public_safety;
 pub mod registry;
 pub mod telemetry;
-#[cfg(feature = "cli")]
+#[cfg(feature = "vault")]
 pub mod vault;
 pub mod witness;
 
@@ -871,9 +871,8 @@ fn issue_capture_receipt(
 /// A private, client-held capture-checkpoint artifact.
 ///
 /// The checkpoint contains the complete plaintext transcript and TLS traffic
-/// keys required to produce a proof later. Store it only with user-only file
-/// permissions and encrypt it at rest when the platform provides a keychain
-/// or equivalent facility.
+/// keys required to produce a proof later. Persist only the output of
+/// `to_encrypted_bytes`; never write the plaintext serialization.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct CaptureCheckpoint {
     format: String,
@@ -978,11 +977,11 @@ impl CaptureCheckpoint {
         Ok(state)
     }
 
-    /// Serializes this pending checkpoint and encrypts it with the local vault.
+    /// Serializes this pending checkpoint and encrypts it with `vault`.
     ///
     /// The returned bytes retain the same private, credential-bearing
     /// contents as a saved `.llmcapture` file and must be stored accordingly.
-    #[cfg(feature = "cli")]
+    #[cfg(feature = "vault")]
     pub fn to_encrypted_bytes(&self, vault: &crate::vault::Vault) -> Result<Vec<u8>> {
         let bytes = bincode::serialize(self).context("serializing capture checkpoint")?;
         vault.encrypt(&bytes)
@@ -990,7 +989,7 @@ impl CaptureCheckpoint {
 
     /// Decrypts, deserializes, and validates a pending checkpoint's format,
     /// identifier, provider, checkpoint, and receipt binding.
-    #[cfg(feature = "cli")]
+    #[cfg(feature = "vault")]
     pub fn from_encrypted_bytes(encrypted: &[u8], vault: &crate::vault::Vault) -> Result<Self> {
         let checkpoint: Self = bincode::deserialize(&vault.decrypt(encrypted)?)
             .context("decoding capture checkpoint")?;
@@ -3529,7 +3528,7 @@ mod tests {
         )));
         assert!(!checkpoint_debug.contains(&format!("{:?}", checkpoint.checkpoint)));
 
-        #[cfg(feature = "cli")]
+        #[cfg(feature = "vault")]
         {
             let vault = crate::vault::Vault::test_only();
             let encrypted = checkpoint.to_encrypted_bytes(&vault).unwrap();

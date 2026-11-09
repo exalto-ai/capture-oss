@@ -29,8 +29,7 @@ jobs:
           cache-dependency-path: apps/admin-dashboard/package-lock.json
       - run: >-
           cargo fmt --check
-          -p capture-core -p capture-engine -p capture-server
-          -p capture-updater -p capture-notary
+          -p capture-core -p capture-engine -p capture-server -p capture-notary
       - run: tooling/check-boundary.sh
       - run: python3 -m unittest tooling/test_check_boundary.py
       - run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings

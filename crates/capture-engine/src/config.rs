@@ -4,7 +4,7 @@ use std::{
     env,
     ffi::OsString,
     fmt, fs,
-    io::{ErrorKind, Read as _, Write as _},
+    io::Read as _,
     net::SocketAddr,
     path::{Path, PathBuf},
     time::Duration,
@@ -43,8 +43,7 @@ pub const ADMIN_PASSWORD_ENV: &str = "CAPTURE_SERVER_ADMIN_PASSWORD";
 pub const ADMIN_PASSWORD_FILE_ENV: &str = "CAPTURE_SERVER_ADMIN_PASSWORD_FILE";
 pub const CLUSTER_INSTANCE_ID_ENV: &str = "CAPTURE_SERVER_CLUSTER_INSTANCE_ID";
 
-/// Local proxy configuration. This is intentionally separate from the private
-/// vault state, which contains key references and passphrase KDF parameters.
+/// A capture host's versioned configuration. It holds no vault key material.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct CapturedConfig {
@@ -631,45 +630,6 @@ impl CapturedConfig {
         Ok(config)
     }
 
-    /// Creates an editable default configuration when the file does not yet
-    /// exist. Returns whether this invocation created the file.
-    pub fn ensure_default(path: &Path) -> Result<bool> {
-        let parent = path
-            .parent()
-            .filter(|parent| !parent.as_os_str().is_empty())
-            .ok_or_else(|| anyhow::anyhow!("captured configuration path has no parent"))?;
-        fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
-        let contents = format!(
-            "# Notary local captured configuration.\n# This file is created automatically on first use. Edit it to change local behavior.\n\n{}",
-            toml::to_string_pretty(&Self::default())?
-        );
-        let mut file = match fs::OpenOptions::new()
-            .create_new(true)
-            .write(true)
-            .open(path)
-        {
-            Ok(file) => file,
-            Err(error) if error.kind() == ErrorKind::AlreadyExists => return Ok(false),
-            Err(error) => {
-                return Err(error).with_context(|| {
-                    format!("creating captured configuration {}", path.display())
-                });
-            }
-        };
-        file.write_all(contents.as_bytes())
-            .with_context(|| format!("writing captured configuration {}", path.display()))?;
-        file.sync_all()
-            .with_context(|| format!("syncing captured configuration {}", path.display()))?;
-        Ok(true)
-    }
-
-    /// Loads a configuration, first materializing the standard defaults when
-    /// the requested file does not exist.
-    pub fn load_or_create(path: &Path) -> Result<(Self, bool)> {
-        let created = Self::ensure_default(path)?;
-        Ok((Self::load(path)?, created))
-    }
-
     pub fn validate(&self) -> Result<()> {
         ensure!(
             self.format == CONFIG_FORMAT,
@@ -1147,32 +1107,11 @@ fn validate_public_https_origin(value: &str, name: &str) -> Result<()> {
     Ok(())
 }
 
-pub use capture_updater::default_config_path;
-
-fn config_path(path: Option<&Path>) -> Result<PathBuf> {
-    match path {
-        Some(path) => Ok(path.to_owned()),
-        None => default_config_path(),
-    }
-}
-
-/// Loads an captured configuration, generating the editable defaults on first
-/// use. Every config-driven command shares this behavior so a fresh install
-/// can start the proxy without a setup command.
-pub fn load_captured_config(path: Option<&Path>) -> Result<(CapturedConfig, PathBuf)> {
-    let explicit = path.is_some();
-    let path = config_path(path)?;
-    if explicit {
-        let mut config = CapturedConfig::load(&path)?;
-        config.resolve_runtime_secrets()?;
-        return Ok((config, path));
-    }
-    let (mut config, created) = CapturedConfig::load_or_create(&path)?;
-    if created {
-        eprintln!("created default captured configuration: {}", path.display());
-    }
+/// Loads a captured configuration and resolves its runtime secrets.
+pub fn load_captured_config(path: &Path) -> Result<CapturedConfig> {
+    let mut config = CapturedConfig::load(path)?;
     config.resolve_runtime_secrets()?;
-    Ok((config, path))
+    Ok(config)
 }
 
 fn default_listen() -> SocketAddr {
@@ -1629,16 +1568,6 @@ mod tests {
         config.providers.openai.route_prefix = "/ai".to_owned();
         config.providers.anthropic.route_prefix = "/ai/anthropic".to_owned();
         assert!(config.validate().is_err());
-    }
-
-    #[test]
-    fn creating_a_default_configuration_is_idempotent() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("config.toml");
-        let (config, created) = CapturedConfig::load_or_create(&path).unwrap();
-        assert!(created);
-        config.validate().unwrap();
-        assert!(!CapturedConfig::ensure_default(&path).unwrap());
     }
 
     #[test]

@@ -1,4 +1,4 @@
-//! Synchronous SQLite metadata implementation and schema migrations.
+//! Synchronous SQLite metadata test backend and its schema migrations.
 
 use std::{
     fs,

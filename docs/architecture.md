@@ -7,9 +7,9 @@ of those bytes.
 
 The public runtime is independently buildable. It contains the protocol and
 evidence contracts, `capture-server` and its dashboard, the generic remote
-notary, the updater, and the verifier. Hosted account, billing, admission,
-upload, and website policy may integrate through explicit client and server
-seams, but those implementations are not part of this workspace.
+notary, and the verifier. Hosted account, billing, admission, upload, and
+website policy may integrate through explicit client and server seams, but
+those implementations are not part of this workspace.
 
 ## Components and plaintext ownership
 
@@ -168,13 +168,13 @@ An explicit self-hosted configuration pairs `notary.endpoint` and
 TLS on the notary transport authenticates the network endpoint but does not
 replace it.
 
-When no explicit notary is configured, the daemon can retrieve a versioned
-notary lifecycle directory from its configured public HTTPS origin. The JSON
-document is not separately signed. The client caches accepted generations,
-rejects rollback or conflicting same-generation documents, and remembers
-revocations monotonically. Authenticated HTTPS and the local cache are
-therefore part of directory distribution, while the notary signing key remains
-the evidence trust anchor.
+When no explicit notary is configured, the capture server retrieves the
+versioned Registry from its configured public HTTPS origin. The JSON document is
+not separately signed. Replicas pin accepted generations in shared PostgreSQL
+metadata, reject rollback or conflicting same-generation documents, and
+remember revocations monotonically. Authenticated HTTPS and that pinned state
+are therefore part of Registry distribution, while the notary signing key
+remains the evidence trust anchor.
 
 Full package verification checks:
 

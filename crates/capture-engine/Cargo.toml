@@ -8,27 +8,26 @@ description = "Trace metadata and storage shared by Capture hosts"
 [features]
 # Lets the daemon Docker E2E target pause after storing a notarized package.
 daemon-e2e = []
-# Exposes the metadata and artifact store conformance suites to other crates'
-# tests, so every store implementation runs the same contract.
-test-support = []
+# Exposes the metadata and artifact store conformance suites, and the SQLite
+# and filesystem test backends, to other crates' tests, so every store
+# implementation runs the same contract.
+test-support = ["dep:base64", "dep:rusqlite"]
 
 [dependencies]
 anyhow = { workspace = true }
 argon2 = { workspace = true }
 axum = { workspace = true, features = ["macros"] }
 async-trait = { workspace = true }
-base64 = { workspace = true }
+base64 = { workspace = true, optional = true }
 bytes = { workspace = true }
-capture-core = { workspace = true, features = ["cli", "openapi"] }
-capture-updater = { workspace = true }
-clap = { workspace = true, features = ["derive"] }
+capture-core = { workspace = true, features = ["openapi", "vault"] }
 hex = { workspace = true }
 http = { workspace = true }
 http-body-util = { workspace = true }
 k256 = { workspace = true, features = ["ecdsa"] }
 libc = { workspace = true }
 reqwest = { workspace = true, features = ["json", "rustls-tls", "stream"] }
-rusqlite = { version = "0.32", features = ["bundled"] }
+rusqlite = { version = "0.32", features = ["bundled"], optional = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
@@ -44,4 +43,6 @@ uuid = { workspace = true, features = ["v4"] }
 zeroize = { workspace = true }
 
 [dev-dependencies]
+base64 = { workspace = true }
 capture-core = { workspace = true, features = ["test-utils"] }
+rusqlite = { version = "0.32", features = ["bundled"] }

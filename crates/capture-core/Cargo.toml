@@ -6,12 +6,8 @@ license = "MIT"
 description = "Proxy-TLS protocol, capture format, and local verification for Notary"
 
 [features]
-cli = [
-    "dep:argon2",
-    "dep:chacha20poly1305",
-    "dep:directories",
-    "dep:keyring",
-]
+# The `vault` module, which encrypts private capture checkpoints.
+vault = ["dep:chacha20poly1305", "dep:hkdf", "dep:zeroize"]
 # Compile-time gate for the isolated Docker E2E trust root. Normal binaries do
 # not enable this, so the corresponding environment variable is inert there.
 daemon-e2e = []
@@ -20,12 +16,10 @@ test-utils = []
 
 [dependencies]
 anyhow = { workspace = true }
-argon2 = { workspace = true, optional = true }
 bincode = "1.3"
 base64 = { workspace = true }
 bytes = { workspace = true }
 chacha20poly1305 = { version = "0.10", optional = true }
-directories = { version = "6.0", optional = true }
 futures = "0.3"
 hex = { workspace = true }
 http = { workspace = true }
@@ -34,13 +28,7 @@ http-body-util = { workspace = true }
 hyper = { version = "1.6", features = ["client", "http1", "server"] }
 hyper-util = { version = "0.1", features = ["tokio"] }
 k256 = { workspace = true, features = ["ecdsa"] }
-keyring = { version = "3.6", optional = true, features = [
-    "apple-native",
-    "linux-native-sync-persistent",
-    "crypto-rust",
-    "vendored",
-] }
-hkdf = "0.12"
+hkdf = { version = "0.12", optional = true }
 metrics = { workspace = true }
 metrics-exporter-prometheus = { version = "0.18.3", default-features = false }
 opentelemetry = "0.32.0"
@@ -63,7 +51,7 @@ url = { workspace = true }
 utoipa = { workspace = true, optional = true }
 webpki-roots = "1"
 zip = { version = "8.4", default-features = false }
-zeroize = { workspace = true }
+zeroize = { workspace = true, optional = true }
 
 [dev-dependencies]
 dhat = "0.3"

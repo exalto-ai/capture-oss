@@ -984,15 +984,6 @@ pub enum ShareVisibility {
     Listed,
 }
 
-impl From<ShareVisibility> for crate::platform::sharing::ShareVisibility {
-    fn from(value: ShareVisibility) -> Self {
-        match value {
-            ShareVisibility::Unlisted => Self::Unlisted,
-            ShareVisibility::Listed => Self::Listed,
-        }
-    }
-}
-
 pub async fn artifact_record(
     persistence: &Storage,
     trace_id: &str,
@@ -1598,25 +1589,11 @@ impl ApiError {
             message: "Stop sharing this Trace before deleting its local copy",
         }
     }
-    pub fn payment_required(code: &'static str) -> Self {
-        Self {
-            status: StatusCode::PAYMENT_REQUIRED,
-            code,
-            message: "The hosted account cannot accept this Trace",
-        }
-    }
     pub fn artifact_conflict() -> Self {
         Self {
             status: StatusCode::CONFLICT,
             code: "artifact_collision",
             message: "Stored artifact bytes conflict with the immutable artifact record",
-        }
-    }
-    pub fn api_key_mode() -> Self {
-        Self {
-            status: StatusCode::CONFLICT,
-            code: "api_key_mode",
-            message: "Browser account connection and disconnection are unavailable while the daemon uses an injected API key",
         }
     }
     pub fn notarization_ineligible() -> Self {
@@ -1633,25 +1610,11 @@ impl ApiError {
             message: "The trace package did not verify",
         }
     }
-    pub fn account_authentication_required() -> Self {
-        Self {
-            status: StatusCode::CONFLICT,
-            code: "account_authentication_required",
-            message: "The Exalto account connection must be renewed",
-        }
-    }
     pub fn service_unavailable(code: &'static str) -> Self {
         Self {
             status: StatusCode::SERVICE_UNAVAILABLE,
             code,
             message: "A required service dependency is temporarily unavailable",
-        }
-    }
-    pub fn too_many_requests(code: &'static str) -> Self {
-        Self {
-            status: StatusCode::TOO_MANY_REQUESTS,
-            code,
-            message: "Too many hosted access changes were requested; try again shortly",
         }
     }
     pub fn internal(code: &'static str) -> Self {
