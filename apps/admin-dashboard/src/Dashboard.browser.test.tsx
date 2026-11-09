@@ -5,7 +5,7 @@ import { cleanup, render } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { page, userEvent } from 'vitest/browser';
-import { type CaptureMode, type LocalApi, LocalApiError, type TraceSummary } from './api';
+import { type AdminApi, AdminApiError, type CaptureMode, type TraceSummary } from './api';
 import { Dashboard } from './Dashboard';
 import { createFixtureApi, fixtureCaptures, fixtureOperations } from './fixtures';
 import '@mantine/core/styles.css';
@@ -23,7 +23,7 @@ function renderWithProviders(dashboard: ReactNode) {
   );
 }
 
-function renderDashboard(hash = '/overview', api: LocalApi = createFixtureApi()) {
+function renderDashboard(hash = '/overview', api: AdminApi = createFixtureApi()) {
   window.location.hash = hash;
   return renderWithProviders(<Dashboard api={api} />);
 }
@@ -118,7 +118,7 @@ describe('Notary admin dashboard', () => {
       state: 'captured',
       status: 'notarizing',
     };
-    const api: LocalApi = {
+    const api: AdminApi = {
       ...fixture,
       traces: async () => ({ items: [fallback], next_cursor: null }),
       trace: async () => ({ ...(await fixture.trace(fallback.trace_id)), ...fallback }),
@@ -137,7 +137,7 @@ describe('Notary admin dashboard', () => {
       prompt_preview:
         'developer: You are a conversational assistant in Exalto Capture. Answer the user messages. Do not use tools, inspect files, or take actions outside this conversation.',
     };
-    const api: LocalApi = {
+    const api: AdminApi = {
       ...fixture,
       traces: async () => ({ items: [longPrompt], next_cursor: null }),
       trace: async () => ({ ...(await fixture.trace(longPrompt.trace_id)), ...longPrompt }),
@@ -157,7 +157,7 @@ describe('Notary admin dashboard', () => {
     const fixture = createFixtureApi();
     const samples = (await fixture.traces({ limit: 200 })).items;
     const cursors: Array<string | undefined> = [];
-    const api: LocalApi = {
+    const api: AdminApi = {
       ...fixture,
       traces: async (filters = {}) => {
         const cursor = typeof filters.cursor === 'string' ? filters.cursor : undefined;
@@ -251,7 +251,7 @@ describe('Notary admin dashboard', () => {
     const packageTemplate = await fixture.traceContent('trc-20260727-research-brief');
     let current: TraceSummary = captured;
     let packageReads = 0;
-    const api: LocalApi = {
+    const api: AdminApi = {
       ...fixture,
       traces: async () => ({ items: [current], next_cursor: null }),
       trace: async () => ({ ...(await fixture.trace(captured.trace_id)), ...current }),
@@ -289,7 +289,7 @@ describe('Notary admin dashboard', () => {
       notarization_eligible: false,
     };
     const packageTemplate = await fixture.traceContent(notarized.trace_id);
-    const api: LocalApi = {
+    const api: AdminApi = {
       ...fixture,
       traces: async () => ({ items: [witnessed, notarized], next_cursor: null }),
       trace: async (traceId) =>
@@ -331,39 +331,6 @@ describe('Notary admin dashboard', () => {
     await expect
       .element(page.getByText('A Witnessed Trace has no proof to generate.', { exact: false }))
       .toBeVisible();
-  });
-
-  test('deletes one Trace only after explicit confirmation', async () => {
-    const fixture = createFixtureApi();
-    const traceId = fixtureCaptures[0].trace_id;
-    const deleteTrace = vi.fn((id: string) => fixture.deleteTrace(id));
-    renderDashboard(`/traces/${traceId}`, { ...fixture, deleteTrace });
-
-    await page.getByRole('button', { name: 'More actions' }).click();
-    await page.getByRole('menuitem', { name: 'Delete Trace…' }).click();
-    const dialog = page.getByRole('dialog');
-    await expect.element(dialog.getByRole('heading', { name: 'Delete this Trace?' })).toBeVisible();
-    await dialog.getByRole('button', { name: 'Delete Trace' }).click();
-
-    await expect.poll(() => deleteTrace).toHaveBeenCalledWith(traceId);
-    await expect.poll(() => window.location.hash).toBe('#/traces');
-    await expect.element(page.getByText(traceId, { exact: false })).not.toBeInTheDocument();
-  });
-
-  test('keeps a Trace when deletion confirmation is cancelled', async () => {
-    const fixture = createFixtureApi();
-    const traceId = 'trc-20260727-research-brief';
-    const deleteTrace = vi.fn((id: string) => fixture.deleteTrace(id));
-    renderDashboard(`/traces/${traceId}`, { ...fixture, deleteTrace });
-
-    await page.getByRole('button', { name: 'More actions' }).click();
-    await page.getByRole('menuitem', { name: 'Delete Trace…' }).click();
-    const dialog = page.getByRole('dialog');
-    await dialog.getByRole('button', { name: 'Cancel' }).click();
-
-    expect(deleteTrace).not.toHaveBeenCalled();
-    expect(window.location.hash).toBe(`#/traces/${traceId}`);
-    await expect.element(page.getByText(traceId, { exact: false }).first()).toBeVisible();
   });
 
   test('exports the exact package bytes with the canonical Trace identity', async () => {
@@ -525,7 +492,7 @@ describe('Notary admin dashboard', () => {
     const fixture = createFixtureApi();
     const traceId = 'trc-20260727-research-brief';
     const verify = vi.fn(async () => {
-      throw new LocalApiError(422, 'trace_verification_failed', 'Trace verification failed');
+      throw new AdminApiError(422, 'trace_verification_failed', 'Trace verification failed');
     });
 
     renderDashboard(`/traces/${traceId}`, { ...fixture, verify });
@@ -540,7 +507,7 @@ describe('Notary admin dashboard', () => {
 
   test('uses explicit empty, loading, and error states for the trace collection', async () => {
     const fixture = createFixtureApi();
-    const emptyApi: LocalApi = {
+    const emptyApi: AdminApi = {
       ...fixture,
       traces: async () => ({ items: [], next_cursor: null }),
     };
@@ -571,7 +538,7 @@ describe('Notary admin dashboard', () => {
     renderDashboard('/traces', {
       ...fixture,
       traces: async () => {
-        throw new LocalApiError(503, 'service_unavailable', 'Unavailable');
+        throw new AdminApiError(503, 'service_unavailable', 'Unavailable');
       },
     });
     await expect
@@ -588,8 +555,8 @@ describe('Notary admin dashboard', () => {
 
   test('uses the generated Trace date-filter contract', async () => {
     const fixture = createFixtureApi();
-    const filters: Array<Parameters<LocalApi['traces']>[0]> = [];
-    const api: LocalApi = {
+    const filters: Array<Parameters<AdminApi['traces']>[0]> = [];
+    const api: AdminApi = {
       ...fixture,
       traces: async (next = {}) => {
         filters.push(next);
@@ -722,7 +689,7 @@ describe('Notary admin dashboard', () => {
   test('chooses Witnessed capture with its notary trust trade-off in view', async () => {
     const fixture = createFixtureApi();
     const requested: string[] = [];
-    const api: LocalApi = {
+    const api: AdminApi = {
       ...fixture,
       updateCaptureSetting: async (mode) => {
         requested.push(mode);
@@ -747,10 +714,10 @@ describe('Notary admin dashboard', () => {
 
   test('keeps the previous capture mode when Witnessed cannot start', async () => {
     const fixture = createFixtureApi();
-    const api: LocalApi = {
+    const api: AdminApi = {
       ...fixture,
       updateCaptureSetting: async () => {
-        throw new LocalApiError(
+        throw new AdminApiError(
           503,
           'capture_enable_initialization_failed',
           'Trusted notary state could not be initialized.',
@@ -767,7 +734,7 @@ describe('Notary admin dashboard', () => {
   test('turns capture on directly from Overview', async () => {
     const fixture = createFixtureApi();
     let captureMode: CaptureMode = 'off';
-    const api: LocalApi = {
+    const api: AdminApi = {
       ...fixture,
       status: async () => ({
         ...(await fixture.status()),
@@ -820,10 +787,10 @@ describe('Notary admin dashboard', () => {
   });
 
   test('asks for the configured admin credentials before showing the dashboard', async () => {
-    const api: LocalApi = {
+    const api: AdminApi = {
       ...createFixtureApi(),
       status: async () => {
-        throw new LocalApiError(401, 'unauthorized', 'Unauthorized');
+        throw new AdminApiError(401, 'unauthorized', 'Unauthorized');
       },
     };
     renderDashboard('/overview', api);
@@ -839,10 +806,10 @@ describe('Notary admin dashboard', () => {
   });
 
   test('does not show stale readiness after a status failure', async () => {
-    const api: LocalApi = {
+    const api: AdminApi = {
       ...createFixtureApi(),
       status: async () => {
-        throw new LocalApiError(503, 'service_unavailable', 'Unavailable');
+        throw new AdminApiError(503, 'service_unavailable', 'Unavailable');
       },
     };
     renderDashboard('/overview', api);
@@ -852,7 +819,7 @@ describe('Notary admin dashboard', () => {
     await expect.element(page.getByText('Online', { exact: true })).not.toBeInTheDocument();
   });
 
-  test('keeps the standalone dashboard navigation with its route content', async () => {
+  test('keeps the dashboard navigation with its route content', async () => {
     renderDashboard('/providers', createFixtureApi());
     await expect.element(page.getByRole('heading', { name: 'OpenAI', exact: true })).toBeVisible();
     await expect.element(page.getByRole('heading', { name: 'AI connections' })).toBeVisible();
@@ -872,7 +839,7 @@ describe('Notary admin dashboard', () => {
   test('sends activity filters to the service', async () => {
     const fixture = createFixtureApi();
     let receivedFilters: Record<string, string | number | boolean | undefined> = {};
-    const api: LocalApi = {
+    const api: AdminApi = {
       ...fixture,
       events: async (filters = {}) => {
         receivedFilters = filters;
@@ -912,7 +879,7 @@ describe('Notary admin dashboard', () => {
 
   test('keeps service-only events inspectable and Activity free of Trace contents', async () => {
     const fixture = createFixtureApi();
-    const api: LocalApi = {
+    const api: AdminApi = {
       ...fixture,
       events: async () => ({
         items: [

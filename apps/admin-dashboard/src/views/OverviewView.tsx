@@ -2,7 +2,7 @@ import { Button, Group, Paper, SimpleGrid, Text, Title, UnstyledButton } from '@
 import { notifications } from '@mantine/notifications';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Activity, CheckCircle2, type Gauge, KeyRound, ShieldCheck } from 'lucide-react';
-import type { CaptureMode, LocalApi, Status } from '../api';
+import type { AdminApi, CaptureMode, Status } from '../api';
 import type { DashboardRoute } from '../routes';
 import { LoadingState, mutationError, QueryError, StatusLabel } from '../shared';
 import { EventList } from './ActivityView';
@@ -14,7 +14,7 @@ export function OverviewView({
   status,
   navigate,
 }: {
-  api: LocalApi;
+  api: AdminApi;
   status: Status;
   navigate: (route: Route) => void;
 }) {

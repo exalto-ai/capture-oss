@@ -168,30 +168,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/v1/settings/auto-seal": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get auto-seal mode
-         * @description Returns whether each newly completed, successful capture is queued for sealing.
-         */
-        get: operations["auto_seal_setting"];
-        /**
-         * Set auto-seal mode
-         * @description Durably changes whether later captures are queued for sealing as they complete. Each seal uses the account's monthly notarization allowance, or the Free allowance under public access; a seal beyond it is refused, never billed. The cluster profile does not support auto-seal.
-         */
-        put: operations["update_auto_seal_setting"];
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/v1/settings/capture": {
         parameters: {
             query?: never;
@@ -270,11 +246,7 @@ export interface paths {
         get: operations["trace"];
         put?: never;
         post?: never;
-        /**
-         * Delete a local Trace
-         * @description Idempotently removes one terminal Trace and its private local artifacts. Active capture or sealing must finish first. This action does not delete a separately retained hosted Trace.
-         */
-        delete: operations["delete_trace"];
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -351,7 +323,7 @@ export interface paths {
         put?: never;
         /**
          * Verify a retained Trace
-         * @description Verifies the retained package evidence, disclosure, hashes, provider mapping, and canonical content against configured Notary trust. Local deletion waits until this retained-package read and verification finishes.
+         * @description Verifies the retained package evidence, disclosure, hashes, provider mapping, and canonical content against configured Notary trust.
          */
         post: operations["verify_trace"];
         delete?: never;
@@ -401,9 +373,6 @@ export interface components {
             high_water_cursor?: string | null;
             items: components["schemas"]["ActivityItem"][];
             next_cursor?: string | null;
-        };
-        AutoSealSettingResponse: {
-            enabled: boolean;
         };
         /**
          * @description How the daemon admits new provider requests. This is the one durable
@@ -541,7 +510,6 @@ export interface components {
             preview_chars: number;
             proxy_listener: string;
             proxy_origin: string;
-            runtime_profile: string;
             vault: string;
             version: string;
         };
@@ -628,9 +596,6 @@ export interface components {
             status: null | components["schemas"]["TraceOperationalStatus"];
             streaming: boolean;
             trace_id: string;
-        };
-        UpdateAutoSealSetting: {
-            enabled: boolean;
         };
         UpdateCaptureSetting: {
             mode: components["schemas"]["CaptureMode"];
@@ -956,88 +921,6 @@ export interface operations {
             };
         };
     };
-    auto_seal_setting: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["AutoSealSettingResponse"];
-                };
-            };
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-        };
-    };
-    update_auto_seal_setting: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["UpdateAutoSealSetting"];
-            };
-        };
-        responses: {
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["AutoSealSettingResponse"];
-                };
-            };
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-        };
-    };
     capture_setting: {
         parameters: {
             query?: never;
@@ -1231,58 +1114,6 @@ export interface operations {
                 };
             };
             404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-        };
-    };
-    delete_trace: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                trace_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Local Trace and owned artifacts deleted, or already absent */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            409: {
                 headers: {
                     [name: string]: unknown;
                 };

@@ -27,7 +27,7 @@ import { type FormEvent, useEffect, useState } from 'react';
 import '@mantine/core/styles.css';
 import '@mantine/notifications/styles.css';
 import './styles.css';
-import type { LocalApi, LocalApiError, Status } from './api';
+import type { AdminApi, AdminApiError, Status } from './api';
 import {
   type DashboardRoute,
   type DashboardView,
@@ -38,7 +38,7 @@ import { ErrorState, LoadingState } from './shared';
 import { ActivityView } from './views/ActivityView';
 import { OverviewView } from './views/OverviewView';
 import { ProvidersView } from './views/ProvidersView';
-import { StandaloneSettingsView } from './views/SettingsView';
+import { SettingsView } from './views/SettingsView';
 import { TracesView } from './views/TracesView';
 
 const logoUrl = new URL('./assets/notary-mark.svg', import.meta.url).href;
@@ -66,7 +66,7 @@ function useRoute() {
   return route;
 }
 
-function AuthGate({ api, onAuthenticated }: { api: LocalApi; onAuthenticated: () => void }) {
+function AuthGate({ api, onAuthenticated }: { api: AdminApi; onAuthenticated: () => void }) {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const mutation = useMutation({
@@ -216,7 +216,7 @@ function TopNav({
   );
 }
 
-export function Dashboard({ api }: { api: LocalApi }) {
+export function Dashboard({ api }: { api: AdminApi }) {
   const route = useRoute();
   const queryClient = useQueryClient();
   const [navOpened, { open: openNav, close: closeNav }] = useDisclosure(false);
@@ -232,7 +232,7 @@ export function Dashboard({ api }: { api: LocalApi }) {
   };
 
   if (statusQuery.isLoading) return <LoadingState label="Connecting to the capture server" />;
-  if (statusQuery.error && (statusQuery.error as LocalApiError).status === 401) {
+  if (statusQuery.error && (statusQuery.error as AdminApiError).status === 401) {
     return (
       <AuthGate
         api={api}
@@ -278,7 +278,7 @@ function View({
 }: {
   route: Route;
   status: Status;
-  api: LocalApi;
+  api: AdminApi;
   navigate: (route: Route) => void;
 }) {
   switch (route.view) {
@@ -297,7 +297,7 @@ function View({
     case 'providers':
       return <ProvidersView api={api} status={status} />;
     case 'settings':
-      return <StandaloneSettingsView status={status} api={api} />;
+      return <SettingsView status={status} api={api} />;
     default:
       return <OverviewView api={api} status={status} navigate={navigate} />;
   }

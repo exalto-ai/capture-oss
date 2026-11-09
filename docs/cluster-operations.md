@@ -18,11 +18,8 @@ path = "/run/secrets/capture_tokens"
 endpoint = "tls://notary.example:7047"
 public_key = "02..."
 
-[metadata]
-backend = "postgres"
-
-[storage]
-backend = "s3"
+[storage.s3]
+bucket = "capture-artifacts"
 ```
 
 Run `capture-server migrate --config /etc/capture/config.toml` once, then start two or more identical replicas. Every replica receives the same config, token file or capture service token, database, S3 namespace, admin password, and exact 32-byte `CAPTURE_SERVER_CLUSTER_VAULT_KEY_FILE`. `CAPTURE_SERVER_CLUSTER_INSTANCE_ID` is optional when the scheduler already provides a useful unique hostname.
@@ -59,11 +56,11 @@ listen = "[::]:8789"
 token_file = "/run/secrets/customer_api_token"
 ```
 
-The listener serves the dashboard's Trace, operation, package, verification, Activity, capture mode and auto-seal routes for the organization named by each request's `Capture-Organization` header, and nothing else: no status, notary, provider or session routes, no dashboard, and no admin credentials. Every request except `GET /healthz` and `GET /readyz` needs `Authorization: Bearer <token>` (`401` otherwise) and then exactly one valid `Capture-Organization` (`400` otherwise). Its readiness follows only the replica lifecycle. Its port must differ from the provider and admin listeners'.
+The listener serves the dashboard's Trace, operation, package, verification, Activity and capture mode routes for the organization named by each request's `Capture-Organization` header, and nothing else: no status, notary, provider or session routes, no dashboard, and no admin credentials. Every request except `GET /healthz` and `GET /readyz` needs `Authorization: Bearer <token>` (`401` otherwise) and then exactly one valid `Capture-Organization` (`400` otherwise). Its readiness follows only the replica lifecycle. Its port must differ from the provider and admin listeners'.
 
 The token can act as any organization. Only capture-api holds it, and the listener must be reachable only on a private network, never through public ingress (on Fly, over the private network, without publishing the port as a service). The token file must be private (mode `0600`) and hold only the token: 32 to 512 printable ASCII characters and at most a trailing newline. Replicas read it at startup and never log the token.
 
-An organization has one capture mode: a change through the customer API applies to that organization's next provider request and to no other organization. As on the admin listener, the cluster manages auto-seal and Trace deletion, so enabling auto-seal or deleting a Trace answers `409`.
+An organization has one capture mode: a change through the customer API applies to that organization's next provider request and to no other organization. The server has no auto-seal and does not delete Traces.
 
 ## Notary admission
 

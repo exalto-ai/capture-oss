@@ -3,13 +3,14 @@
 
 use std::sync::Arc;
 
+#[cfg(any(test, feature = "test-support"))]
 use anyhow::Result;
+#[cfg(any(test, feature = "test-support"))]
 use capture_core::archive::MAX_ARCHIVE_WIRE_BYTES;
 
-use crate::{
-    artifact_store::{ArtifactKey, ArtifactStore},
-    metadata_store::MetadataStore,
-};
+#[cfg(any(test, feature = "test-support"))]
+use crate::artifact_store::ArtifactKey;
+use crate::{artifact_store::ArtifactStore, metadata_store::MetadataStore};
 
 /// The result of reconciling traces that were active when the prior process
 /// stopped.
@@ -34,8 +35,13 @@ impl Storage {
             artifacts,
         }
     }
+}
 
-    /// Reconciles traces left active by an earlier single-daemon process.
+/// Recovery of captures recorded without cluster claims. capture-server
+/// recovers through its cluster ledger instead.
+#[cfg(any(test, feature = "test-support"))]
+impl Storage {
+    /// Reconciles traces left active by an earlier process.
     /// Bytes are inspected by the artifact backend before metadata advertises
     /// them as available.
     pub async fn reconcile_incomplete_captures(&self) -> Result<RecoverySummary> {

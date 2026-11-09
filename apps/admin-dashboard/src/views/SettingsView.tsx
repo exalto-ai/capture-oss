@@ -14,8 +14,8 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { CodeXml, Copy, Moon, PanelLeft, ShieldCheck, Sun } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { useEffect, useState } from 'react';
-import type { CaptureMode, LocalApi, Notary, Status } from '../api';
-import { LocalApiError } from '../api';
+import type { AdminApi, CaptureMode, Notary, Status } from '../api';
+import { AdminApiError } from '../api';
 import { abbreviatedKeyId, formatNotaryBoundary, notaryLifecycle } from '../notaryLifecycle';
 import { Fact, mutationError } from '../shared';
 
@@ -102,9 +102,9 @@ function LocalNotaryRecord({
   );
 }
 
-function SettingsNotaries({ api }: { api: LocalApi }) {
+function SettingsNotaries({ api }: { api: AdminApi }) {
   const notaries = useQuery({ queryKey: ['notaries'], queryFn: api.notaries, retry: false });
-  const errorCode = notaries.error instanceof LocalApiError ? notaries.error.code : null;
+  const errorCode = notaries.error instanceof AdminApiError ? notaries.error.code : null;
   const records = notaries.data?.notaries ?? [];
   return (
     <Paper className="settings-panel settings-notaries">
@@ -239,7 +239,7 @@ function SettingsGroup({
   );
 }
 
-export function StandaloneSettingsView({ status, api }: { status: Status; api: LocalApi }) {
+export function SettingsView({ status, api }: { status: Status; api: AdminApi }) {
   const queryClient = useQueryClient();
   const [captureMode, setCaptureMode] = useState<CaptureMode>(status.capture_mode);
   const updateCaptureMode = useMutation({

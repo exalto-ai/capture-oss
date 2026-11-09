@@ -63,7 +63,7 @@ async fn run_daemon_migrator(path: PathBuf) -> Result<()> {
     let config = config::CapturedConfig::load_for_metadata_migration(&path)?;
     let postgres = &config.metadata.postgres;
     let database_url = config.postgres_migration_url()?;
-    println!("Applying local daemon PostgreSQL metadata migrations");
+    println!("Applying capture server PostgreSQL metadata migrations");
     postgres_metadata_store::migrate_database(
         database_url.expose(),
         postgres.ssl_mode,
@@ -71,7 +71,7 @@ async fn run_daemon_migrator(path: PathBuf) -> Result<()> {
         Duration::from_secs(postgres.migration_lock_timeout_seconds),
     )
     .await
-    .map_err(|_| anyhow::anyhow!("local daemon PostgreSQL metadata migration failed"))?;
+    .map_err(|_| anyhow::anyhow!("capture server PostgreSQL metadata migration failed"))?;
     let vault = capture_core::vault::Vault::open_cluster()?;
     postgres_metadata_store::configure_cluster_compatibility(
         database_url.expose(),
@@ -81,7 +81,7 @@ async fn run_daemon_migrator(path: PathBuf) -> Result<()> {
     )
     .await
     .map_err(|_| anyhow::anyhow!("server compatibility configuration failed"))?;
-    println!("Local daemon PostgreSQL metadata migrations are current");
+    println!("Capture server PostgreSQL metadata migrations are current");
     Ok(())
 }
 

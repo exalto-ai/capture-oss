@@ -2,7 +2,7 @@ import { Button, Center, Loader, Select, Stack, Text, Title } from '@mantine/cor
 import { notifications } from '@mantine/notifications';
 import { Archive, Check, RefreshCw, Unplug } from 'lucide-react';
 import type { ReactNode } from 'react';
-import { LocalApiError } from './api';
+import { AdminApiError } from './api';
 
 export const localModalClassNames = {
   overlay: 'axis-local-dialog-overlay',
@@ -165,12 +165,12 @@ export function ErrorState({
 }
 
 export function QueryError({ error, title }: { error: unknown; title?: string }) {
-  const unauthorized = error instanceof LocalApiError && error.status === 401;
+  const unauthorized = error instanceof AdminApiError && error.status === 401;
   return <ErrorState title={unauthorized ? 'The dashboard session expired' : title} />;
 }
 
 export function mutationError(title: string, error: unknown) {
-  const code = error instanceof LocalApiError ? error.code : 'request_failed';
+  const code = error instanceof AdminApiError ? error.code : 'request_failed';
   notifications.show({
     color: 'red',
     title,

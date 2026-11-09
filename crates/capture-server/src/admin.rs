@@ -30,12 +30,11 @@ use capture_engine::{
         ProvidersResponse, ReadinessResponse, TraceCounts, ready_trace_counts,
     },
     api::{
-        ActivityItem, ActivityPage, ApiContext, ApiError, AutoSealSettingResponse,
-        CaptureSettingResponse, ErrorBody, ErrorEnvelope, EvidenceArtifact, NotarizationAttempt,
-        NotarizationRequest, OperationProgressResponse, OperationProofProgressResponse,
-        TechnicalOperation, TraceContent, TraceDetail, TraceOperationalStatus, TracePage,
-        TraceState, TraceSummary, UpdateAutoSealSetting, UpdateCaptureSetting, VerificationOutcome,
-        VerificationResult, now_ms,
+        ActivityItem, ActivityPage, ApiContext, ApiError, CaptureSettingResponse, ErrorBody,
+        ErrorEnvelope, EvidenceArtifact, NotarizationAttempt, NotarizationRequest,
+        OperationProgressResponse, OperationProofProgressResponse, TechnicalOperation,
+        TraceContent, TraceDetail, TraceOperationalStatus, TracePage, TraceState, TraceSummary,
+        UpdateCaptureSetting, VerificationOutcome, VerificationResult, now_ms,
     },
 };
 
@@ -44,7 +43,6 @@ use crate::{
     config::CapturedConfig,
     metadata::CaptureMode,
     persistence::Persistence,
-    service::registry as registry_service,
 };
 
 const API_VERSION: &str = "v1";
@@ -92,7 +90,6 @@ impl AdminState {
                 persistence.metadata.capture_mode().await?,
                 config.notary_endpoint()?,
                 persistence.metadata.clone(),
-                true,
                 Arc::new(crate::service::proxy::DaemonNotaryDiscovery::new(
                     config.clone(),
                     cluster_runtime.clone(),
@@ -108,8 +105,6 @@ impl AdminState {
                 cluster_runtime.clone(),
             )),
             work_available.clone(),
-            None,
-            true,
         );
         Ok(Self {
             persistence,
@@ -252,7 +247,7 @@ fn embedded_dashboard_response(path: &str) -> Response {
 #[derive(OpenApi)]
 #[openapi(
     info(
-        title = "Exalto Capture local administration API",
+        title = "Exalto Capture server administration API",
         license(name = "MIT", identifier = "MIT"),
         version = "1.0.0",
         description = "Capture server administration API. Every /v1 route requires the configured HTTP Basic credentials, or a dashboard session started with them."
@@ -266,13 +261,10 @@ fn embedded_dashboard_response(path: &str) -> Response {
         status,
         capture_engine::api::capture_setting,
         capture_engine::api::update_capture_setting,
-        capture_engine::api::auto_seal_setting,
-        capture_engine::api::update_auto_seal_setting,
         notaries,
         providers,
         capture_engine::api::traces,
         capture_engine::api::trace,
-        capture_engine::api::delete_trace,
         capture_engine::api::start_notarization,
         capture_engine::api::operation,
         capture_engine::api::trace_content,
@@ -283,7 +275,7 @@ fn embedded_dashboard_response(path: &str) -> Response {
     ),
     components(schemas(
         HealthResponse, ReadinessResponse, StatusResponse, CaptureSettingResponse,
-        UpdateCaptureSetting, AutoSealSettingResponse, UpdateAutoSealSetting, TraceCounts, NotariesResponse, Notary,
+        UpdateCaptureSetting, TraceCounts, NotariesResponse, Notary,
         ProvidersResponse, Provider, TraceState, TraceOperationalStatus, TracePage, TraceSummary,
         TraceDetail, EvidenceArtifact,
         TechnicalOperation, OperationProgressResponse,
@@ -292,7 +284,7 @@ fn embedded_dashboard_response(path: &str) -> Response {
         VerificationOutcome, ErrorBody, ErrorEnvelope
     )),
     modifiers(&SecurityAddon),
-    tags((name = "local-admin", description = "Loopback-only administration"))
+    tags((name = "admin", description = "Capture server administration, behind its password"))
 )]
 struct ApiDoc;
 
@@ -349,7 +341,7 @@ impl Modify for SecurityAddon {
     }
 }
 
-#[utoipa::path(get, path = "/healthz", summary = "Check service health", description = "Returns the local service health and API version without requiring authentication.", responses((status = 200, body = HealthResponse)), tag = "local-admin")]
+#[utoipa::path(get, path = "/healthz", summary = "Check service health", description = "Returns the local service health and API version without requiring authentication.", responses((status = 200, body = HealthResponse)), tag = "admin")]
 pub(crate) async fn health() -> Json<HealthResponse> {
     Json(HealthResponse {
         service: "capture-server".into(),
@@ -358,7 +350,7 @@ pub(crate) async fn health() -> Json<HealthResponse> {
     })
 }
 
-#[utoipa::path(get, path = "/readyz", summary = "Check service readiness", description = "Runs bounded metadata, selected artifact-writer, and shared trust dependency probes. Dependency outages or schema mismatches make readiness fail while /healthz remains local liveness.", responses((status = 200, body = ReadinessResponse), (status = 503, body = ErrorEnvelope)), tag = "local-admin")]
+#[utoipa::path(get, path = "/readyz", summary = "Check service readiness", description = "Runs bounded metadata, selected artifact-writer, and shared trust dependency probes. Dependency outages or schema mismatches make readiness fail while /healthz remains local liveness.", responses((status = 200, body = ReadinessResponse), (status = 503, body = ErrorEnvelope)), tag = "admin")]
 async fn readiness(State(state): State<AdminState>) -> Result<Json<ReadinessResponse>, ApiError> {
     if state.cluster_runtime.lifecycle() != Lifecycle::Ready {
         return Err(ApiError::service_unavailable("replica_not_ready"));
@@ -372,7 +364,7 @@ async fn readiness(State(state): State<AdminState>) -> Result<Json<ReadinessResp
     .map(Json)
 }
 
-#[utoipa::path(get, path = "/openapi.json", summary = "Get the OpenAPI contract", description = "Returns the exact OpenAPI 3.1 contract implemented by this local service.", responses((status = 200, description = "OpenAPI 3.1 document")), tag = "local-admin")]
+#[utoipa::path(get, path = "/openapi.json", summary = "Get the OpenAPI contract", description = "Returns the exact OpenAPI 3.1 contract implemented by this local service.", responses((status = 200, description = "OpenAPI 3.1 document")), tag = "admin")]
 async fn openapi() -> Json<utoipa::openapi::OpenApi> {
     Json(openapi_document())
 }
@@ -383,7 +375,7 @@ pub fn openapi_document() -> utoipa::openapi::OpenApi {
     ApiDoc::openapi()
 }
 
-#[utoipa::path(post, path = "/v1/session", summary = "Start a dashboard session", description = "Exchanges configured HTTP Basic credentials for an HttpOnly browser session cookie. Returns without a cookie when admin authentication is disabled.", responses((status = 204, description = "Dashboard access established"), (status = 401, body = ErrorEnvelope), (status = 503, body = ErrorEnvelope)), security(("basicAuth" = [])), tag = "local-admin")]
+#[utoipa::path(post, path = "/v1/session", summary = "Start a dashboard session", description = "Exchanges configured HTTP Basic credentials for an HttpOnly browser session cookie. Returns without a cookie when admin authentication is disabled.", responses((status = 204, description = "Dashboard access established"), (status = 401, body = ErrorEnvelope), (status = 503, body = ErrorEnvelope)), security(("basicAuth" = [])), tag = "admin")]
 async fn start_session(State(state): State<AdminState>, request: Request) -> Response {
     if !basic_matches(&state, request.headers()).await {
         return unauthorized_response();
@@ -425,7 +417,7 @@ async fn start_session(State(state): State<AdminState>, request: Request) -> Res
     response
 }
 
-#[utoipa::path(delete, path = "/v1/session", summary = "End a dashboard session", description = "Deletes the current browser session and expires its local cookie.", responses((status = 204, description = "Dashboard session ended"), (status = 401, body = ErrorEnvelope), (status = 503, body = ErrorEnvelope)), security(("basicAuth" = [])), tag = "local-admin")]
+#[utoipa::path(delete, path = "/v1/session", summary = "End a dashboard session", description = "Deletes the current browser session and expires its local cookie.", responses((status = 204, description = "Dashboard session ended"), (status = 401, body = ErrorEnvelope), (status = 503, body = ErrorEnvelope)), security(("basicAuth" = [])), tag = "admin")]
 async fn end_session(State(state): State<AdminState>, request: Request) -> Response {
     if let Some(session) = session_from_headers(request.headers())
         && state
@@ -488,7 +480,7 @@ fn session_hash(token: &str) -> [u8; 32] {
     digest.finalize().into()
 }
 
-#[utoipa::path(get, path = "/v1/status", summary = "Get local service status", description = "Returns listener addresses, bounded metadata and artifact-writer readiness, vault and Notary configuration, preview limits, and current Trace counts.", responses((status = 200, body = StatusResponse), (status = 401, body = ErrorEnvelope), (status = 503, body = ErrorEnvelope)), security(("basicAuth" = [])), tag = "local-admin")]
+#[utoipa::path(get, path = "/v1/status", summary = "Get local service status", description = "Returns listener addresses, bounded metadata and artifact-writer readiness, vault and Notary configuration, preview limits, and current Trace counts.", responses((status = 200, body = StatusResponse), (status = 401, body = ErrorEnvelope), (status = 503, body = ErrorEnvelope)), security(("basicAuth" = [])), tag = "admin")]
 async fn status(State(state): State<AdminState>) -> Result<Json<StatusResponse>, ApiError> {
     let counts = ready_trace_counts(
         probe_dependencies(&state),
@@ -503,7 +495,6 @@ async fn status(State(state): State<AdminState>) -> Result<Json<StatusResponse>,
         .map_err(|_| ApiError::service_unavailable("metadata_not_ready"))?;
     Ok(Json(StatusResponse {
         version: env!("CARGO_PKG_VERSION").into(),
-        runtime_profile: "cluster".into(),
         instance_id: Some(state.cluster_runtime.identity().instance_id().to_owned()),
         incarnation_id: Some(state.cluster_runtime.identity().incarnation_id().to_owned()),
         lifecycle: format!("{:?}", state.cluster_runtime.lifecycle()).to_ascii_lowercase(),
@@ -528,7 +519,7 @@ async fn status(State(state): State<AdminState>) -> Result<Json<StatusResponse>,
     }))
 }
 
-#[utoipa::path(get, path = "/v1/notaries", summary = "List Notaries", description = "Returns a safe read-only projection of the Registry pinned in shared metadata or the explicitly configured self-hosted endpoint and key. Registry membership describes allowed protocol use and does not report endpoint health.", responses((status = 200, body = NotariesResponse), (status = 401, body = ErrorEnvelope), (status = 500, body = ErrorEnvelope), (status = 503, body = ErrorEnvelope)), security(("basicAuth" = [])), tag = "local-admin")]
+#[utoipa::path(get, path = "/v1/notaries", summary = "List Notaries", description = "Returns a safe read-only projection of the Registry pinned in shared metadata or the explicitly configured self-hosted endpoint and key. Registry membership describes allowed protocol use and does not report endpoint health.", responses((status = 200, body = NotariesResponse), (status = 401, body = ErrorEnvelope), (status = 500, body = ErrorEnvelope), (status = 503, body = ErrorEnvelope)), security(("basicAuth" = [])), tag = "admin")]
 async fn notaries(State(state): State<AdminState>) -> Result<Json<NotariesResponse>, ApiError> {
     let shared = if state.config.notary.endpoint.is_none() {
         state
@@ -540,14 +531,12 @@ async fn notaries(State(state): State<AdminState>) -> Result<Json<NotariesRespon
     } else {
         None
     };
-    NotariesResponse::for_config(&state.config, || {
-        Ok(shared.map(registry_service::PinnedRegistryState::from))
-    })
-    .map(Json)
-    .map_err(|_| ApiError::internal("registry_state_invalid"))
+    NotariesResponse::for_config(&state.config, shared)
+        .map(Json)
+        .map_err(|_| ApiError::internal("registry_state_invalid"))
 }
 
-#[utoipa::path(get, path = "/v1/providers", summary = "List supported providers", description = "Returns only captured's explicit provider adapters, their pinned upstream hosts, client API styles, proxy base URLs, and configured readiness.", responses((status = 200, body = ProvidersResponse), (status = 401, body = ErrorEnvelope)), security(("basicAuth" = [])), tag = "local-admin")]
+#[utoipa::path(get, path = "/v1/providers", summary = "List supported providers", description = "Returns only captured's explicit provider adapters, their pinned upstream hosts, client API styles, proxy base URLs, and configured readiness.", responses((status = 200, body = ProvidersResponse), (status = 401, body = ErrorEnvelope)), security(("basicAuth" = [])), tag = "admin")]
 async fn providers(State(state): State<AdminState>) -> Json<ProvidersResponse> {
     Json(ProvidersResponse::for_config(
         &state.config,
@@ -630,7 +619,6 @@ pub(crate) struct HealthResponse {
 #[derive(Debug, Serialize, ToSchema)]
 struct StatusResponse {
     version: String,
-    runtime_profile: String,
     instance_id: Option<String>,
     incarnation_id: Option<String>,
     lifecycle: String,
@@ -1023,6 +1011,6 @@ mod tests {
                 documented_operations += 1;
             }
         }
-        assert_eq!(documented_operations, 22);
+        assert_eq!(documented_operations, 19);
     }
 }

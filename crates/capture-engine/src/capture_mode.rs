@@ -28,9 +28,9 @@ pub struct CaptureSetting {
     mode: AtomicU8,
     notary: RwLock<Option<NotaryEndpoint>>,
     transition: Mutex<()>,
+    /// The persisted mode, re-read for each request because replicas share
+    /// it.
     metadata: Arc<dyn MetadataStore>,
-    /// Re-read the persisted mode for each request, because replicas share it.
-    shared: bool,
     discovery: Arc<dyn NotaryDiscovery>,
 }
 
@@ -55,7 +55,6 @@ impl CaptureSetting {
         mode: CaptureMode,
         notary: Option<NotaryEndpoint>,
         metadata: Arc<dyn MetadataStore>,
-        shared: bool,
         discovery: Arc<dyn NotaryDiscovery>,
     ) -> Self {
         Self {
@@ -63,7 +62,6 @@ impl CaptureSetting {
             notary: RwLock::new(notary),
             transition: Mutex::new(()),
             metadata,
-            shared,
             discovery,
         }
     }
@@ -81,14 +79,12 @@ impl CaptureSetting {
         // PostgreSQL is the shared daemon setting. Refreshing at admission
         // lets replicas converge without keeping a competing process-local
         // preference or letting a stale value execute the wrong request path.
-        if self.shared {
-            let persisted = self.metadata.capture_mode().await?;
-            if persisted != self.mode() {
-                if persisted != CaptureMode::Off {
-                    self.ensure_notary().await?;
-                }
-                self.mode.store(encode_mode(persisted), Ordering::Release);
+        let persisted = self.metadata.capture_mode().await?;
+        if persisted != self.mode() {
+            if persisted != CaptureMode::Off {
+                self.ensure_notary().await?;
             }
+            self.mode.store(encode_mode(persisted), Ordering::Release);
         }
         Ok(self.mode())
     }
@@ -199,7 +195,6 @@ mod tests {
             CaptureMode::Off,
             None,
             metadata.clone(),
-            false,
             Arc::new(FailingDiscovery),
         );
         for requested in [CaptureMode::Witnessed, CaptureMode::Notarized] {

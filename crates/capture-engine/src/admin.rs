@@ -16,8 +16,10 @@ use tokio::sync::Mutex;
 use utoipa::ToSchema;
 
 use crate::{
-    api::ApiError, config::CapturedConfig, metadata::MetadataCounts, metadata_store::MetadataStore,
-    platform::registry::PinnedRegistryState,
+    api::ApiError,
+    config::CapturedConfig,
+    metadata::{MetadataCounts, RegistrySnapshot},
+    metadata_store::MetadataStore,
 };
 
 const DEPENDENCY_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
@@ -149,12 +151,9 @@ pub struct Notary {
 
 impl NotariesResponse {
     /// The explicitly configured self-hosted notary when the configuration
-    /// names both its endpoint and key; otherwise the Registry `pinned`
-    /// returns, which it is asked for only then.
-    pub fn for_config(
-        config: &CapturedConfig,
-        pinned: impl FnOnce() -> Result<Option<PinnedRegistryState>>,
-    ) -> Result<Self> {
+    /// names both its endpoint and key; otherwise the `pinned` Registry, if
+    /// one is pinned yet.
+    pub fn for_config(config: &CapturedConfig, pinned: Option<RegistrySnapshot>) -> Result<Self> {
         if let (Some(endpoint), Some(public_key)) =
             (config.notary_endpoint()?, config.notary_public_key()?)
         {
@@ -178,7 +177,7 @@ impl NotariesResponse {
             });
         }
 
-        let Some(pinned) = pinned()? else {
+        let Some(pinned) = pinned else {
             return Ok(Self {
                 source: "registry".into(),
                 registry_source: None,
@@ -191,8 +190,8 @@ impl NotariesResponse {
     }
 }
 
-impl From<PinnedRegistryState> for NotariesResponse {
-    fn from(pinned: PinnedRegistryState) -> Self {
+impl From<RegistrySnapshot> for NotariesResponse {
+    fn from(pinned: RegistrySnapshot) -> Self {
         let active_key_id = pinned.active_key_id;
         let mut records = pinned.records;
         records.sort_by(|left, right| {
@@ -203,7 +202,7 @@ impl From<PinnedRegistryState> for NotariesResponse {
         });
         Self {
             source: "registry".into(),
-            registry_source: pinned.registry_source,
+            registry_source: Some(pinned.registry_source),
             generation: Some(pinned.generation),
             active_key_id: Some(active_key_id),
             notaries: records.into_iter().map(Notary::from).collect(),
@@ -363,8 +362,9 @@ mod tests {
         let retiring = notary_record(2, NotaryKeyStatus::Retiring, 90);
         let retired = notary_record(3, NotaryKeyStatus::Retired, 80);
         let revoked = notary_record(4, NotaryKeyStatus::Revoked, 110);
-        let response = NotariesResponse::from(PinnedRegistryState {
-            registry_source: Some("https://example.test/api/registry".into()),
+        let response = NotariesResponse::from(RegistrySnapshot {
+            registry_sha256: "0".repeat(64),
+            registry_source: "https://example.test/api/registry".into(),
             generation: 7,
             active_key_id: active.key_id.clone(),
             records: vec![
@@ -402,10 +402,7 @@ mod tests {
         config.notary.endpoint = Some("tcp://127.0.0.1:7047".into());
         config.notary.public_key = Some(hex::encode(&public_key));
 
-        let response = NotariesResponse::for_config(&config, || {
-            panic!("explicit configuration must not read the Registry")
-        })
-        .unwrap();
+        let response = NotariesResponse::for_config(&config, None).unwrap();
 
         assert_eq!(response.source, "explicit_configuration");
         assert_eq!(response.registry_source, None);

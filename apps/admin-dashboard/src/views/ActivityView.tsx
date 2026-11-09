@@ -2,7 +2,7 @@ import { ActionIcon, Button, Group, Text, TextInput, ThemeIcon } from '@mantine/
 import { useInfiniteQuery } from '@tanstack/react-query';
 import { Activity, Check, CircleDot, RefreshCw, XCircle } from 'lucide-react';
 import { useMemo, useState } from 'react';
-import type { Event, LocalApi } from '../api';
+import type { AdminApi, Event } from '../api';
 import type { DashboardRoute } from '../routes';
 import {
   AxisSelect,
@@ -23,7 +23,7 @@ export function ActivityView({
   initialTraceId = '',
   navigate,
 }: {
-  api: LocalApi;
+  api: AdminApi;
   initialTraceId?: string;
   navigate: (route: Route) => void;
 }) {

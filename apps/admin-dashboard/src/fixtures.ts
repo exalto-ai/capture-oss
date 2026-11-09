@@ -1,7 +1,7 @@
 import type {
+  AdminApi,
   CaptureMode,
   Event,
-  LocalApi,
   Notaries,
   Operation,
   Status,
@@ -10,7 +10,7 @@ import type {
   TraceSummary,
   Verification,
 } from './api';
-import { LocalApiError } from './api';
+import { AdminApiError } from './api';
 
 const hour = 60 * 60 * 1000;
 const fixtureNow = Date.UTC(2026, 6, 28, 16, 42, 0);
@@ -340,7 +340,6 @@ const captureModeEvents: Record<CaptureMode, [string, string]> = {
 
 export const fixtureStatus: Status = {
   version: '0.1.0',
-  runtime_profile: 'cluster',
   instance_id: 'capture-1',
   incarnation_id: 'capture-1-incarnation',
   lifecycle: 'ready',
@@ -516,7 +515,7 @@ const fixtureVerification: Verification = {
 
 function detail(captureId: string, captures: TraceSummary[], operations: Operation[]): TraceDetail {
   const capture = captures.find((item) => item.trace_id === captureId);
-  if (!capture) throw new LocalApiError(404, 'capture_not_found', 'Trace not found');
+  if (!capture) throw new AdminApiError(404, 'capture_not_found', 'Trace not found');
   return {
     ...capture,
     artifacts: [
@@ -672,7 +671,7 @@ function traceForCapture(capture: TraceSummary): TraceContent {
   return { ...trace, trace_id: capture.trace_id };
 }
 
-export function createFixtureApi(): LocalApi {
+export function createFixtureApi(): AdminApi {
   const clock = Date.now();
   const offset = clock - fixtureNow;
   let captures = fixtureCaptures.map((capture) => shiftCapture(structuredClone(capture), offset));
@@ -877,35 +876,6 @@ export function createFixtureApi(): LocalApi {
     return Number.isFinite(position) ? position : undefined;
   };
   const cursor = (kind: string, position: number) => `fixture:${kind}:${position}`;
-  const traceDeletionSkipReason = (
-    capture: TraceSummary,
-  ): 'capture_active' | 'sealing_active' | null => {
-    if (capture.status === 'capturing') return 'capture_active';
-    if (
-      capture.status === 'notarizing' ||
-      operations.some(
-        (operation) =>
-          operation.trace_id === capture.trace_id &&
-          (operation.state === 'queued' || operation.state === 'running'),
-      )
-    ) {
-      return 'sealing_active';
-    }
-    return null;
-  };
-  const removeTrace = (captureId: string) => {
-    const operationIds = new Set(
-      operations
-        .filter((operation) => operation.trace_id === captureId)
-        .map((operation) => operation.operation_id),
-    );
-    captures = captures.filter((capture) => capture.trace_id !== captureId);
-    operations = operations.filter((operation) => operation.trace_id !== captureId);
-    events = events.filter(
-      (event) => event.trace_id !== captureId && !operationIds.has(event.operation_id ?? ''),
-    );
-    traces.delete(captureId);
-  };
   return {
     session: async () => undefined,
     status: async () => status(),
@@ -986,21 +956,11 @@ export function createFixtureApi(): LocalApi {
       }
       return detail(captureId, captures, operations);
     },
-    deleteTrace: async (captureId) => {
-      const capture = captures.find((item) => item.trace_id === captureId);
-      if (!capture) return;
-      const reason = traceDeletionSkipReason(capture);
-      if (reason) {
-        const code = reason === 'capture_active' ? 'trace_capture_active' : 'trace_sealing_active';
-        throw new LocalApiError(409, code, 'Trace cannot be deleted while work is active');
-      }
-      removeTrace(captureId);
-    },
     startNotarization: async (captureId) => {
       const capture = captures.find((item) => item.trace_id === captureId);
-      if (!capture) throw new LocalApiError(404, 'pending_capture_not_found', 'Trace not found');
+      if (!capture) throw new AdminApiError(404, 'pending_capture_not_found', 'Trace not found');
       if (!capture.notarization_eligible) {
-        throw new LocalApiError(
+        throw new AdminApiError(
           409,
           capture.notarization_ineligibility_code ?? 'capture_not_eligible',
           'Trace is not eligible for sealing',
@@ -1092,7 +1052,7 @@ export function createFixtureApi(): LocalApi {
     traceContent: async (captureId) => {
       const trace = traces.get(captureId);
       if (!trace)
-        throw new LocalApiError(404, 'notarized_trace_not_found', 'Sealed trace not found');
+        throw new AdminApiError(404, 'notarized_trace_not_found', 'Sealed trace not found');
       return structuredClone(trace);
     },
     downloadPackage: async (captureId) =>
@@ -1101,7 +1061,7 @@ export function createFixtureApi(): LocalApi {
       }),
     verify: async (captureId) => {
       if (!traces.has(captureId))
-        throw new LocalApiError(422, 'trace_verification_failed', 'Trace verification failed');
+        throw new AdminApiError(422, 'trace_verification_failed', 'Trace verification failed');
       return {
         ...fixtureVerification,
         trace_id: captureId,

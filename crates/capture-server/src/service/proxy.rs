@@ -156,14 +156,13 @@ impl OrganizationCaptures {
             return Ok(state.clone());
         }
         // The setting re-reads the organization's stored mode for every
-        // request (`shared`), so starting from Off only means the first
+        // request, so starting from Off only means the first
         // request in a capture mode prepares the notary through the shared
         // discovery.
         let mode = Arc::new(CaptureSetting::new(
             CaptureMode::Off,
             None,
             self.cluster_runtime.metadata().organization(organization),
-            true,
             self.discovery.clone(),
         ));
         let capture = self.base.for_organization(
@@ -310,25 +309,12 @@ impl NotaryTrust for DaemonNotaryTrust {
     }
 
     /// Replicas verify against the Registry pinned in shared metadata.
-    async fn shared_registry(&self) -> Result<Option<RegistrySnapshot>> {
+    async fn shared_registry(&self) -> Result<RegistrySnapshot> {
         self.cluster_runtime
             .metadata()
             .registry_snapshot()
             .await?
             .context("shared Registry is not pinned")
-            .map(Some)
-    }
-
-    /// `shared` is always given: [`Self::shared_registry`] never returns
-    /// `None`.
-    fn registry_key_at(
-        &self,
-        shared: Option<&RegistrySnapshot>,
-        embedded_key: &[u8],
-        created_at_unix_ms: u64,
-    ) -> Result<(String, String)> {
-        let shared = shared.context("shared Registry is not pinned")?;
-        super::registry::registry_key_at(shared, embedded_key, created_at_unix_ms)
     }
 }
 
@@ -407,7 +393,6 @@ pub async fn run(args: ProxyArgs) -> Result<()> {
         operator_stored_mode,
         notary.clone(),
         persistence.metadata.clone(),
-        true,
         discovery.clone(),
     ));
     let trust: Arc<dyn NotaryTrust> = Arc::new(DaemonNotaryTrust::new(
@@ -999,12 +984,11 @@ pub(crate) mod test_organizations {
             cluster_runtime.clone(),
         ));
         let operator = default_organization();
-        // A shared setting re-reads the stored mode for every request.
+        // The setting re-reads the stored mode for every request.
         let operator_mode = Arc::new(CaptureSetting::new(
             CaptureMode::Off,
             config.notary_endpoint().unwrap(),
             cluster_runtime.metadata().organization(&operator),
-            true,
             discovery.clone(),
         ));
         let organizations = OrganizationCaptures::new(

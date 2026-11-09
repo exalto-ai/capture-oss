@@ -2,11 +2,11 @@ import { ActionIcon, Group, Paper, Text, Title } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
 import { useQuery } from '@tanstack/react-query';
 import { Copy, ShieldCheck, Unplug } from 'lucide-react';
-import type { LocalApi, Status } from '../api';
+import type { AdminApi, Status } from '../api';
 import { ProviderIdentity } from '../ProviderIdentity';
 import { EmptyState, Fact, LoadingState, QueryError, StatusLabel } from '../shared';
 
-type ProviderRoute = Awaited<ReturnType<LocalApi['providers']>>['providers'][number];
+type ProviderRoute = Awaited<ReturnType<AdminApi['providers']>>['providers'][number];
 
 const apiKeyEnvironment: Record<string, string> = {
   anthropic: 'ANTHROPIC_API_KEY',
@@ -125,7 +125,7 @@ function ApiRouteCard({
   );
 }
 
-export function ProvidersView({ api, status }: { api: LocalApi; status: Status }) {
+export function ProvidersView({ api, status }: { api: AdminApi; status: Status }) {
   const providers = useQuery({ queryKey: ['providers'], queryFn: api.providers, retry: false });
   const copyBaseUrl = async (label: string, baseUrl: string) => {
     await navigator.clipboard.writeText(baseUrl);

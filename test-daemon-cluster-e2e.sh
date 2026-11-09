@@ -163,8 +163,8 @@ load_balancer_session_request() {
 
 status_a=$(admin_json daemon-a /v1/status)
 status_b=$(admin_json daemon-b /v1/status)
-printf '%s' "$status_a" | "${compose[@]}" exec -T daemon-a jq -e '.runtime_profile == "cluster" and .instance_id == "daemon-a" and .lifecycle == "ready" and .metadata_backend == "postgres" and .artifact_backend == "s3"' >/dev/null
-printf '%s' "$status_b" | "${compose[@]}" exec -T daemon-b jq -e '.runtime_profile == "cluster" and .instance_id == "daemon-b" and .lifecycle == "ready"' >/dev/null
+printf '%s' "$status_a" | "${compose[@]}" exec -T daemon-a jq -e '.instance_id == "daemon-a" and .lifecycle == "ready" and .metadata_backend == "postgres" and .artifact_backend == "s3"' >/dev/null
+printf '%s' "$status_b" | "${compose[@]}" exec -T daemon-b jq -e '.instance_id == "daemon-b" and .lifecycle == "ready"' >/dev/null
 replicas=$(psql_value 'select count(*) from captured.replicas where lease_expires_at > clock_timestamp()')
 [[ $replicas == 2 ]] || { echo "expected two live replicas, got $replicas" >&2; exit 1; }
 

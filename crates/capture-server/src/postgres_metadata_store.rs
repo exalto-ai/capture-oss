@@ -1,4 +1,4 @@
-//! SQLx PostgreSQL implementation of the local daemon metadata contract.
+//! SQLx PostgreSQL implementation of the capture server's metadata contract.
 //!
 //! Runtime construction is deliberately read-only with respect to schema.
 //! Operators apply the daemon-owned migration journal through
@@ -805,8 +805,8 @@ fn settings_from_row(row: &PgRow) -> MetadataResult<(CaptureMode, bool)> {
 }
 
 /// A server records captures and notarizations only through a replica's
-/// claimed writes, and the cluster manages auto-seal and Trace deletion, so
-/// the organization view refuses those local mutations.
+/// claimed writes, and it neither deletes Traces nor changes auto-seal, so the
+/// organization view refuses those local mutations.
 fn server_requires_claim() -> MetadataStoreError {
     MetadataStoreError::InvalidInput("server_requires_claim")
 }

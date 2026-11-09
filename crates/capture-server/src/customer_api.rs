@@ -288,8 +288,6 @@ mod tests {
             operator.mode,
             Arc::new(DaemonNotaryTrust::new(config, cluster_runtime.clone())),
             work_available.clone(),
-            None,
-            true,
         );
         let token_file = directory.join("customer_api_token");
         write_private(&token_file, format!("{}\n", customer_token()).as_bytes());
@@ -489,6 +487,8 @@ mod tests {
             ("GET", "/assets/dashboard.js"),
             ("GET", "/openapi.json"),
             ("GET", "/v1/account"),
+            ("GET", "/v1/settings/auto-seal"),
+            ("PUT", "/v1/settings/auto-seal"),
         ] {
             let (status, _, _) = send(
                 &listener.app,
@@ -818,26 +818,6 @@ mod tests {
                 events(&activity),
                 [(CaptureMode::Off.event().0.to_owned(), None)]
             );
-
-            // The cluster manages auto-seal and Trace deletion itself.
-            let (status, setting) =
-                json(app, "GET", "/v1/settings/auto-seal", "acct-alpha", None).await;
-            assert_eq!(status, StatusCode::OK);
-            assert_eq!(setting["enabled"], false);
-            let (status, error) = json(
-                app,
-                "PUT",
-                "/v1/settings/auto-seal",
-                "acct-alpha",
-                Some(serde_json::json!({ "enabled": true })),
-            )
-            .await;
-            assert_eq!(status, StatusCode::CONFLICT);
-            assert_eq!(error["error"]["code"], "auto_seal_cluster_managed");
-            let (status, error) =
-                json(app, "DELETE", "/v1/traces/trc-beta", "acct-beta", None).await;
-            assert_eq!(status, StatusCode::CONFLICT);
-            assert_eq!(error["error"]["code"], "trace_deletion_cluster_managed");
 
             // Requests are logged with their organization, never with
             // capture-api's token.

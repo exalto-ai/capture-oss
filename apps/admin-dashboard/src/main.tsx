@@ -3,7 +3,7 @@ import { Notifications } from '@mantine/notifications';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
-import { localApi } from './api';
+import { adminApi } from './api';
 import { Dashboard } from './Dashboard';
 import { exaltoTheme } from './theme';
 
@@ -26,7 +26,7 @@ createRoot(applicationRoot).render(
     >
       <Notifications position="bottom-right" />
       <QueryClientProvider client={queryClient}>
-        <Dashboard api={localApi} />
+        <Dashboard api={adminApi} />
       </QueryClientProvider>
     </MantineProvider>
   </StrictMode>,

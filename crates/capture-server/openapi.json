@@ -1,7 +1,7 @@
 {
   "openapi": "3.1.0",
   "info": {
-    "title": "Exalto Capture local administration API",
+    "title": "Exalto Capture server administration API",
     "description": "Capture server administration API. Every /v1 route requires the configured HTTP Basic credentials, or a dashboard session started with them.",
     "license": {
       "name": "MIT",
@@ -13,7 +13,7 @@
     "/healthz": {
       "get": {
         "tags": [
-          "local-admin"
+          "admin"
         ],
         "summary": "Check service health",
         "description": "Returns the local service health and API version without requiring authentication.",
@@ -35,7 +35,7 @@
     "/openapi.json": {
       "get": {
         "tags": [
-          "local-admin"
+          "admin"
         ],
         "summary": "Get the OpenAPI contract",
         "description": "Returns the exact OpenAPI 3.1 contract implemented by this local service.",
@@ -50,7 +50,7 @@
     "/readyz": {
       "get": {
         "tags": [
-          "local-admin"
+          "admin"
         ],
         "summary": "Check service readiness",
         "description": "Runs bounded metadata, selected artifact-writer, and shared trust dependency probes. Dependency outages or schema mismatches make readiness fail while /healthz remains local liveness.",
@@ -82,7 +82,7 @@
     "/v1/activity": {
       "get": {
         "tags": [
-          "local-admin"
+          "admin"
         ],
         "summary": "List safe Activity",
         "description": "Lists bounded, redacted Trace and service activity with opaque history pagination and a separate high-water cursor for following new items. Prompts, responses, credentials, headers, vault material, and decrypted capture content are never included.",
@@ -211,7 +211,7 @@
     "/v1/notaries": {
       "get": {
         "tags": [
-          "local-admin"
+          "admin"
         ],
         "summary": "List Notaries",
         "description": "Returns a safe read-only projection of the Registry pinned in shared metadata or the explicitly configured self-hosted endpoint and key. Registry membership describes allowed protocol use and does not report endpoint health.",
@@ -268,7 +268,7 @@
     "/v1/operations/{operation_id}": {
       "get": {
         "tags": [
-          "local-admin"
+          "admin"
         ],
         "summary": "Get an operation",
         "description": "Returns the current state, milestone progress, and complete attempt history for one durable operation.",
@@ -335,7 +335,7 @@
     "/v1/providers": {
       "get": {
         "tags": [
-          "local-admin"
+          "admin"
         ],
         "summary": "List supported providers",
         "description": "Returns only captured's explicit provider adapters, their pinned upstream hosts, client API styles, proxy base URLs, and configured readiness.",
@@ -372,7 +372,7 @@
     "/v1/session": {
       "post": {
         "tags": [
-          "local-admin"
+          "admin"
         ],
         "summary": "Start a dashboard session",
         "description": "Exchanges configured HTTP Basic credentials for an HttpOnly browser session cookie. Returns without a cookie when admin authentication is disabled.",
@@ -410,7 +410,7 @@
       },
       "delete": {
         "tags": [
-          "local-admin"
+          "admin"
         ],
         "summary": "End a dashboard session",
         "description": "Deletes the current browser session and expires its local cookie.",
@@ -447,122 +447,10 @@
         ]
       }
     },
-    "/v1/settings/auto-seal": {
-      "get": {
-        "tags": [
-          "local-admin"
-        ],
-        "summary": "Get auto-seal mode",
-        "description": "Returns whether each newly completed, successful capture is queued for sealing.",
-        "operationId": "auto_seal_setting",
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/AutoSealSettingResponse"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "basicAuth": []
-          }
-        ]
-      },
-      "put": {
-        "tags": [
-          "local-admin"
-        ],
-        "summary": "Set auto-seal mode",
-        "description": "Durably changes whether later captures are queued for sealing as they complete. Each seal uses the account's monthly notarization allowance, or the Free allowance under public access; a seal beyond it is refused, never billed. The cluster profile does not support auto-seal.",
-        "operationId": "update_auto_seal_setting",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/UpdateAutoSealSetting"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/AutoSealSettingResponse"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "basicAuth": []
-          }
-        ]
-      }
-    },
     "/v1/settings/capture": {
       "get": {
         "tags": [
-          "local-admin"
+          "admin"
         ],
         "summary": "Get capture mode",
         "description": "Returns the authoritative daemon-owned mode used when admitting new provider requests: `off` forwards directly and records nothing, `witnessed` sends the plaintext exchange to the notary, which signs a receipt, and `notarized` uses Proxy-TLS so the notary never receives plaintext or credentials.",
@@ -607,7 +495,7 @@
       },
       "put": {
         "tags": [
-          "local-admin"
+          "admin"
         ],
         "summary": "Set capture mode",
         "description": "Durably changes how later provider requests are admitted. Choosing `witnessed` or `notarized` first initializes trusted notary state; a failure leaves the previous mode in place.",
@@ -664,7 +552,7 @@
     "/v1/status": {
       "get": {
         "tags": [
-          "local-admin"
+          "admin"
         ],
         "summary": "Get local service status",
         "description": "Returns listener addresses, bounded metadata and artifact-writer readiness, vault and Notary configuration, preview limits, and current Trace counts.",
@@ -711,7 +599,7 @@
     "/v1/traces": {
       "get": {
         "tags": [
-          "local-admin"
+          "admin"
         ],
         "summary": "Search Traces",
         "description": "Lists continuing Trace records in stable newest-first order with opaque cursor pagination and exact state, operational-status, provider, model, streaming, and date filters.",
@@ -866,7 +754,7 @@
     "/v1/traces/{trace_id}": {
       "get": {
         "tags": [
-          "local-admin"
+          "admin"
         ],
         "summary": "Get a Trace",
         "description": "Returns one continuing Trace with capture facts, current state and operational status, retained evidence facts, and notarization attempt history.",
@@ -928,80 +816,12 @@
             "basicAuth": []
           }
         ]
-      },
-      "delete": {
-        "tags": [
-          "local-admin"
-        ],
-        "summary": "Delete a local Trace",
-        "description": "Idempotently removes one terminal Trace and its private local artifacts. Active capture or sealing must finish first. This action does not delete a separately retained hosted Trace.",
-        "operationId": "delete_trace",
-        "parameters": [
-          {
-            "name": "trace_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "204": {
-            "description": "Local Trace and owned artifacts deleted, or already absent"
-          },
-          "400": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "basicAuth": []
-          }
-        ]
       }
     },
     "/v1/traces/{trace_id}/content": {
       "get": {
         "tags": [
-          "local-admin"
+          "admin"
         ],
         "summary": "Inspect disclosed Trace content",
         "description": "Returns the bounded manifest and canonical disclosed OpenTelemetry content from the retained package. It never returns the encrypted capture checkpoint or undisclosed request material.",
@@ -1088,7 +908,7 @@
     "/v1/traces/{trace_id}/notarizations": {
       "post": {
         "tags": [
-          "local-admin"
+          "admin"
         ],
         "summary": "Notarize a Trace",
         "description": "Idempotently starts, resumes, or retries the Trace's one durable notarization operation and returns its technical polling location.",
@@ -1165,7 +985,7 @@
     "/v1/traces/{trace_id}/package.llmtrace": {
       "get": {
         "tags": [
-          "local-admin"
+          "admin"
         ],
         "summary": "Export a Trace package",
         "description": "Returns the exact retained canonical .llmtrace bytes without conversion, regeneration, or transformation, with length and SHA-256 metadata and no-store caching.",
@@ -1257,10 +1077,10 @@
     "/v1/traces/{trace_id}/verify": {
       "post": {
         "tags": [
-          "local-admin"
+          "admin"
         ],
         "summary": "Verify a retained Trace",
-        "description": "Verifies the retained package evidence, disclosure, hashes, provider mapping, and canonical content against configured Notary trust. Local deletion waits until this retained-package read and verification finishes.",
+        "description": "Verifies the retained package evidence, disclosure, hashes, provider mapping, and canonical content against configured Notary trust.",
         "operationId": "verify_trace",
         "parameters": [
           {
@@ -1354,7 +1174,7 @@
     "/v1/verify": {
       "post": {
         "tags": [
-          "local-admin"
+          "admin"
         ],
         "summary": "Verify a portable Trace package",
         "description": "Verifies exactly one bounded .llmtrace body against a request-scoped key override or configured Notary trust. The package is never imported, retained, indexed, or shared.",
@@ -1523,17 +1343,6 @@
               "string",
               "null"
             ]
-          }
-        }
-      },
-      "AutoSealSettingResponse": {
-        "type": "object",
-        "required": [
-          "enabled"
-        ],
-        "properties": {
-          "enabled": {
-            "type": "boolean"
           }
         }
       },
@@ -1924,7 +1733,6 @@
         "type": "object",
         "required": [
           "version",
-          "runtime_profile",
           "lifecycle",
           "capture_mode",
           "proxy_listener",
@@ -1991,9 +1799,6 @@
             "type": "string"
           },
           "proxy_origin": {
-            "type": "string"
-          },
-          "runtime_profile": {
             "type": "string"
           },
           "vault": {
@@ -2342,17 +2147,6 @@
           }
         }
       },
-      "UpdateAutoSealSetting": {
-        "type": "object",
-        "required": [
-          "enabled"
-        ],
-        "properties": {
-          "enabled": {
-            "type": "boolean"
-          }
-        }
-      },
       "UpdateCaptureSetting": {
         "type": "object",
         "required": [
@@ -2435,8 +2229,8 @@
   },
   "tags": [
     {
-      "name": "local-admin",
-      "description": "Loopback-only administration"
+      "name": "admin",
+      "description": "Capture server administration, behind its password"
     }
   ]
 }

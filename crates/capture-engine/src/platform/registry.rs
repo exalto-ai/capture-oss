@@ -27,25 +27,6 @@ struct RegistryStore {
     records: Vec<RegistryRecord>,
 }
 
-#[derive(Clone, Debug)]
-pub struct PinnedRegistryState {
-    pub registry_source: Option<String>,
-    pub generation: u64,
-    pub active_key_id: String,
-    pub records: Vec<RegistryRecord>,
-}
-
-impl From<RegistrySnapshot> for PinnedRegistryState {
-    fn from(value: RegistrySnapshot) -> Self {
-        Self {
-            registry_source: Some(value.registry_source),
-            generation: value.generation,
-            active_key_id: value.active_key_id,
-            records: value.records,
-        }
-    }
-}
-
 fn merge_store(mut store: RegistryStore, registry: Registry) -> Result<RegistryStore> {
     let registry_sha256 = capture_core::sha256_hex(
         &serde_json::to_vec(&registry).context("encode notary registry revision")?,
@@ -228,14 +209,14 @@ pub fn witness_key_from_records(
 
 fn validate_registry_store(store: &RegistryStore) -> Result<()> {
     if store.format != REGISTRY_FORMAT {
-        bail!("unsupported local notary registry store format");
+        bail!("unsupported notary registry format");
     }
     if store.records.is_empty() || store.records.len() > 4096 {
-        bail!("local notary registry store must contain between 1 and 4096 historical records");
+        bail!("the notary registry must contain between 1 and 4096 historical records");
     }
     if let Some(source) = &store.registry_source {
         let source_url =
-            url::Url::parse(source).context("cached notary registry source is invalid")?;
+            url::Url::parse(source).context("the pinned notary registry source is invalid")?;
         if source.len() > 2048
             || !matches!(source_url.scheme(), "http" | "https")
             || !source_url.username().is_empty()
@@ -244,13 +225,13 @@ fn validate_registry_store(store: &RegistryStore) -> Result<()> {
             || source_url.query().is_some()
             || source_url.fragment().is_some()
         {
-            bail!("cached notary registry source is not a public registry URL");
+            bail!("the pinned notary registry source is not a public registry URL");
         }
     }
     let active_key_id = store
         .active_key_id
         .as_deref()
-        .ok_or_else(|| anyhow!("local notary registry store has no active key"))?;
+        .ok_or_else(|| anyhow!("the notary registry has no active key"))?;
     let mut ids = std::collections::BTreeSet::new();
     for record in &store.records {
         record.public_key_bytes()?;
@@ -261,19 +242,19 @@ fn validate_registry_store(store: &RegistryStore) -> Result<()> {
                 .notarize_until_unix_ms
                 .is_some_and(|until| until < record.valid_from_unix_ms)
         {
-            bail!("cached notary key has an inverted lifecycle window");
+            bail!("a pinned notary key has an inverted lifecycle window");
         }
         if !ids.insert(record.key_id.as_str()) {
-            bail!("local notary registry store contains a duplicate key ID");
+            bail!("the notary registry contains a duplicate key ID");
         }
     }
     let active = store
         .records
         .iter()
         .find(|record| record.key_id == active_key_id)
-        .ok_or_else(|| anyhow!("local notary registry store is missing its active key"))?;
+        .ok_or_else(|| anyhow!("the notary registry is missing its active key"))?;
     if active.status != NotaryKeyStatus::Active {
-        bail!("local notary registry store selected a non-active key");
+        bail!("the notary registry selected a non-active key");
     }
     Ok(())
 }

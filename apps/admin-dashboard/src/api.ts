@@ -19,7 +19,7 @@ type NotarizationResult =
   paths['/v1/traces/{trace_id}/notarizations']['post']['responses'][202]['content']['application/json'];
 type EventList = paths['/v1/activity']['get']['responses'][200]['content']['application/json'];
 type ActivityFilters = NonNullable<paths['/v1/activity']['get']['parameters']['query']>;
-export class LocalApiError extends Error {
+export class AdminApiError extends Error {
   status: number;
   code: string;
 
@@ -54,7 +54,7 @@ function queryString(values: Record<string, string | number | boolean | undefine
   return encoded ? `?${encoded}` : '';
 }
 
-export function createLocalApi() {
+export function createAdminApi() {
   let credentials: { username: string; password: string } | null = null;
 
   async function request<T>(path: string, requestOptions: RequestOptions = {}): Promise<T> {
@@ -75,7 +75,7 @@ export function createLocalApi() {
       const payload = (await response.json().catch(() => null)) as {
         error?: { code?: string; message?: string };
       } | null;
-      throw new LocalApiError(
+      throw new AdminApiError(
         response.status,
         payload?.error?.code ?? 'request_failed',
         payload?.error?.message ?? 'The capture server could not complete the request.',
@@ -99,7 +99,7 @@ export function createLocalApi() {
       const payload = (await response.json().catch(() => null)) as {
         error?: { code?: string; message?: string };
       } | null;
-      throw new LocalApiError(
+      throw new AdminApiError(
         response.status,
         payload?.error?.code ?? 'request_failed',
         payload?.error?.message ?? 'The capture server could not complete the request.',
@@ -127,8 +127,6 @@ export function createLocalApi() {
     providers: () => request<Providers>('/v1/providers'),
     traces: (filters: TraceFilters = {}) => request<TraceList>(`/v1/traces${queryString(filters)}`),
     trace: (traceId: string) => request<TraceDetail>(`/v1/traces/${encodeURIComponent(traceId)}`),
-    deleteTrace: (traceId: string) =>
-      request<void>(`/v1/traces/${encodeURIComponent(traceId)}`, { method: 'DELETE' }),
     startNotarization: (traceId: string) =>
       request<NotarizationResult>(`/v1/traces/${encodeURIComponent(traceId)}/notarizations`, {
         method: 'POST',
@@ -148,6 +146,6 @@ export function createLocalApi() {
   return api;
 }
 
-export const localApi = createLocalApi();
+export const adminApi = createAdminApi();
 
-export type LocalApi = ReturnType<typeof createLocalApi>;
+export type AdminApi = ReturnType<typeof createAdminApi>;

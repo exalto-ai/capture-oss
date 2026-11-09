@@ -83,20 +83,9 @@ pub trait NotaryTrust: Send + Sync {
     /// The notary key the host configures explicitly, if any.
     fn configured_key(&self) -> Result<Option<Vec<u8>>>;
 
-    /// Registry trust shared across a host's replicas, or `None` when the
-    /// host uses its own Registry cache. An error means shared trust is
-    /// required but not available.
-    async fn shared_registry(&self) -> Result<Option<RegistrySnapshot>>;
-
-    /// The key ID and trust source of a Registry key trusted when a package
-    /// was created: from `shared` trust if given, else the host's Registry
-    /// cache. Runs on a blocking thread.
-    fn registry_key_at(
-        &self,
-        shared: Option<&RegistrySnapshot>,
-        embedded_key: &[u8],
-        created_at_unix_ms: u64,
-    ) -> Result<(String, String)>;
+    /// The Registry pinned in metadata the host's replicas share. An error
+    /// means it is not available yet.
+    async fn shared_registry(&self) -> Result<RegistrySnapshot>;
 }
 
 /// Everything provider request handling needs from its host.
@@ -1671,17 +1660,8 @@ mod tests {
             Ok(None)
         }
 
-        async fn shared_registry(&self) -> Result<Option<RegistrySnapshot>> {
-            Ok(None)
-        }
-
-        fn registry_key_at(
-            &self,
-            _shared: Option<&RegistrySnapshot>,
-            _embedded_key: &[u8],
-            _created_at_unix_ms: u64,
-        ) -> Result<(String, String)> {
-            bail!("no notary key is trusted in this test")
+        async fn shared_registry(&self) -> Result<RegistrySnapshot> {
+            bail!("no Registry is pinned in this test")
         }
     }
 

@@ -1,17 +1,16 @@
 //! The durable record of each capture, kept the same way whether a host
 //! records it directly or under a cluster work claim.
 
-use std::time::{SystemTime, UNIX_EPOCH};
-
-use anyhow::{Context, Result};
+use anyhow::Result;
 use async_trait::async_trait;
-use capture_core::archive::MAX_ARCHIVE_WIRE_BYTES;
 
 use crate::{
-    artifact_store::{ArtifactKey, ArtifactRecord, ArtifactSource},
-    metadata::{CaptureCompletion, EvidenceKind, NewTrace},
-    storage::{RecoverySummary, Storage},
+    artifact_store::{ArtifactKey, ArtifactRecord},
+    metadata::{CaptureCompletion, NewTrace},
+    storage::RecoverySummary,
 };
+#[cfg(any(test, feature = "test-support"))]
+pub use local::LocalCaptureLedger;
 
 /// Begins captures and recovers the ones their owner can no longer finish.
 #[async_trait]
@@ -38,118 +37,135 @@ pub trait CaptureEntry: Send + Sync {
     -> Result<()>;
 }
 
-/// Records captures directly in one host's storage.
-#[derive(Clone)]
-pub struct LocalCaptureLedger {
-    storage: Storage,
-}
+/// Records captures directly in one store, without cluster claims. Tests use
+/// it; capture-server records every capture under a cluster claim.
+#[cfg(any(test, feature = "test-support"))]
+mod local {
+    use std::time::{SystemTime, UNIX_EPOCH};
 
-impl LocalCaptureLedger {
-    pub fn new(storage: Storage) -> Self {
-        Self { storage }
-    }
-}
+    use anyhow::{Context, Result};
+    use async_trait::async_trait;
+    use capture_core::archive::MAX_ARCHIVE_WIRE_BYTES;
 
-#[async_trait]
-impl CaptureLedger for LocalCaptureLedger {
-    async fn begin(&self, capture: NewTrace) -> Result<Box<dyn CaptureEntry>> {
-        let trace_id = capture.trace_id.clone();
-        self.storage.metadata.begin_capture(capture).await?;
-        Ok(Box::new(LocalCaptureEntry {
-            storage: self.storage.clone(),
-            trace_id,
-        }))
-    }
+    use super::{CaptureEntry, CaptureLedger};
+    use crate::{
+        artifact_store::{ArtifactKey, ArtifactRecord, ArtifactSource},
+        metadata::{CaptureCompletion, EvidenceKind, NewTrace},
+        storage::{RecoverySummary, Storage},
+    };
 
-    async fn recover_pending(&self) -> Result<RecoverySummary> {
-        self.storage.reconcile_pending_commits().await
-    }
-}
-
-struct LocalCaptureEntry {
-    storage: Storage,
-    trace_id: String,
-}
-
-#[async_trait]
-impl CaptureEntry for LocalCaptureEntry {
-    async fn fail(&self, failure_code: &str) -> Result<()> {
-        self.storage
-            .metadata
-            .mark_capture_failed(&self.trace_id, failure_code)
-            .await?;
-        Ok(())
+    #[derive(Clone)]
+    pub struct LocalCaptureLedger {
+        storage: Storage,
     }
 
-    async fn prepare(&self, completion: CaptureCompletion) -> Result<()> {
-        self.storage
-            .metadata
-            .prepare_capture_completion(completion)
-            .await?;
-        Ok(())
-    }
-
-    async fn store_artifact(&self, key: ArtifactKey, bytes: Vec<u8>) -> Result<ArtifactRecord> {
-        self.storage
-            .artifacts
-            .put(
-                &key,
-                ArtifactSource::from_bytes(bytes),
-                MAX_ARCHIVE_WIRE_BYTES,
-            )
-            .await
-            .map_err(Into::into)
-    }
-
-    async fn complete(
-        &self,
-        completion: CaptureCompletion,
-        artifact: ArtifactRecord,
-    ) -> Result<()> {
-        let trace_id = completion.trace_id.clone();
-        // A Witnessed trace is sealed by its receipt when it completes.
-        let sealable = (200..=299).contains(&completion.http_status)
-            && completion.evidence_kind == EvidenceKind::Notarized;
-        self.storage
-            .metadata
-            .complete_capture(completion, artifact)
-            .await?;
-        if sealable {
-            queue_auto_seal(&self.storage, &trace_id).await;
+    impl LocalCaptureLedger {
+        pub fn new(storage: Storage) -> Self {
+            Self { storage }
         }
-        Ok(())
     }
-}
 
-/// Queues a completed local capture for sealing when auto-seal is on. The
-/// notarization worker polls its queue, so no wake-up is needed. A failure
-/// leaves the Trace captured for a manual seal.
-async fn queue_auto_seal(storage: &Storage, trace_id: &str) {
-    let queued = async {
-        if !storage.metadata.auto_seal_enabled().await? {
-            return Ok(false);
+    #[async_trait]
+    impl CaptureLedger for LocalCaptureLedger {
+        async fn begin(&self, capture: NewTrace) -> Result<Box<dyn CaptureEntry>> {
+            let trace_id = capture.trace_id.clone();
+            self.storage.metadata.begin_capture(capture).await?;
+            Ok(Box::new(LocalCaptureEntry {
+                storage: self.storage.clone(),
+                trace_id,
+            }))
         }
-        storage
-            .metadata
-            .enqueue_notarization(trace_id, current_unix_ms()?)
-            .await?;
-        anyhow::Ok(true)
-    }
-    .await;
-    match queued {
-        Ok(true) => tracing::info!(trace_id, "queued capture for auto-seal"),
-        Ok(false) => {}
-        Err(error) => tracing::warn!(trace_id, %error, "could not queue capture for auto-seal"),
-    }
-}
 
-fn current_unix_ms() -> Result<u64> {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .context("system clock is before the Unix epoch")?
-        .as_millis()
-        .try_into()
-        .context("current time does not fit in u64 milliseconds")
+        async fn recover_pending(&self) -> Result<RecoverySummary> {
+            self.storage.reconcile_pending_commits().await
+        }
+    }
+
+    struct LocalCaptureEntry {
+        storage: Storage,
+        trace_id: String,
+    }
+
+    #[async_trait]
+    impl CaptureEntry for LocalCaptureEntry {
+        async fn fail(&self, failure_code: &str) -> Result<()> {
+            self.storage
+                .metadata
+                .mark_capture_failed(&self.trace_id, failure_code)
+                .await?;
+            Ok(())
+        }
+
+        async fn prepare(&self, completion: CaptureCompletion) -> Result<()> {
+            self.storage
+                .metadata
+                .prepare_capture_completion(completion)
+                .await?;
+            Ok(())
+        }
+
+        async fn store_artifact(&self, key: ArtifactKey, bytes: Vec<u8>) -> Result<ArtifactRecord> {
+            self.storage
+                .artifacts
+                .put(
+                    &key,
+                    ArtifactSource::from_bytes(bytes),
+                    MAX_ARCHIVE_WIRE_BYTES,
+                )
+                .await
+                .map_err(Into::into)
+        }
+
+        async fn complete(
+            &self,
+            completion: CaptureCompletion,
+            artifact: ArtifactRecord,
+        ) -> Result<()> {
+            let trace_id = completion.trace_id.clone();
+            // A Witnessed trace is sealed by its receipt when it completes.
+            let sealable = (200..=299).contains(&completion.http_status)
+                && completion.evidence_kind == EvidenceKind::Notarized;
+            self.storage
+                .metadata
+                .complete_capture(completion, artifact)
+                .await?;
+            if sealable {
+                queue_auto_seal(&self.storage, &trace_id).await;
+            }
+            Ok(())
+        }
+    }
+
+    /// Queues a completed local capture for sealing when auto-seal is on. The
+    /// notarization worker polls its queue, so no wake-up is needed. A failure
+    /// leaves the Trace captured for a manual seal.
+    async fn queue_auto_seal(storage: &Storage, trace_id: &str) {
+        let queued = async {
+            if !storage.metadata.auto_seal_enabled().await? {
+                return Ok(false);
+            }
+            storage
+                .metadata
+                .enqueue_notarization(trace_id, current_unix_ms()?)
+                .await?;
+            anyhow::Ok(true)
+        }
+        .await;
+        match queued {
+            Ok(true) => tracing::info!(trace_id, "queued capture for auto-seal"),
+            Ok(false) => {}
+            Err(error) => tracing::warn!(trace_id, %error, "could not queue capture for auto-seal"),
+        }
+    }
+
+    fn current_unix_ms() -> Result<u64> {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .context("system clock is before the Unix epoch")?
+            .as_millis()
+            .try_into()
+            .context("current time does not fit in u64 milliseconds")
+    }
 }
 
 #[cfg(test)]

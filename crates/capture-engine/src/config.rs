@@ -119,20 +119,20 @@ pub enum AuthenticationConfig {
     TokenFile { path: PathBuf },
 }
 
-/// Local administration listener. It is deliberately separate from the
+/// The administration listener. It is deliberately separate from the
 /// provider proxy so proxy callers cannot reach privileged routes.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct AdminConfig {
     #[serde(default = "default_admin_listen")]
     pub listen: SocketAddr,
-    /// Optional HTTP Basic authentication for the loopback administration
-    /// listener. The listener is open to local processes when omitted.
+    /// HTTP Basic authentication for the administration listener, which
+    /// `[cluster]` requires.
     pub auth: Option<AdminAuthConfig>,
 }
 
-/// Optional password authentication for the local administration listener.
-/// The password is stored only as an Argon2id PHC string.
+/// Password authentication for the administration listener. A stored
+/// password is only an Argon2id PHC string.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct AdminAuthConfig {
@@ -176,34 +176,13 @@ impl Default for NotaryConfig {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct StorageConfig {
-    #[serde(default)]
-    pub backend: ArtifactStorageBackend,
-    #[serde(default = "default_checkpoint_dir")]
-    pub checkpoint_dir: PathBuf,
-    #[serde(default = "default_package_dir")]
-    pub package_dir: PathBuf,
+    /// The private S3 store for checkpoints and Trace packages, which
+    /// `[cluster]` requires.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub s3: Option<S3StorageConfig>,
-}
-
-#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ArtifactStorageBackend {
-    #[default]
-    Filesystem,
-    S3,
-}
-
-impl ArtifactStorageBackend {
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Filesystem => "filesystem",
-            Self::S3 => "s3",
-        }
-    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -454,10 +433,6 @@ impl fmt::Debug for SecretS3Credentials {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct MetadataConfig {
-    #[serde(default)]
-    pub backend: MetadataBackend,
-    #[serde(default = "default_metadata_path")]
-    pub path: PathBuf,
     #[serde(default = "default_preview_chars")]
     pub prompt_preview_chars: usize,
     #[serde(default = "default_preview_chars")]
@@ -466,23 +441,6 @@ pub struct MetadataConfig {
     pub full_text_search: bool,
     #[serde(default, skip_serializing_if = "PostgresMetadataConfig::is_default")]
     pub postgres: PostgresMetadataConfig,
-}
-
-#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum MetadataBackend {
-    #[default]
-    Sqlite,
-    Postgres,
-}
-
-impl MetadataBackend {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Sqlite => "sqlite",
-            Self::Postgres => "postgres",
-        }
-    }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -578,22 +536,9 @@ impl Default for ProxyConfig {
     }
 }
 
-impl Default for StorageConfig {
-    fn default() -> Self {
-        Self {
-            backend: ArtifactStorageBackend::Filesystem,
-            checkpoint_dir: default_checkpoint_dir(),
-            package_dir: default_package_dir(),
-            s3: None,
-        }
-    }
-}
-
 impl Default for MetadataConfig {
     fn default() -> Self {
         Self {
-            backend: MetadataBackend::Sqlite,
-            path: default_metadata_path(),
             prompt_preview_chars: default_preview_chars(),
             output_preview_chars: default_preview_chars(),
             full_text_search: true,
@@ -640,18 +585,10 @@ impl CapturedConfig {
             self.proxy.max_attestable_http_bytes > 0,
             "proxy.max_attestable_http_bytes must be non-zero"
         );
-        if let Some(cluster) = &self.cluster {
-            self.validate_cluster(cluster)?;
-        } else {
-            ensure!(
-                self.proxy.listen.ip().is_loopback(),
-                "proxy.listen must use a loopback address outside cluster mode"
-            );
-            ensure!(
-                self.admin.listen.ip().is_loopback(),
-                "admin.listen must use a loopback address outside cluster mode"
-            );
-        }
+        let cluster = self.cluster.as_ref().context(
+            "capture-server runs only as a server: configure [cluster] with PostgreSQL metadata and S3 storage",
+        )?;
+        self.validate_cluster(cluster)?;
         ensure!(
             self.admin.listen != self.proxy.listen,
             "admin.listen and proxy.listen must be different addresses"
@@ -740,12 +677,8 @@ impl CapturedConfig {
 
     fn validate_cluster(&self, cluster: &ClusterConfig) -> Result<()> {
         ensure!(
-            self.metadata.backend == MetadataBackend::Postgres,
-            "cluster mode requires metadata.backend = \"postgres\""
-        );
-        ensure!(
-            self.storage.backend == ArtifactStorageBackend::S3,
-            "cluster mode requires storage.backend = \"s3\""
+            self.storage.s3.is_some(),
+            "cluster mode requires S3 artifact storage in [storage.s3]"
         );
         ensure!(
             self.admin.auth.is_some(),
@@ -792,20 +725,6 @@ impl CapturedConfig {
     }
 
     fn validate_storage(&self) -> Result<()> {
-        ensure!(
-            !self.storage.checkpoint_dir.as_os_str().is_empty(),
-            "storage.checkpoint_dir must not be empty"
-        );
-        ensure!(
-            !self.storage.package_dir.as_os_str().is_empty(),
-            "storage.package_dir must not be empty"
-        );
-        if self.storage.backend == ArtifactStorageBackend::S3 {
-            ensure!(
-                self.storage.s3.is_some(),
-                "storage.s3 is required when storage.backend = \"s3\""
-            );
-        }
         if let Some(s3) = &self.storage.s3 {
             s3.artifact_store_config()?;
         }
@@ -813,37 +732,23 @@ impl CapturedConfig {
     }
 
     fn validate_metadata(&self) -> Result<()> {
-        match self.metadata.backend {
-            MetadataBackend::Sqlite => {
-                ensure!(
-                    !self.metadata.path.as_os_str().is_empty(),
-                    "metadata.path must not be empty for the SQLite backend"
-                );
-                ensure!(
-                    self.metadata.postgres.is_default(),
-                    "non-default metadata.postgres settings require metadata.backend = \"postgres\""
-                );
-            }
-            MetadataBackend::Postgres => {
-                let postgres = &self.metadata.postgres;
-                ensure!(
-                    (1..=64).contains(&postgres.max_connections),
-                    "metadata.postgres.max_connections must be between 1 and 64"
-                );
-                ensure!(
-                    (1..=300).contains(&postgres.connect_timeout_seconds),
-                    "metadata.postgres.connect_timeout_seconds must be between 1 and 300"
-                );
-                ensure!(
-                    (1..=300).contains(&postgres.acquire_timeout_seconds),
-                    "metadata.postgres.acquire_timeout_seconds must be between 1 and 300"
-                );
-                ensure!(
-                    (1..=300).contains(&postgres.migration_lock_timeout_seconds),
-                    "metadata.postgres.migration_lock_timeout_seconds must be between 1 and 300"
-                );
-            }
-        }
+        let postgres = &self.metadata.postgres;
+        ensure!(
+            (1..=64).contains(&postgres.max_connections),
+            "metadata.postgres.max_connections must be between 1 and 64"
+        );
+        ensure!(
+            (1..=300).contains(&postgres.connect_timeout_seconds),
+            "metadata.postgres.connect_timeout_seconds must be between 1 and 300"
+        );
+        ensure!(
+            (1..=300).contains(&postgres.acquire_timeout_seconds),
+            "metadata.postgres.acquire_timeout_seconds must be between 1 and 300"
+        );
+        ensure!(
+            (1..=300).contains(&postgres.migration_lock_timeout_seconds),
+            "metadata.postgres.migration_lock_timeout_seconds must be between 1 and 300"
+        );
         Ok(())
     }
 
@@ -907,10 +812,6 @@ impl CapturedConfig {
         })
     }
     pub fn postgres_runtime_url(&self) -> Result<SecretDatabaseUrl> {
-        ensure!(
-            self.metadata.backend == MetadataBackend::Postgres,
-            "PostgreSQL metadata is not selected"
-        );
         resolve_database_url(
             env::var_os(METADATA_DATABASE_URL_ENV),
             env::var_os(METADATA_DATABASE_URL_FILE_ENV),
@@ -920,10 +821,6 @@ impl CapturedConfig {
     }
 
     pub fn postgres_migration_url(&self) -> Result<SecretDatabaseUrl> {
-        ensure!(
-            self.metadata.backend == MetadataBackend::Postgres,
-            "PostgreSQL metadata is not selected"
-        );
         resolve_migration_database_url(
             env::var_os(METADATA_DATABASE_URL_ENV),
             env::var_os(METADATA_DATABASE_URL_FILE_ENV),
@@ -1174,35 +1071,6 @@ fn default_s3_operation_timeout_seconds() -> u64 {
     30
 }
 
-fn default_data_dir() -> PathBuf {
-    if let Some(path) = env::var_os("XDG_DATA_HOME") {
-        PathBuf::from(path).join("ai.exalto.capture")
-    } else if let Some(path) = env::var_os("LOCALAPPDATA") {
-        PathBuf::from(path).join("ai.exalto.capture")
-    } else if let Some(path) = env::var_os("HOME") {
-        let home = PathBuf::from(path);
-        if cfg!(target_os = "macos") {
-            home.join("Library/Application Support/ai.exalto.capture")
-        } else {
-            home.join(".local/share/ai.exalto.capture")
-        }
-    } else {
-        PathBuf::from("capture-data")
-    }
-}
-
-fn default_checkpoint_dir() -> PathBuf {
-    default_data_dir().join("capture-checkpoints")
-}
-
-fn default_package_dir() -> PathBuf {
-    default_data_dir().join("trace-packages")
-}
-
-fn default_metadata_path() -> PathBuf {
-    default_data_dir().join("metadata.db")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1210,7 +1078,6 @@ mod tests {
     #[test]
     fn default_configuration_enables_the_built_in_providers() {
         let config = CapturedConfig::default();
-        config.validate().unwrap();
         assert!(config.providers.openai.enabled);
         assert!(config.providers.codex.enabled);
         assert!(config.providers.anthropic.enabled);
@@ -1218,9 +1085,7 @@ mod tests {
         assert!(config.providers.openrouter.enabled);
         assert_eq!(config.metadata.prompt_preview_chars, 1_000);
         assert!(config.metadata.full_text_search);
-        assert_eq!(config.metadata.backend, MetadataBackend::Sqlite);
         assert_eq!(config.metadata.postgres, PostgresMetadataConfig::default());
-        assert_eq!(config.storage.backend, ArtifactStorageBackend::Filesystem);
         assert!(config.storage.s3.is_none());
         assert_eq!(config.proxy.listen.to_string(), "127.0.0.1:8787");
         assert_eq!(config.admin.listen.to_string(), "127.0.0.1:8788");
@@ -1228,11 +1093,19 @@ mod tests {
     }
 
     #[test]
-    fn non_loopback_or_shared_listeners_are_rejected() {
-        let mut config = CapturedConfig::default();
-        config.admin.listen = "0.0.0.0:8788".parse().unwrap();
-        assert!(config.validate().is_err());
+    fn a_configuration_without_a_cluster_is_refused() {
+        let error = CapturedConfig::default().validate().unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("capture-server runs only as a server"),
+            "{error}"
+        );
+    }
 
+    #[test]
+    fn shared_listeners_are_rejected() {
+        let mut config = cluster_profile();
         config.admin.listen = config.proxy.listen;
         assert!(config.validate().is_err());
     }
@@ -1256,9 +1129,7 @@ mod tests {
             username: "admin".into(),
             password_hash: None,
         });
-        config.metadata.backend = MetadataBackend::Postgres;
         config.metadata.postgres = PostgresMetadataConfig::default();
-        config.storage.backend = ArtifactStorageBackend::S3;
         config.storage.s3 = Some(S3StorageConfig {
             bucket: "private-artifacts".into(),
             region: "us-east-1".into(),
@@ -1286,10 +1157,7 @@ mod tests {
         assert!(
             toml::from_str::<CapturedConfig>(&encoded.replace("[cluster]", "[server]")).is_err()
         );
-        config.metadata.backend = MetadataBackend::Sqlite;
-        assert!(config.validate().is_err());
-        config = valid.clone();
-        config.storage.backend = ArtifactStorageBackend::Filesystem;
+        config.storage.s3 = None;
         assert!(config.validate().is_err());
         config = valid.clone();
         config.admin.auth = None;
@@ -1520,7 +1388,8 @@ mod tests {
 
     #[test]
     fn explicit_notary_endpoint_requires_a_valid_trust_anchor() {
-        let mut config = CapturedConfig::default();
+        let mut config = cluster_profile();
+        config.notary.public_key = None;
         config.notary.endpoint = Some("tcp://127.0.0.1:7047".to_owned());
         assert!(config.validate().is_err());
 
@@ -1535,7 +1404,7 @@ mod tests {
 
     #[test]
     fn configured_admin_auth_requires_an_argon2id_hash() {
-        let mut config = CapturedConfig::default();
+        let mut config = cluster_profile();
         config.admin.auth = Some(AdminAuthConfig {
             username: "local-admin".to_owned(),
             password_hash: Some("$2b$12$not-an-argon2id-hash".to_owned()),
@@ -1557,32 +1426,32 @@ mod tests {
 
     #[test]
     fn duplicate_enabled_routes_are_rejected() {
-        let mut config = CapturedConfig::default();
+        let mut config = cluster_profile();
         config.providers.anthropic.route_prefix = "/openai".to_owned();
         assert!(config.validate().is_err());
     }
 
     #[test]
     fn overlapping_enabled_routes_are_rejected() {
-        let mut config = CapturedConfig::default();
+        let mut config = cluster_profile();
         config.providers.openai.route_prefix = "/ai".to_owned();
         config.providers.anthropic.route_prefix = "/ai/anthropic".to_owned();
         assert!(config.validate().is_err());
     }
 
     #[test]
-    fn default_configuration_round_trips_as_toml() {
-        let config = CapturedConfig::default();
+    fn a_cluster_configuration_round_trips_as_toml() {
+        let config = cluster_profile();
         let encoded = toml::to_string_pretty(&config).unwrap();
         assert!(!encoded.contains("[metadata.postgres]"));
-        assert!(!encoded.contains("[cluster]"));
+        assert!(encoded.contains("[cluster]"));
         let parsed: CapturedConfig = toml::from_str(&encoded).unwrap();
         parsed.validate().unwrap();
     }
 
     #[test]
     fn retired_configuration_formats_and_sections_are_rejected() {
-        let encoded = toml::to_string_pretty(&CapturedConfig::default()).unwrap();
+        let encoded = toml::to_string_pretty(&cluster_profile()).unwrap();
 
         let old_format = encoded.replace(CONFIG_FORMAT, "llm-notary/agent-config/v1");
         let parsed: CapturedConfig = toml::from_str(&old_format).unwrap();
@@ -1594,8 +1463,7 @@ mod tests {
 
     #[test]
     fn postgres_configuration_is_explicit_and_bounded() {
-        let mut config = CapturedConfig::default();
-        config.metadata.backend = MetadataBackend::Postgres;
+        let mut config = cluster_profile();
         config.validate().unwrap();
         assert_eq!(
             config.metadata.postgres.ssl_mode,
@@ -1604,30 +1472,22 @@ mod tests {
         );
         config.metadata.postgres.max_connections = 0;
         assert!(config.validate().is_err());
-
-        config.metadata.backend = MetadataBackend::Sqlite;
-        assert!(config.validate().is_err());
     }
 
     #[test]
     fn minimal_postgres_configuration_uses_safe_defaults() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("config.toml");
-        fs::write(
-            &path,
-            format!("format = {CONFIG_FORMAT:?}\n\n[metadata]\nbackend = \"postgres\"\n"),
-        )
-        .unwrap();
+        fs::write(&path, format!("format = {CONFIG_FORMAT:?}\n")).unwrap();
 
         let config = CapturedConfig::load_for_metadata_migration(&path).unwrap();
-        assert_eq!(config.metadata.backend, MetadataBackend::Postgres);
         assert_eq!(config.metadata.postgres, PostgresMetadataConfig::default());
     }
 
     #[test]
     fn s3_configuration_is_explicit_secure_and_bounded() {
-        let mut config = CapturedConfig::default();
-        config.storage.backend = ArtifactStorageBackend::S3;
+        let mut config = cluster_profile();
+        config.storage.s3 = None;
         assert!(config.validate().is_err());
 
         config.storage.s3 = Some(S3StorageConfig {
@@ -1676,33 +1536,16 @@ mod tests {
 
     #[test]
     fn minimal_s3_configuration_uses_aws_defaults() {
-        let encoded = format!(
-            "format = {CONFIG_FORMAT:?}\n\n[storage]\nbackend = \"s3\"\n\n[storage.s3]\nbucket = \"private-artifacts\"\n"
-        );
+        let encoded =
+            format!("format = {CONFIG_FORMAT:?}\n\n[storage.s3]\nbucket = \"private-artifacts\"\n");
         let config: CapturedConfig = toml::from_str(&encoded).unwrap();
-        config.validate().unwrap();
         let s3 = config.storage.s3.unwrap();
+        s3.artifact_store_config().unwrap();
         assert_eq!(s3.region, "us-east-1");
         assert!(s3.endpoint.is_none());
         assert_eq!(s3.prefix, "captured");
         assert!(!s3.force_path_style);
         assert!(!s3.allow_insecure_http);
-    }
-
-    #[test]
-    fn filesystem_can_retain_an_s3_read_profile() {
-        let mut config = CapturedConfig::default();
-        config.storage.s3 = Some(S3StorageConfig {
-            bucket: "notary-artifacts".to_owned(),
-            region: "us-east-1".to_owned(),
-            endpoint: Some("https://s3.example.test".to_owned()),
-            prefix: "captured".to_owned(),
-            force_path_style: false,
-            allow_insecure_http: false,
-            connect_timeout_seconds: 10,
-            operation_timeout_seconds: 30,
-        });
-        config.validate().unwrap();
     }
 
     #[test]

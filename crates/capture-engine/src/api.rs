@@ -25,19 +25,18 @@ use capture_core::{
     registry::key_id,
 };
 use serde::{Deserialize, Serialize};
-use tokio::sync::{Mutex, Notify};
+use tokio::sync::Notify;
 use utoipa::ToSchema;
 
 use crate::{
-    artifact_store::{ArtifactKey, ArtifactKind, ArtifactRecord, ArtifactStoreError},
+    artifact_store::{ArtifactKind, ArtifactRecord, ArtifactStoreError},
     metadata::{
         CaptureMode, Event, EventFilters, EvidenceKind, Operation, OperationAttempt,
         OperationFilters, RegistrySnapshot, TraceFilters, TracePagePosition,
         TraceSummary as StoredTraceSummary,
     },
-    metadata_store::{
-        MetadataStore, MetadataStoreError, TraceDeletionOutcome, TraceDeletionPreparation,
-    },
+    metadata_store::{MetadataStore, MetadataStoreError},
+    platform::registry::registry_key_at,
     proxy::{CaptureModeSource, NotaryTrust},
     storage::Storage,
 };
@@ -50,14 +49,6 @@ pub struct ApiContext {
     trust: Arc<dyn NotaryTrust>,
     /// Wakes the notarization worker when an operation is queued.
     work_available: Arc<Notify>,
-    /// Keeps Trace deletion from racing sealing and retained-package reads. A
-    /// cluster cannot delete Traces, so a cluster replica has none.
-    trace_lifecycle: Option<Arc<Mutex<()>>>,
-    /// A cluster replica manages auto-seal and Trace deletion itself, so those
-    /// routes refuse changes.
-    cluster_managed: bool,
-    #[cfg(feature = "test-support")]
-    verification_test_hook: Option<VerificationTestHook>,
 }
 
 impl ApiContext {
@@ -66,53 +57,27 @@ impl ApiContext {
         mode: Arc<dyn CaptureModeSource>,
         trust: Arc<dyn NotaryTrust>,
         work_available: Arc<Notify>,
-        trace_lifecycle: Option<Arc<Mutex<()>>>,
-        cluster_managed: bool,
     ) -> Self {
         Self {
             storage,
             mode,
             trust,
             work_available,
-            trace_lifecycle,
-            cluster_managed,
-            #[cfg(feature = "test-support")]
-            verification_test_hook: None,
         }
     }
 
     /// The same host acting for one organization: the organization's stores
-    /// and capture mode replace this context's, while notary trust, the
-    /// notarization worker's wake-up, the Trace lifecycle gate and the
-    /// cluster-managed restrictions stay shared.
+    /// and capture mode replace this context's, while notary trust and the
+    /// notarization worker's wake-up stay shared.
     pub fn for_organization(&self, storage: Storage, mode: Arc<dyn CaptureModeSource>) -> Self {
         Self {
             storage,
             mode,
             trust: self.trust.clone(),
             work_available: self.work_available.clone(),
-            trace_lifecycle: self.trace_lifecycle.clone(),
-            cluster_managed: self.cluster_managed,
-            #[cfg(feature = "test-support")]
-            verification_test_hook: self.verification_test_hook.clone(),
         }
-    }
-
-    async fn lifecycle_gate(&self) -> Option<tokio::sync::MutexGuard<'_, ()>> {
-        match &self.trace_lifecycle {
-            Some(gate) => Some(gate.lock().await),
-            None => None,
-        }
-    }
-
-    /// Pauses retained verification after it takes the lifecycle gate, so a
-    /// test can race another operation against it.
-    #[cfg(feature = "test-support")]
-    pub fn set_verification_test_hook(&mut self, hook: VerificationTestHook) {
-        self.verification_test_hook = Some(hook);
     }
 }
-
 /// Gives each request the [`ApiContext`] it acts in. A host with one context
 /// is its own source; a host that serves many organizations resolves the context of the organization its
 /// authentication established for the request.
@@ -137,15 +102,6 @@ impl<S: ApiContextSource> FromRequestParts<S> for Api {
     }
 }
 
-/// Signals `entered` once verification holds the lifecycle gate, then waits
-/// for `release`.
-#[cfg(feature = "test-support")]
-#[derive(Clone)]
-pub struct VerificationTestHook {
-    pub entered: Arc<Notify>,
-    pub release: Arc<Notify>,
-}
-
 /// The shared routes, for a host to mount behind its authentication. Each
 /// request acts in the context its host's [`ApiContextSource`] gives it.
 pub fn routes<S: ApiContextSource>() -> Router<S> {
@@ -154,12 +110,8 @@ pub fn routes<S: ApiContextSource>() -> Router<S> {
             "/v1/settings/capture",
             get(capture_setting).put(update_capture_setting),
         )
-        .route(
-            "/v1/settings/auto-seal",
-            get(auto_seal_setting).put(update_auto_seal_setting),
-        )
         .route("/v1/traces", get(traces))
-        .route("/v1/traces/{trace_id}", get(trace).delete(delete_trace))
+        .route("/v1/traces/{trace_id}", get(trace))
         .route(
             "/v1/traces/{trace_id}/notarizations",
             post(start_notarization),
@@ -201,7 +153,7 @@ pub fn now_ms() -> Result<u64> {
         .context("current time does not fit in u64")
 }
 
-#[utoipa::path(get, path = "/v1/settings/capture", summary = "Get capture mode", description = "Returns the authoritative daemon-owned mode used when admitting new provider requests: `off` forwards directly and records nothing, `witnessed` sends the plaintext exchange to the notary, which signs a receipt, and `notarized` uses Proxy-TLS so the notary never receives plaintext or credentials.", responses((status = 200, body = CaptureSettingResponse), (status = 503, body = ErrorEnvelope)), tag = "local-admin")]
+#[utoipa::path(get, path = "/v1/settings/capture", summary = "Get capture mode", description = "Returns the authoritative daemon-owned mode used when admitting new provider requests: `off` forwards directly and records nothing, `witnessed` sends the plaintext exchange to the notary, which signs a receipt, and `notarized` uses Proxy-TLS so the notary never receives plaintext or credentials.", responses((status = 200, body = CaptureSettingResponse), (status = 503, body = ErrorEnvelope)), tag = "admin")]
 pub async fn capture_setting(Api(state): Api) -> Result<Json<CaptureSettingResponse>, ApiError> {
     let mode = state
         .storage
@@ -212,7 +164,7 @@ pub async fn capture_setting(Api(state): Api) -> Result<Json<CaptureSettingRespo
     Ok(Json(CaptureSettingResponse { mode }))
 }
 
-#[utoipa::path(put, path = "/v1/settings/capture", summary = "Set capture mode", description = "Durably changes how later provider requests are admitted. Choosing `witnessed` or `notarized` first initializes trusted notary state; a failure leaves the previous mode in place.", request_body = UpdateCaptureSetting, responses((status = 200, body = CaptureSettingResponse), (status = 503, body = ErrorEnvelope)), tag = "local-admin")]
+#[utoipa::path(put, path = "/v1/settings/capture", summary = "Set capture mode", description = "Durably changes how later provider requests are admitted. Choosing `witnessed` or `notarized` first initializes trusted notary state; a failure leaves the previous mode in place.", request_body = UpdateCaptureSetting, responses((status = 200, body = CaptureSettingResponse), (status = 503, body = ErrorEnvelope)), tag = "admin")]
 pub async fn update_capture_setting(
     Api(state): Api,
     Json(update): Json<UpdateCaptureSetting>,
@@ -226,37 +178,6 @@ pub async fn update_capture_setting(
         })
     })?;
     Ok(Json(CaptureSettingResponse { mode }))
-}
-
-#[utoipa::path(get, path = "/v1/settings/auto-seal", summary = "Get auto-seal mode", description = "Returns whether each newly completed, successful capture is queued for sealing.", responses((status = 200, body = AutoSealSettingResponse), (status = 503, body = ErrorEnvelope)), tag = "local-admin")]
-pub async fn auto_seal_setting(Api(state): Api) -> Result<Json<AutoSealSettingResponse>, ApiError> {
-    let enabled = state
-        .storage
-        .metadata
-        .auto_seal_enabled()
-        .await
-        .map_err(|_| ApiError::service_unavailable("metadata_not_ready"))?;
-    Ok(Json(AutoSealSettingResponse { enabled }))
-}
-
-#[utoipa::path(put, path = "/v1/settings/auto-seal", summary = "Set auto-seal mode", description = "Durably changes whether later captures are queued for sealing as they complete. Each seal uses the account's monthly notarization allowance, or the Free allowance under public access; a seal beyond it is refused, never billed. The cluster profile does not support auto-seal.", request_body = UpdateAutoSealSetting, responses((status = 200, body = AutoSealSettingResponse), (status = 409, body = ErrorEnvelope), (status = 503, body = ErrorEnvelope)), tag = "local-admin")]
-pub async fn update_auto_seal_setting(
-    Api(state): Api,
-    Json(update): Json<UpdateAutoSealSetting>,
-) -> Result<Json<AutoSealSettingResponse>, ApiError> {
-    if state.cluster_managed {
-        return Err(ApiError::conflict("auto_seal_cluster_managed"));
-    }
-    let enabled = state
-        .storage
-        .metadata
-        .set_auto_seal_enabled(
-            update.enabled,
-            now_ms().map_err(|_| ApiError::internal("clock_failed"))?,
-        )
-        .await
-        .map_err(|_| ApiError::service_unavailable("auto_seal_setting_not_stored"))?;
-    Ok(Json(AutoSealSettingResponse { enabled }))
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -275,7 +196,7 @@ pub struct TraceQuery {
     cursor: Option<String>,
 }
 
-#[utoipa::path(get, path = "/v1/traces", summary = "Search Traces", description = "Lists continuing Trace records in stable newest-first order with opaque cursor pagination and exact state, operational-status, provider, model, streaming, and date filters.", params(("query" = Option<String>, Query), ("state" = Option<TraceState>, Query), ("status" = Option<TraceOperationalStatus>, Query), ("provider" = Option<String>, Query), ("model" = Option<String>, Query), ("streaming" = Option<bool>, Query), ("created_from_unix_ms" = Option<u64>, Query), ("created_before_unix_ms" = Option<u64>, Query), ("metadata_only" = Option<bool>, Query), ("limit" = Option<u32>, Query, description = "Page size; defaults to 50", minimum = 1, maximum = 200), ("cursor" = Option<String>, Query)), responses((status = 200, body = TracePage), (status = 400, body = ErrorEnvelope), (status = 503, body = ErrorEnvelope)), tag = "local-admin")]
+#[utoipa::path(get, path = "/v1/traces", summary = "Search Traces", description = "Lists continuing Trace records in stable newest-first order with opaque cursor pagination and exact state, operational-status, provider, model, streaming, and date filters.", params(("query" = Option<String>, Query), ("state" = Option<TraceState>, Query), ("status" = Option<TraceOperationalStatus>, Query), ("provider" = Option<String>, Query), ("model" = Option<String>, Query), ("streaming" = Option<bool>, Query), ("created_from_unix_ms" = Option<u64>, Query), ("created_before_unix_ms" = Option<u64>, Query), ("metadata_only" = Option<bool>, Query), ("limit" = Option<u32>, Query, description = "Page size; defaults to 50", minimum = 1, maximum = 200), ("cursor" = Option<String>, Query)), responses((status = 200, body = TracePage), (status = 400, body = ErrorEnvelope), (status = 503, body = ErrorEnvelope)), tag = "admin")]
 pub async fn traces(
     Api(state): Api,
     query: Result<Query<TraceQuery>, QueryRejection>,
@@ -361,7 +282,7 @@ pub async fn traces(
     }))
 }
 
-#[utoipa::path(get, path = "/v1/traces/{trace_id}", summary = "Get a Trace", description = "Returns one continuing Trace with capture facts, current state and operational status, retained evidence facts, and notarization attempt history.", params(("trace_id" = String, Path)), responses((status = 200, body = TraceDetail), (status = 404, body = ErrorEnvelope), (status = 503, body = ErrorEnvelope)), tag = "local-admin")]
+#[utoipa::path(get, path = "/v1/traces/{trace_id}", summary = "Get a Trace", description = "Returns one continuing Trace with capture facts, current state and operational status, retained evidence facts, and notarization attempt history.", params(("trace_id" = String, Path)), responses((status = 200, body = TraceDetail), (status = 404, body = ErrorEnvelope), (status = 503, body = ErrorEnvelope)), tag = "admin")]
 pub async fn trace(
     Api(state): Api,
     Path(trace_id): Path<String>,
@@ -413,114 +334,12 @@ pub async fn trace(
     }))
 }
 
-#[derive(Clone, Copy, Debug, Serialize, ToSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum TraceDeletionSkipReason {
-    CaptureActive,
-    SealingActive,
-    ArtifactCleanupFailed,
-}
-
-pub enum LocalTraceDeletion {
-    Deleted,
-    Skipped(TraceDeletionSkipReason),
-}
-
-pub async fn delete_local_trace_unlocked(
-    state: &ApiContext,
-    trace_id: &str,
-) -> Result<LocalTraceDeletion, ApiError> {
-    match state
-        .storage
-        .metadata
-        .prepare_trace_deletion(trace_id)
-        .await
-        .map_err(metadata_api_error)?
-    {
-        TraceDeletionPreparation::Ready => {}
-        TraceDeletionPreparation::NotFound => return Ok(LocalTraceDeletion::Deleted),
-        TraceDeletionPreparation::CaptureActive => {
-            return Ok(LocalTraceDeletion::Skipped(
-                TraceDeletionSkipReason::CaptureActive,
-            ));
-        }
-        TraceDeletionPreparation::NotarizationActive => {
-            return Ok(LocalTraceDeletion::Skipped(
-                TraceDeletionSkipReason::SealingActive,
-            ));
-        }
-    }
-
-    // The caller holds the lifecycle gate across this preflight, artifact
-    // cleanup, and metadata commit. Sealing therefore cannot activate between
-    // the safety check and deletion. Keep metadata until both exact artifact
-    // keys are gone so a failed cleanup remains retryable by exact Trace ID.
-    let mut cleanup_failed = false;
-    for kind in [ArtifactKind::CaptureCheckpoint, ArtifactKind::TracePackage] {
-        let key = ArtifactKey::new(trace_id, kind)
-            .map_err(|_| ApiError::bad_request("invalid_trace_id"))?;
-        if state.storage.artifacts.delete(&key).await.is_err() {
-            cleanup_failed = true;
-        }
-    }
-    if cleanup_failed {
-        return Ok(LocalTraceDeletion::Skipped(
-            TraceDeletionSkipReason::ArtifactCleanupFailed,
-        ));
-    }
-
-    match state
-        .storage
-        .metadata
-        .delete_trace(trace_id)
-        .await
-        .map_err(metadata_api_error)?
-    {
-        TraceDeletionOutcome::Deleted | TraceDeletionOutcome::NotFound => {
-            Ok(LocalTraceDeletion::Deleted)
-        }
-        TraceDeletionOutcome::CaptureActive => Ok(LocalTraceDeletion::Skipped(
-            TraceDeletionSkipReason::CaptureActive,
-        )),
-        TraceDeletionOutcome::NotarizationActive => Ok(LocalTraceDeletion::Skipped(
-            TraceDeletionSkipReason::SealingActive,
-        )),
-    }
-}
-
-#[utoipa::path(delete, path = "/v1/traces/{trace_id}", summary = "Delete a local Trace", description = "Idempotently removes one terminal Trace and its private local artifacts. Active capture or sealing must finish first. This action does not delete a separately retained hosted Trace.", params(("trace_id" = String, Path)), responses((status = 204, description = "Local Trace and owned artifacts deleted, or already absent"), (status = 400, body = ErrorEnvelope), (status = 409, body = ErrorEnvelope), (status = 503, body = ErrorEnvelope)), tag = "local-admin")]
-pub async fn delete_trace(
-    Api(state): Api,
-    Path(trace_id): Path<String>,
-) -> Result<StatusCode, ApiError> {
-    validate_id(&trace_id, "trc-")?;
-    if state.cluster_managed {
-        return Err(ApiError::conflict("trace_deletion_cluster_managed"));
-    }
-    let _lifecycle = state.lifecycle_gate().await;
-    match delete_local_trace_unlocked(&state, &trace_id).await? {
-        LocalTraceDeletion::Deleted => Ok(StatusCode::NO_CONTENT),
-        LocalTraceDeletion::Skipped(TraceDeletionSkipReason::CaptureActive) => {
-            Err(ApiError::conflict("trace_capture_active"))
-        }
-        LocalTraceDeletion::Skipped(TraceDeletionSkipReason::SealingActive) => {
-            Err(ApiError::conflict("trace_sealing_active"))
-        }
-        LocalTraceDeletion::Skipped(TraceDeletionSkipReason::ArtifactCleanupFailed) => Err(
-            ApiError::service_unavailable("trace_artifact_deletion_failed"),
-        ),
-    }
-}
-
-#[utoipa::path(post, path = "/v1/traces/{trace_id}/notarizations", summary = "Notarize a Trace", description = "Idempotently starts, resumes, or retries the Trace's one durable notarization operation and returns its technical polling location.", params(("trace_id" = String, Path)), responses((status = 202, body = NotarizationRequest), (status = 404, body = ErrorEnvelope), (status = 409, body = ErrorEnvelope), (status = 503, body = ErrorEnvelope)), tag = "local-admin")]
+#[utoipa::path(post, path = "/v1/traces/{trace_id}/notarizations", summary = "Notarize a Trace", description = "Idempotently starts, resumes, or retries the Trace's one durable notarization operation and returns its technical polling location.", params(("trace_id" = String, Path)), responses((status = 202, body = NotarizationRequest), (status = 404, body = ErrorEnvelope), (status = 409, body = ErrorEnvelope), (status = 503, body = ErrorEnvelope)), tag = "admin")]
 pub async fn start_notarization(
     Api(state): Api,
     Path(trace_id): Path<String>,
 ) -> Result<Response, ApiError> {
     validate_id(&trace_id, "trc-")?;
-    // Serialize activation with local deletion's safety preflight and artifact
-    // cleanup. Existing queued or running work is still rejected by metadata.
-    let _lifecycle = state.lifecycle_gate().await;
     let capture = state
         .storage
         .metadata
@@ -567,7 +386,7 @@ pub async fn start_notarization(
         .into_response())
 }
 
-#[utoipa::path(get, path = "/v1/operations/{operation_id}", summary = "Get an operation", description = "Returns the current state, milestone progress, and complete attempt history for one durable operation.", params(("operation_id" = String, Path)), responses((status = 200, body = TechnicalOperation), (status = 404, body = ErrorEnvelope), (status = 503, body = ErrorEnvelope)), tag = "local-admin")]
+#[utoipa::path(get, path = "/v1/operations/{operation_id}", summary = "Get an operation", description = "Returns the current state, milestone progress, and complete attempt history for one durable operation.", params(("operation_id" = String, Path)), responses((status = 200, body = TechnicalOperation), (status = 404, body = ErrorEnvelope), (status = 503, body = ErrorEnvelope)), tag = "admin")]
 pub async fn operation(
     Api(state): Api,
     Path(operation_id): Path<String>,
@@ -586,7 +405,7 @@ pub async fn operation(
     Ok(Json(value))
 }
 
-#[utoipa::path(get, path = "/v1/traces/{trace_id}/content", summary = "Inspect disclosed Trace content", description = "Returns the bounded manifest and canonical disclosed OpenTelemetry content from the retained package. It never returns the encrypted capture checkpoint or undisclosed request material.", params(("trace_id" = String, Path)), responses((status = 200, body = TraceContent), (status = 404, body = ErrorEnvelope), (status = 409, body = ErrorEnvelope), (status = 500, body = ErrorEnvelope), (status = 503, body = ErrorEnvelope)), tag = "local-admin")]
+#[utoipa::path(get, path = "/v1/traces/{trace_id}/content", summary = "Inspect disclosed Trace content", description = "Returns the bounded manifest and canonical disclosed OpenTelemetry content from the retained package. It never returns the encrypted capture checkpoint or undisclosed request material.", params(("trace_id" = String, Path)), responses((status = 200, body = TraceContent), (status = 404, body = ErrorEnvelope), (status = 409, body = ErrorEnvelope), (status = 500, body = ErrorEnvelope), (status = 503, body = ErrorEnvelope)), tag = "admin")]
 pub async fn trace_content(
     Api(state): Api,
     Path(trace_id): Path<String>,
@@ -607,7 +426,7 @@ pub async fn trace_content(
     Ok(Json(value))
 }
 
-#[utoipa::path(get, path = "/v1/traces/{trace_id}/package.llmtrace", summary = "Export a Trace package", description = "Returns the exact retained canonical .llmtrace bytes without conversion, regeneration, or transformation, with length and SHA-256 metadata and no-store caching.", params(("trace_id" = String, Path)), responses((status = 200, body = Vec<u8>, content_type = "application/vnd.exalto.notary.trace-package+zip"), (status = 404, body = ErrorEnvelope), (status = 409, body = ErrorEnvelope), (status = 500, body = ErrorEnvelope), (status = 503, body = ErrorEnvelope)), tag = "local-admin")]
+#[utoipa::path(get, path = "/v1/traces/{trace_id}/package.llmtrace", summary = "Export a Trace package", description = "Returns the exact retained canonical .llmtrace bytes without conversion, regeneration, or transformation, with length and SHA-256 metadata and no-store caching.", params(("trace_id" = String, Path)), responses((status = 200, body = Vec<u8>, content_type = "application/vnd.exalto.notary.trace-package+zip"), (status = 404, body = ErrorEnvelope), (status = 409, body = ErrorEnvelope), (status = 500, body = ErrorEnvelope), (status = 503, body = ErrorEnvelope)), tag = "admin")]
 pub async fn download_package(
     Api(state): Api,
     Path(trace_id): Path<String>,
@@ -649,20 +468,12 @@ pub async fn download_package(
         .into_response())
 }
 
-#[utoipa::path(post, path = "/v1/traces/{trace_id}/verify", summary = "Verify a retained Trace", description = "Verifies the retained package evidence, disclosure, hashes, provider mapping, and canonical content against configured Notary trust. Local deletion waits until this retained-package read and verification finishes.", params(("trace_id" = String, Path)), responses((status = 200, body = VerificationResult), (status = 404, body = ErrorEnvelope), (status = 409, body = ErrorEnvelope), (status = 422, body = ErrorEnvelope), (status = 500, body = ErrorEnvelope), (status = 503, body = ErrorEnvelope)), tag = "local-admin")]
+#[utoipa::path(post, path = "/v1/traces/{trace_id}/verify", summary = "Verify a retained Trace", description = "Verifies the retained package evidence, disclosure, hashes, provider mapping, and canonical content against configured Notary trust.", params(("trace_id" = String, Path)), responses((status = 200, body = VerificationResult), (status = 404, body = ErrorEnvelope), (status = 409, body = ErrorEnvelope), (status = 422, body = ErrorEnvelope), (status = 500, body = ErrorEnvelope), (status = 503, body = ErrorEnvelope)), tag = "admin")]
 pub async fn verify_trace(
     Api(state): Api,
     Path(trace_id): Path<String>,
 ) -> Result<Json<VerificationResult>, ApiError> {
     validate_id(&trace_id, "trc-")?;
-    // Retained verification and deletion share one lifecycle gate, so the
-    // package cannot disappear between its metadata lookup and verified read.
-    let _lifecycle = state.lifecycle_gate().await;
-    #[cfg(feature = "test-support")]
-    if let Some(hook) = state.verification_test_hook.as_ref() {
-        hook.entered.notify_one();
-        hook.release.notified().await;
-    }
     let bytes = trace_package_bytes(&state.storage, &trace_id).await?;
     let verified_at_unix_ms = now_ms().map_err(|_| ApiError::internal("clock_error"))?;
     let configured_key = state
@@ -670,15 +481,16 @@ pub async fn verify_trace(
         .configured_key()
         .map_err(|_| ApiError::internal("notary_configuration_invalid"))?;
     let shared_trust: Option<RegistrySnapshot> = if configured_key.is_none() {
-        state
-            .trust
-            .shared_registry()
-            .await
-            .map_err(|_| ApiError::service_unavailable("registry_not_ready"))?
+        Some(
+            state
+                .trust
+                .shared_registry()
+                .await
+                .map_err(|_| ApiError::service_unavailable("registry_not_ready"))?,
+        )
     } else {
         None
     };
-    let notary_trust = state.trust.clone();
     let value = tokio::task::spawn_blocking(move || -> Result<VerificationResult> {
         let embedded_key = trace_package_notary_key_bytes(&bytes)?;
         let (trusted_key, notary_key_id, trust_source) = match configured_key {
@@ -688,11 +500,8 @@ pub async fn verify_trace(
             }
             None => {
                 let created_at = trace_package_created_at_unix_ms_bytes(&bytes)?;
-                let (key_id, trust) = notary_trust.registry_key_at(
-                    shared_trust.as_ref(),
-                    &embedded_key,
-                    created_at,
-                )?;
+                let shared = shared_trust.context("the shared Registry is not loaded")?;
+                let (key_id, trust) = registry_key_at(&shared, &embedded_key, created_at)?;
                 (embedded_key, key_id, trust)
             }
         };
@@ -713,7 +522,7 @@ pub async fn verify_trace(
     Ok(Json(value))
 }
 
-#[utoipa::path(post, path = "/v1/verify", summary = "Verify a portable Trace package", description = "Verifies exactly one bounded .llmtrace body against a request-scoped key override or configured Notary trust. The package is never imported, retained, indexed, or shared.", request_body(content = Vec<u8>, content_type = "application/vnd.exalto.notary.trace-package+zip"), params(("x-notary-trusted-notary-key" = Option<String>, Header, description = "Optional request-scoped compressed SEC1 Notary verification key in hexadecimal")), responses((status = 200, body = VerificationResult), (status = 400, body = ErrorEnvelope), (status = 500, body = ErrorEnvelope), (status = 503, body = ErrorEnvelope)), tag = "local-admin")]
+#[utoipa::path(post, path = "/v1/verify", summary = "Verify a portable Trace package", description = "Verifies exactly one bounded .llmtrace body against a request-scoped key override or configured Notary trust. The package is never imported, retained, indexed, or shared.", request_body(content = Vec<u8>, content_type = "application/vnd.exalto.notary.trace-package+zip"), params(("x-notary-trusted-notary-key" = Option<String>, Header, description = "Optional request-scoped compressed SEC1 Notary verification key in hexadecimal")), responses((status = 200, body = VerificationResult), (status = 400, body = ErrorEnvelope), (status = 500, body = ErrorEnvelope), (status = 503, body = ErrorEnvelope)), tag = "admin")]
 pub async fn verify_uploaded_trace(
     Api(state): Api,
     headers: HeaderMap,
@@ -731,15 +540,16 @@ pub async fn verify_uploaded_trace(
         .map_err(|_| ApiError::internal("notary_configuration_invalid"))?;
     let shared_trust: Option<RegistrySnapshot> =
         if explicit_key.is_none() && configured_key.is_none() {
-            state
-                .trust
-                .shared_registry()
-                .await
-                .map_err(|_| ApiError::service_unavailable("registry_not_ready"))?
+            Some(
+                state
+                    .trust
+                    .shared_registry()
+                    .await
+                    .map_err(|_| ApiError::service_unavailable("registry_not_ready"))?,
+            )
         } else {
             None
         };
-    let notary_trust = state.trust.clone();
     let value = tokio::task::spawn_blocking(move || -> Result<VerificationResult> {
         let embedded_key = trace_package_notary_key_bytes(&bytes)?;
         let (trusted_key, notary_key_id, trust_source) = if let Some(value) = explicit_key {
@@ -750,8 +560,8 @@ pub async fn verify_uploaded_trace(
             (key, key_id, "configuration".to_owned())
         } else {
             let created_at = trace_package_created_at_unix_ms_bytes(&bytes)?;
-            let (key_id, trust) =
-                notary_trust.registry_key_at(shared_trust.as_ref(), &embedded_key, created_at)?;
+            let shared = shared_trust.context("the shared Registry is not loaded")?;
+            let (key_id, trust) = registry_key_at(&shared, &embedded_key, created_at)?;
             (embedded_key, key_id, trust)
         };
         let manifest = verify_trace_package_bytes(&bytes, &trusted_key)?.manifest;
@@ -815,7 +625,7 @@ pub struct ActivityQuery {
     limit: Option<u32>,
 }
 
-#[utoipa::path(get, path = "/v1/activity", summary = "List safe Activity", description = "Lists bounded, redacted Trace and service activity with opaque history pagination and a separate high-water cursor for following new items. Prompts, responses, credentials, headers, vault material, and decrypted capture content are never included.", params(("cursor" = Option<String>, Query), ("after" = Option<String>, Query), ("severity" = Option<String>, Query), ("event_type" = Option<String>, Query), ("trace_id" = Option<String>, Query), ("operation_id" = Option<String>, Query), ("created_after_unix_ms" = Option<u64>, Query), ("limit" = Option<u32>, Query, description = "Page size; defaults to 50", minimum = 1, maximum = 200)), responses((status = 200, body = ActivityPage), (status = 400, body = ErrorEnvelope), (status = 503, body = ErrorEnvelope)), tag = "local-admin")]
+#[utoipa::path(get, path = "/v1/activity", summary = "List safe Activity", description = "Lists bounded, redacted Trace and service activity with opaque history pagination and a separate high-water cursor for following new items. Prompts, responses, credentials, headers, vault material, and decrypted capture content are never included.", params(("cursor" = Option<String>, Query), ("after" = Option<String>, Query), ("severity" = Option<String>, Query), ("event_type" = Option<String>, Query), ("trace_id" = Option<String>, Query), ("operation_id" = Option<String>, Query), ("created_after_unix_ms" = Option<u64>, Query), ("limit" = Option<u32>, Query, description = "Page size; defaults to 50", minimum = 1, maximum = 200)), responses((status = 200, body = ActivityPage), (status = 400, body = ErrorEnvelope), (status = 503, body = ErrorEnvelope)), tag = "admin")]
 pub async fn activity(
     Api(state): Api,
     query: Result<Query<ActivityQuery>, QueryRejection>,
@@ -1034,16 +844,6 @@ pub struct CaptureSettingResponse {
 #[serde(deny_unknown_fields)]
 pub struct UpdateCaptureSetting {
     mode: CaptureMode,
-}
-
-#[derive(Debug, Serialize, ToSchema)]
-pub struct AutoSealSettingResponse {
-    enabled: bool,
-}
-
-#[derive(Debug, Deserialize, ToSchema)]
-pub struct UpdateAutoSealSetting {
-    enabled: bool,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, ToSchema)]
@@ -1519,7 +1319,7 @@ impl ApiError {
         Self {
             status: StatusCode::INTERNAL_SERVER_ERROR,
             code,
-            message: "The local service could not complete the request",
+            message: "The capture server could not complete the request",
         }
     }
 }

@@ -2,8 +2,6 @@ import {
   ActionIcon,
   Button,
   Group,
-  Menu,
-  Modal,
   Paper,
   ScrollArea,
   SegmentedControl,
@@ -20,13 +18,11 @@ import {
   ArrowLeft,
   Copy,
   Download,
-  Ellipsis,
   FileJson2,
   Play,
   RefreshCw,
   Search,
   ShieldCheck,
-  Trash2,
   XCircle,
 } from 'lucide-react';
 import type {
@@ -37,8 +33,8 @@ import type {
 } from 'react';
 import { useEffect, useEffectEvent, useMemo, useRef, useState } from 'react';
 import type {
+  AdminApi,
   EvidenceKind,
-  LocalApi,
   Operation,
   TraceDetail,
   TraceSummary,
@@ -54,7 +50,6 @@ import {
   formatBytes,
   formatDate,
   LoadingState,
-  localModalClassNames,
   mutationError,
   QueryError,
   requiredValue,
@@ -65,25 +60,9 @@ import {
 
 type Route = DashboardRoute;
 
-type TraceFilters = NonNullable<Parameters<LocalApi['traces']>[0]>;
+type TraceFilters = NonNullable<Parameters<AdminApi['traces']>[0]>;
 type TraceStateFilter = NonNullable<TraceFilters['state']>;
 type TraceStatusFilter = NonNullable<TraceFilters['status']>;
-
-function invalidateAfterTraceDeletion(
-  queryClient: ReturnType<typeof useQueryClient>,
-  deletedTraceIds: string[],
-) {
-  for (const traceId of deletedTraceIds) {
-    queryClient.removeQueries({ queryKey: ['capture', traceId], exact: true });
-    queryClient.removeQueries({ queryKey: ['trace', traceId], exact: true });
-  }
-  void Promise.all([
-    queryClient.invalidateQueries({ queryKey: ['traces'] }),
-    queryClient.invalidateQueries({ queryKey: ['status'] }),
-    queryClient.invalidateQueries({ queryKey: ['events'] }),
-    queryClient.invalidateQueries({ queryKey: ['capture'], refetchType: 'none' }),
-  ]);
-}
 
 function notarizationPhaseLabel(phase: string) {
   switch (phase) {
@@ -430,7 +409,7 @@ export function TracesView({
   initialFilters,
   navigate,
 }: {
-  api: LocalApi;
+  api: AdminApi;
   selectedId?: string;
   initialAction?: Route['action'];
   initialFilters?: Route['filters'];
@@ -659,7 +638,7 @@ export function TracesView({
 }
 
 /** Starts sealing a Trace; the row and the inspector share the queueing, notice, and refresh. */
-function useSealTrace(api: LocalApi, traceId: string, onSuccess?: () => void) {
+function useSealTrace(api: AdminApi, traceId: string, onSuccess?: () => void) {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: () => api.startNotarization(traceId),
@@ -692,7 +671,7 @@ function canSeal(trace: TraceSummary) {
   );
 }
 
-function RowSealButton({ api, capture }: { api: LocalApi; capture: TraceSummary }) {
+function RowSealButton({ api, capture }: { api: AdminApi; capture: TraceSummary }) {
   const seal = useSealTrace(api, capture.trace_id);
   return (
     <Button
@@ -742,7 +721,7 @@ function CaptureRow({
 }
 
 function TraceInspector(props: {
-  api: LocalApi;
+  api: AdminApi;
   capture: TraceSummary;
   initialAction?: Route['action'];
   mobile: boolean;
@@ -756,90 +735,6 @@ function TraceInspector(props: {
   );
 }
 
-function DeleteTraceAction({
-  api,
-  capture,
-  navigate,
-}: {
-  api: LocalApi;
-  capture: TraceSummary;
-  navigate: (route: Route) => void;
-}) {
-  const queryClient = useQueryClient();
-  const [confirmationOpen, setConfirmationOpen] = useState(false);
-  const blockReason =
-    capture.status === 'capturing'
-      ? 'Wait for capture to finish before deleting this Trace.'
-      : capture.status === 'notarizing'
-        ? 'Wait for sealing to finish before deleting this Trace.'
-        : null;
-  const deleteTrace = useMutation({
-    mutationFn: () => api.deleteTrace(capture.trace_id),
-    onSuccess: () => {
-      setConfirmationOpen(false);
-      navigate({ view: 'traces' });
-      invalidateAfterTraceDeletion(queryClient, [capture.trace_id]);
-      notifications.show({
-        title: 'Trace deleted',
-        message: 'The Trace and its private artifacts were permanently removed.',
-      });
-    },
-    onError: (error) => mutationError('Could not delete Trace', error),
-  });
-  return (
-    <>
-      <Menu position="bottom-end" width={220} withinPortal>
-        <Menu.Target>
-          <Button variant="outline" leftSection={<Ellipsis size={15} />} aria-label="More actions">
-            More
-          </Button>
-        </Menu.Target>
-        <Menu.Dropdown>
-          <Menu.Item
-            color="red"
-            leftSection={<Trash2 size={14} />}
-            disabled={Boolean(blockReason)}
-            title={blockReason ?? undefined}
-            onClick={() => setConfirmationOpen(true)}
-          >
-            Delete Trace…
-          </Menu.Item>
-          {blockReason && <Menu.Label>{blockReason}</Menu.Label>}
-        </Menu.Dropdown>
-      </Menu>
-      <Modal
-        opened={confirmationOpen}
-        onClose={() => {
-          if (!deleteTrace.isPending) setConfirmationOpen(false);
-        }}
-        title="Delete this Trace?"
-        size={430}
-        classNames={localModalClassNames}
-        closeOnClickOutside={!deleteTrace.isPending}
-        closeOnEscape={!deleteTrace.isPending}
-        withCloseButton={!deleteTrace.isPending}
-      >
-        <Text className="axis-local-dialog-description">
-          This permanently removes the private Trace and its artifacts from the capture server. This
-          action cannot be undone.
-        </Text>
-        <Group className="axis-local-dialog-footer" justify="flex-end">
-          <Button
-            variant="default"
-            disabled={deleteTrace.isPending}
-            onClick={() => setConfirmationOpen(false)}
-          >
-            Cancel
-          </Button>
-          <Button color="red" loading={deleteTrace.isPending} onClick={() => deleteTrace.mutate()}>
-            Delete Trace
-          </Button>
-        </Group>
-      </Modal>
-    </>
-  );
-}
-
 function CapturedTraceInspector({
   api,
   capture,
@@ -848,7 +743,7 @@ function CapturedTraceInspector({
   onBack,
   navigate,
 }: {
-  api: LocalApi;
+  api: AdminApi;
   capture: TraceSummary;
   initialAction?: Route['action'];
   mobile: boolean;
@@ -913,7 +808,6 @@ function CapturedTraceInspector({
               {canRetry ? 'Retry sealing' : 'Seal trace'}
             </Button>
           )}
-          <DeleteTraceAction api={api} capture={capture} navigate={navigate} />
         </Group>
       </div>
       {capture.status === 'capture_failed' && (
@@ -1152,7 +1046,7 @@ function NotarizedTraceInspector({
   onBack,
   navigate,
 }: {
-  api: LocalApi;
+  api: AdminApi;
   capture: TraceSummary;
   initialAction?: Route['action'];
   mobile: boolean;
@@ -1318,7 +1212,6 @@ function NotarizedTraceInspector({
           >
             Verify locally
           </Button>
-          <DeleteTraceAction api={api} capture={capture} navigate={navigate} />
         </Group>
       </Group>
       <Tabs value={activeTab} onChange={setActiveTab} keepMounted={false}>

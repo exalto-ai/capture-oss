@@ -1,4 +1,4 @@
-//! Backend-neutral asynchronous metadata persistence for the local daemon.
+//! Backend-neutral asynchronous metadata persistence for a capture host.
 //!
 //! The daemon, administration API, and notarization worker depend on this
 //! contract. Backend-specific connection, migration, and blocking behavior
