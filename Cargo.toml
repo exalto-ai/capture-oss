@@ -1,6 +1,5 @@
 [workspace]
 members = [
-    "crates/capture",
     "crates/capture-core",
     "crates/capture-engine",
     "crates/capture-server",

@@ -58,7 +58,7 @@ pub(crate) fn valid_trace_id(id: &str) -> bool {
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_'))
 }
-fn confirmed_trace(probe: &capture::client::TraceProbe, id: &str, provider: &str) -> bool {
+fn confirmed_trace(probe: &crate::local_api::TraceProbe, id: &str, provider: &str) -> bool {
     probe.trace_id == id
         && probe.provider == provider
         && matches!(probe.state.as_deref(), Some("captured" | "notarized"))
@@ -73,8 +73,7 @@ pub(crate) async fn confirm_traces(ids: Vec<String>, provider: &str) -> Vec<Chat
         })
         .collect();
     for _ in 0..10 {
-        if let Ok(client) =
-            capture::client::CapturedClient::connect_loopback("127.0.0.1:8788".parse().unwrap())
+        if let Ok(client) = crate::local_api::LocalApi::connect()
             && let Ok(Ok(probes)) =
                 tokio::time::timeout(Duration::from_millis(500), client.recent_trace_probes()).await
         {
@@ -358,7 +357,7 @@ mod tests {
     }
     #[test]
     fn trace_confirmation_matches_identity_provider_and_completion_independently_of_http_success() {
-        let mut probe = capture::client::TraceProbe {
+        let mut probe = crate::local_api::TraceProbe {
             trace_id: "trc-specific".into(),
             state: Some("captured".into()),
             status: None,

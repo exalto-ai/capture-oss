@@ -15,15 +15,6 @@ tags = ["notary", "private-artifact"]
 description = "Vendored public certificate used by TLS parsing tests"
 paths = ['''(^|/)vendor/tlsn/crates/tls-core/testdata/cert-digicert\.pem$''']
 
-# The CLI crate and the agent skill are named `capture`, so the same directory clause matches
-# them. Only their own sources and documents are exempt.
-[[rules.allowlists]]
-description = "Capture CLI crate and agent skill sources, not captured evidence"
-paths = [
-  '''(^|/)crates/capture/(Cargo\.toml|(src|tests)/.+\.rs)$''',
-  '''(^|/)skills/capture/(SKILL\.md|agents/[^/]+\.yaml|references/[^/]+\.md)$''',
-]
-
 [[allowlists]]
 description = "Exact synthetic credentials and detector literals in Runtime tests"
 regexTarget = "line"

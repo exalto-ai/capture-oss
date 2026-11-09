@@ -6,7 +6,7 @@ use std::{
     time::Duration,
 };
 
-use capture::client::TraceCounts;
+use crate::local_api::TraceCounts;
 use capture_updater::{self as update, ReleaseArtifact};
 use serde::Serialize;
 use tauri::Manager;

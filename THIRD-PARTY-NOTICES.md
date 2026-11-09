@@ -5,7 +5,7 @@ application uses the same MIT license. Third-party components retain their own
 licenses. Release archives include the MIT license, this notice, and the
 vendored license texts under `third-party-licenses/`.
 
-The CLI and services link third-party Rust crates. Their exact, reproducible
+The desktop app and services link third-party Rust crates. Their exact, reproducible
 set is recorded in the committed `Cargo.lock`; each crate's declared SPDX
 license is available from its `Cargo.toml` in the crates.io source archive.
 The web application dependencies are equivalently pinned in

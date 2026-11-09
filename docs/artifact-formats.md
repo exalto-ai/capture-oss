@@ -171,24 +171,15 @@ does not claim that a local runtime executed the tool.
 
 ## Local verification
 
-Verify a retained Notarized Trace through the daemon:
+The desktop app's local service verifies a retained Trace with
+`POST /v1/traces/{trace_id}/verify`, and a portable `.llmtrace` without
+importing or retaining it with `POST /v1/verify`. Agents reach the same routes
+through the MCP tools `verify_trace` and `verify_package`.
 
-```bash
-capture traces verify trc-example
-```
-
-Verify a portable file through the daemon without importing or retaining it:
-
-```bash
-capture traces verify ./trc-example.llmtrace
-```
-
-Path-based verification selects a key from the daemon's configured or cached
-trust by default. For an explicit self-hosted trust anchor:
-
-```bash
-capture traces verify ./trc-example.llmtrace --trusted-notary-key 02...
-```
+Package verification selects a key from the service's configured or cached
+trust by default. For an explicit self-hosted trust anchor, send the public key
+in the `x-notary-trusted-notary-key` header, or as `trusted_notary_key` to
+`verify_package`.
 
 Full verification checks canonical archive bytes, entry hashes, trust-key
 selection, TLSNotary evidence, provider identity, selective disclosure,

@@ -1,4 +1,0 @@
-interface:
-  display_name: "Exalto Capture"
-  short_description: "Find, seal, and verify local model Traces"
-  default_prompt: "Use $capture to list my Sealed Traces and verify the one I select."

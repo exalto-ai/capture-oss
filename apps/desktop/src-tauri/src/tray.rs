@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use capture::client::CaptureMode;
+use crate::local_api::CaptureMode;
 #[cfg(target_os = "macos")]
 use tauri::menu::AboutMetadata;
 use tauri::{

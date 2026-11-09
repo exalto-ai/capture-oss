@@ -25,18 +25,15 @@ COPY --from=daemon-e2e-planner /app/recipe.json recipe.json
 COPY vendor vendor
 RUN find vendor -exec touch -h -d @0 {} + \
     && cargo chef cook --locked --release --recipe-path recipe.json \
-        -p capture-server --features daemon-e2e --bins \
-        -p capture --bin capture
+        -p capture-server --features daemon-e2e --bins
 COPY . .
 # Removing target/ in the same step keeps the full build tree out of this
-# layer, so a cache exporter stores only the three binaries.
+# layer, so a cache exporter stores only the two binaries.
 RUN find vendor -exec touch -h -d @0 {} + \
     && cargo build --locked --release \
         -p capture-server --features daemon-e2e --bins \
-        -p capture --bin capture \
     && mkdir /out \
-    && cp target/release/capture-server target/release/capture \
-        target/release/notary-e2e-notary /out/ \
+    && cp target/release/capture-server target/release/notary-e2e-notary /out/ \
     && rm -rf target
 
 FROM debian:bookworm-slim AS daemon-e2e
@@ -44,8 +41,8 @@ FROM debian:bookworm-slim AS daemon-e2e
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl jq openssl python3 \
     && rm -rf /var/lib/apt/lists/*
-COPY --from=daemon-e2e-builder /out/capture-server /out/capture /out/notary-e2e-notary /usr/local/bin/
-RUN capture-server --help >/dev/null && capture --help >/dev/null
+COPY --from=daemon-e2e-builder /out/capture-server /out/notary-e2e-notary /usr/local/bin/
+RUN capture-server --help >/dev/null
 ENTRYPOINT ["capture-server"]
 COPY deploy-daemon-e2e/config-cluster-template.toml /etc/capture/config-cluster-template.toml
 COPY deploy-daemon-e2e/provider.py /usr/local/libexec/notary-e2e-provider.py

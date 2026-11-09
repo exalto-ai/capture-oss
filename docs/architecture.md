@@ -19,8 +19,8 @@ seams, but those implementations are not part of this workspace.
 | Provider client | yes | provider credential | Sends an ordinary provider request to a fixed local route |
 | Desktop local service | yes | vault, SQLite metadata, operations, filesystem artifacts, trust cache | Proxies requests, captures private state, notarizes, and verifies, inside the desktop app |
 | `capture-server` | yes | shared vault key, PostgreSQL metadata, S3 artifacts, pinned Registry | The same for replicated deployments, with provider requests authenticated as organizations, authenticated administration, and an optional private customer API through which capture-api acts for any organization |
-| `capture` | only API responses requested by the user | none | Calls a capture service's versioned administration API |
-| Local dashboard | only safe metadata store fields and deliberately opened notarized disclosures | browser session preference | Uses the same administration API as the CLI |
+| MCP client (agent) | only tool results it requests; previews and disclosed bodies only through `read_trace_content` | none | Calls the desktop local service's MCP tools at `/mcp`, which relay its administration API; clients ask before tools that are not read-only |
+| Local dashboard | only safe metadata store fields and deliberately opened notarized disclosures | browser session preference | Uses the local service's administration API |
 | `capture-notary` | no in Notarized sessions; yes, in memory only, in Witnessed sessions | signing key | Resolves the provider, relays encrypted TLS records or Witnessed plaintext, witnesses sessions, and completes proof work |
 | Model provider | yes | provider-owned | Serves an ordinary HTTPS request without a Notary integration |
 | Artifact backend | encrypted capture or disclosed package bytes | filesystem or private S3-compatible objects | Retains immutable artifacts after size and SHA-256 validation |
@@ -34,10 +34,12 @@ but in a Notarized session it must not receive credential values or
 application plaintext. A Witnessed session is the deliberate exception
 described below.
 
-`capture` is intentionally a thin REST client. It does not open the metadata store,
-vault, captures, or protocol implementation directly. The local dashboard uses
-the same generated OpenAPI contract and never receives a hosted credential or
-a decrypted source capture.
+The desktop local service's MCP endpoint is intentionally a thin adapter: each
+tool calls one administration route in-process, so an agent receives exactly
+what that route returns and never opens the metadata store, vault, captures, or
+protocol implementation directly. The local dashboard uses the same generated
+OpenAPI contract and never receives a hosted credential or a decrypted source
+capture.
 
 ## Fixed provider boundary
 

@@ -18,7 +18,6 @@ async-trait = "0.1"
 capture-core = { path = "../../../crates/capture-core", features = ["cli", "openapi"] }
 capture-engine = { path = "../../../crates/capture-engine" }
 capture-updater = { path = "../../../crates/capture-updater" }
-capture = { path = "../../../crates/capture" }
 hex = "0.4"
 http = "1.3"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }
@@ -55,7 +54,7 @@ tempfile = "3"
 toml = "0.8"
 
 # The desktop app is its own workspace: on Linux, Tauri needs WebKitGTK, and
-# building the runtime workspace's CLI and services should not.
+# building the runtime workspace's services should not.
 # Patches and profiles apply only at a workspace root, so these mirror
 # the runtime workspace's Cargo.toml.
 [workspace]

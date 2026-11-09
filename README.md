@@ -8,8 +8,8 @@ Capture model-provider HTTP exchanges locally, seal them with Exalto's notary or
 a compatible self-hosted notary, and verify portable Traces.
 
 The public source includes the desktop app and its local capture service, the
-capture server, CLI, generic remote notary, dashboard, updater, and protocol
-and verification code. Exalto’s
+capture server, generic remote notary, dashboard, updater, and protocol and
+verification code. Exalto’s
 hosted accounts, billing, uploads, and sharing implementation are proprietary
 and maintained separately. The daemon and dashboard keep optional clients for
 those hosted services, and hosted notary admission integrates through the notary
@@ -17,7 +17,7 @@ server's admission-policy seam. Self-hosting does not require an Exalto account.
 
 ## Get started
 
-- [Build the desktop app and CLI](#build-from-source); signed builds are not published yet
+- [Build the desktop app](#build-from-source); signed builds are not published yet
 - [Capture your first exchange](https://capture.exalto.ai/docs/getting-started)
 - [Run your own notary](docs/self-hosting.md)
 - [Read the architecture and trust model](docs/architecture.md)
@@ -40,19 +40,19 @@ disclosed evidence. Never treat the two as interchangeable. See the
 
 ## Build from source
 
-Local capture runs inside the desktop app (below). The CLI and the capture
-server require Rust 1.95.0 and a C toolchain:
+Local capture runs inside the desktop app (below). The capture server requires
+Rust 1.95.0 and a C toolchain:
 
 ```bash
 git clone https://github.com/exalto-ai/capture-oss.git
 cd capture-oss
-cargo install --locked --path crates/capture --bin capture
 cargo install --locked --path crates/capture-server --bin capture-server
 ```
 
 With the desktop app running, route a supported provider client through
-`127.0.0.1:8787` and inspect private captures in the app or with the `capture`
-command. `capture-server` runs only as a replicated server on PostgreSQL and S3; see
+`127.0.0.1:8787` and inspect private captures in the app. Agents connect to the
+app's MCP server at `http://127.0.0.1:8788/mcp`. `capture-server` runs only as a
+replicated server on PostgreSQL and S3; see
 [cluster operations](docs/cluster-operations.md).
 
 Dashboard development additionally requires Node.js 24 and npm:
@@ -63,8 +63,8 @@ npm --prefix apps/admin-dashboard run build
 ```
 
 The desktop app builds on macOS and Linux and runs the local service
-in-process. It is its own Cargo workspace, so building the CLI and daemon never
-requires WebKitGTK. Install the
+in-process. It is its own Cargo workspace, so building the daemon never requires
+WebKitGTK. Install the
 [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/), then build a
 macOS `.app` bundle with:
 

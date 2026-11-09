@@ -376,11 +376,6 @@ export function StandaloneSettingsView({ status, api }: { status: Status; api: L
               ? 'Public traffic uses the configured TLS ingress; provider requests must never be replayed.'
               : 'Both listeners are restricted to loopback.'}
           </Text>
-          {!isCluster && status.updates.update_available && (
-            <Text>
-              Run <code>capture update</code>, then restart the service after active work finishes.
-            </Text>
-          )}
         </Paper>
       </SettingsGroup>
       <SettingsGroup id="settings-developer" title="Developer">

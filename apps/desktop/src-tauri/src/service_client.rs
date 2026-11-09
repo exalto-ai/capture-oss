@@ -1,12 +1,12 @@
 use std::process::Command;
 
-use capture::client::{
-    CaptureMode, CapturedClient, NotaryReadiness, NotaryTrust, NotaryTrustRecord, Status,
-};
 use serde::Serialize;
 use url::{Host, Url};
 
-const ADMIN_ADDRESS: &str = "127.0.0.1:8788";
+use crate::local_api::{
+    CaptureMode, LocalApi, NotaryReadiness, NotaryTrust, NotaryTrustRecord, Status,
+};
+
 const OFFICIAL_EXALTO_REGISTRY_SOURCES: [&str; 1] = ["https://api.capture.exalto.ai/api/registry"];
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -66,34 +66,21 @@ fn resolve_sealing_service(trust: &NotaryTrust) -> Option<SealingServiceIdentity
     }
 }
 
-fn client() -> Result<CapturedClient, String> {
-    CapturedClient::connect_loopback(
-        ADMIN_ADDRESS
-            .parse()
-            .expect("the bundled admin address is valid"),
-    )
-    .map_err(|error| error.to_string())
-}
-
 pub(super) async fn read_admin_status() -> Result<Status, String> {
-    client()?.status().await.map_err(|error| error.to_string())
+    LocalApi::connect()?.status().await
 }
 
 pub(super) async fn read_sealing_service() -> Result<Option<SealingServiceIdentity>, String> {
-    client()?
+    LocalApi::connect()?
         .notary_trust()
         .await
         .map(|trust| resolve_sealing_service(&trust))
-        .map_err(|error| error.to_string())
 }
 
 pub(super) async fn read_sealing_service_readiness(
     refresh: bool,
 ) -> Result<NotaryReadiness, String> {
-    client()?
-        .notary_readiness(refresh)
-        .await
-        .map_err(|error| error.to_string())
+    LocalApi::connect()?.notary_readiness(refresh).await
 }
 
 pub(super) fn validate_account_link(value: &str) -> Result<Url, String> {
@@ -169,10 +156,7 @@ pub(super) fn open_external_url(url: &str, label: &str) -> Result<(), String> {
 }
 
 pub(super) async fn write_capture_mode(mode: CaptureMode) -> Result<CaptureMode, String> {
-    client()?
-        .set_capture_mode(mode)
-        .await
-        .map_err(|error| error.to_string())
+    LocalApi::connect()?.set_capture_mode(mode).await
 }
 
 #[tauri::command]
@@ -186,7 +170,7 @@ pub(super) async fn set_capture_mode(
 }
 
 pub(super) async fn daemon_is_healthy() -> bool {
-    let Ok(client) = client() else {
+    let Ok(client) = LocalApi::connect() else {
         return false;
     };
     client.verify_version().await.is_ok()
@@ -194,7 +178,7 @@ pub(super) async fn daemon_is_healthy() -> bool {
 
 #[cfg(test)]
 mod tests {
-    use capture::client::{NotaryTrust, NotaryTrustRecord};
+    use crate::local_api::{NotaryTrust, NotaryTrustRecord};
 
     use super::{SealingServiceIdentity, SealingServiceKind, resolve_sealing_service};
 

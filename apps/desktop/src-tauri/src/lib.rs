@@ -1,6 +1,6 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use capture::client::{CaptureMode, TraceCounts};
+use local_api::{CaptureMode, TraceCounts};
 use serde::Serialize;
 use tauri::{Emitter, Manager};
 
@@ -10,6 +10,7 @@ mod codex_chat;
 mod connections;
 mod credentials;
 mod daemon;
+mod local_api;
 mod models;
 pub mod service;
 mod service_client;
@@ -122,7 +123,7 @@ impl SealingServiceReadiness {
         }
     }
 
-    fn from_probe(probe: capture::client::NotaryReadiness) -> Self {
+    fn from_probe(probe: local_api::NotaryReadiness) -> Self {
         let phase = match probe.phase.as_str() {
             "ready" if probe.configured && probe.trusted && probe.reachable => {
                 SealingServiceReadinessPhase::Ready
@@ -502,7 +503,7 @@ mod tests {
     #[test]
     fn desktop_sealing_readiness_rejects_inconsistent_ready_claims() {
         let probe = |phase: &str, configured: bool, trusted: bool, reachable: bool| {
-            capture::client::NotaryReadiness {
+            local_api::NotaryReadiness {
                 phase: phase.into(),
                 source: "registry".into(),
                 configured,
