@@ -6,16 +6,15 @@ description: Inspect and operate Exalto Capture with its capture CLI. Find, seal
 # Exalto Capture
 
 The installed `capture` command is a thin client for the local service that the
-Exalto Capture app runs. It resolves the service's loopback address
-(`127.0.0.1:8788` unless the app's configuration sets `admin.listen`), checks
-that it is the Exalto Capture app speaking API `v1`, and never opens captures or
-the vault itself. Every command except `version`, `update`, and `skill install`
+Exalto Capture app runs. It calls the service at `127.0.0.1:8788`, checks that
+it is the Exalto Capture app speaking API `v1`, and never opens captures or the
+vault itself. Every command except `version`, `update`, and `skill install`
 needs the app running.
 
 ## Start safely
 
 1. Run `capture --json status` before acting on the local service. Exit code 3
-   (`daemon_unavailable`) means the app is not running: ask the user to open
+   (`service_unavailable`) means the app is not running: ask the user to open
    it. A `capture_mode` of `off` means nothing is being recorded.
 2. Use `capture --json traces list --metadata-only` to obtain Trace identifiers
    and timestamps without placing stored prompt or output previews in the agent

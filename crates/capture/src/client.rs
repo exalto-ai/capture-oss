@@ -1,11 +1,14 @@
-use std::{fs, net::SocketAddr, path::Path, time::Duration};
+use std::{
+    fs,
+    net::{Ipv4Addr, SocketAddr, SocketAddrV4},
+    path::Path,
+    time::Duration,
+};
 
 use reqwest::{Method, StatusCode};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use url::Url;
-
-use capture_updater as update;
 
 use super::{
     API_VERSION, CliError, EXIT_AUTHENTICATION, EXIT_CONFLICT, EXIT_ERROR, EXIT_INVALID_INPUT,
@@ -20,47 +23,12 @@ pub(super) fn valid_account_request_id(value: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
 }
 
-#[derive(Clone)]
-pub(super) struct AdminCredentials {
-    pub(super) username: String,
-    pub(super) password: String,
-}
-
-#[derive(Debug, Default, Deserialize)]
-pub(super) struct DaemonClientConfig {
-    #[serde(default)]
-    pub(super) admin: DaemonAdminConfig,
-}
-
-#[derive(Debug, Deserialize)]
-pub(super) struct DaemonAdminConfig {
-    #[serde(default = "default_admin_listen")]
-    pub(super) listen: SocketAddr,
-    #[serde(default)]
-    pub(super) auth: Option<DaemonAdminAuth>,
-}
-
-impl Default for DaemonAdminConfig {
-    fn default() -> Self {
-        Self {
-            listen: default_admin_listen(),
-            auth: None,
-        }
-    }
-}
-
-#[derive(Debug, Deserialize)]
-pub(super) struct DaemonAdminAuth {
-    pub(super) username: String,
-}
-
 /// Reusable typed client for the versioned administration API of the desktop
 /// app's local capture service.
 #[derive(Clone)]
 pub struct CapturedClient {
     origin: Url,
     client: reqwest::Client,
-    pub(super) credentials: Option<AdminCredentials>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -207,76 +175,9 @@ pub struct Status {
     pub updates: UpdateStatus,
 }
 
-pub(super) fn load_config_for_cli(path: Option<&Path>) -> Result<DaemonClientConfig, CliError> {
-    let explicit = path.is_some();
-    let path = match path {
-        Some(path) => path.to_owned(),
-        None => update::default_config_path().map_err(|error| {
-            CliError::invalid(format!(
-                "could not locate the daemon configuration: {error}"
-            ))
-        })?,
-    };
-    if !path.exists() && !explicit {
-        return Ok(DaemonClientConfig::default());
-    }
-    let contents = fs::read_to_string(&path).map_err(|error| {
-        CliError::invalid(format!(
-            "could not read daemon configuration {}: {error}",
-            path.display()
-        ))
-    })?;
-    toml::from_str(&contents).map_err(|error| {
-        CliError::invalid(format!(
-            "could not parse daemon configuration {}: {error}",
-            path.display()
-        ))
-    })
-}
-
-pub(super) fn default_admin_listen() -> SocketAddr {
-    "127.0.0.1:8788"
-        .parse()
-        .expect("valid default administration listener")
-}
-
-pub(super) fn load_admin_credentials(
-    config: &DaemonClientConfig,
-    password_file: Option<&Path>,
-) -> Result<Option<AdminCredentials>, CliError> {
-    let Some(auth) = &config.admin.auth else {
-        if password_file.is_some() {
-            return Err(CliError::invalid(
-                "--admin-password-file requires admin.auth in the daemon configuration",
-            ));
-        }
-        return Ok(None);
-    };
-    let password = match password_file {
-        Some(path) => read_password_file(path)?,
-        None => rpassword::prompt_password(format!("Admin password for {}: ", auth.username))
-            .map_err(|_| {
-                CliError::new(
-                    EXIT_AUTHENTICATION,
-                    "could not read the admin password from the terminal",
-                )
-            })?,
-    };
-    if password.is_empty() {
-        return Err(CliError::new(
-            EXIT_AUTHENTICATION,
-            "the admin password must not be empty",
-        ));
-    }
-    Ok(Some(AdminCredentials {
-        username: auth.username.clone(),
-        password,
-    }))
-}
-
-pub(super) fn read_password_file(path: &Path) -> Result<String, CliError> {
-    read_private_secret_file(path, "admin password")
-}
+/// The loopback address of the Exalto Capture app's local service.
+pub const LOCAL_SERVICE_ADDRESS: SocketAddr =
+    SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 8788));
 
 pub(super) fn read_private_secret_file(path: &Path, label: &str) -> Result<String, CliError> {
     #[cfg(unix)]
@@ -323,22 +224,15 @@ pub(super) fn read_private_secret_file(path: &Path, label: &str) -> Result<Strin
 }
 
 impl CapturedClient {
-    /// Connect to an unauthenticated loopback administration listener.
+    /// Connect to the local service's loopback administration API.
     pub fn connect_loopback(address: SocketAddr) -> Result<Self, CliError> {
-        Self::new(address, None)
-    }
-
-    pub(super) fn new(
-        address: std::net::SocketAddr,
-        credentials: Option<AdminCredentials>,
-    ) -> Result<Self, CliError> {
         if !address.ip().is_loopback() {
             return Err(CliError::invalid(
-                "the admin listener must use a loopback address",
+                "the local service address must be a loopback address",
             ));
         }
         let origin = Url::parse(&format!("http://{address}/")).map_err(|_| {
-            CliError::invalid("the configured admin listener could not be converted to a URL")
+            CliError::invalid("the local service address could not be converted to a URL")
         })?;
         let client = reqwest::Client::builder()
             .user_agent(concat!("capture/", env!("CARGO_PKG_VERSION")))
@@ -346,11 +240,7 @@ impl CapturedClient {
             .timeout(Duration::from_secs(30))
             .build()
             .map_err(|_| CliError::new(EXIT_ERROR, "could not initialize the HTTP client"))?;
-        Ok(Self {
-            origin,
-            client,
-            credentials,
-        })
+        Ok(Self { origin, client })
     }
 
     fn url(&self, path: &str, query: &[(String, String)]) -> Result<Url, CliError> {
@@ -366,9 +256,7 @@ impl CapturedClient {
     }
 
     pub async fn verify_version(&self) -> Result<(), CliError> {
-        let health = self
-            .request_with_auth(Method::GET, "/healthz", &[], false, None)
-            .await?;
+        let health = self.send(Method::GET, "/healthz", &[], None).await?;
         let service = health
             .get("service")
             .and_then(Value::as_str)
@@ -494,8 +382,7 @@ impl CapturedClient {
         path: &str,
         query: &[(String, String)],
     ) -> Result<Value, CliError> {
-        self.request_with_auth(method, path, query, true, None)
-            .await
+        self.send(method, path, query, None).await
     }
 
     pub(super) async fn request_json(
@@ -505,8 +392,7 @@ impl CapturedClient {
         query: &[(String, String)],
         body: &Value,
     ) -> Result<Value, CliError> {
-        self.request_with_auth(method, path, query, true, Some(body))
-            .await
+        self.send(method, path, query, Some(body)).await
     }
 
     async fn request_model<T: serde::de::DeserializeOwned>(
@@ -516,9 +402,7 @@ impl CapturedClient {
         query: &[(String, String)],
         body: Option<&Value>,
     ) -> Result<T, CliError> {
-        let value = self
-            .request_with_auth(method, path, query, true, body)
-            .await?;
+        let value = self.send(method, path, query, body).await?;
         serde_json::from_value(value).map_err(|_| {
             CliError::new(
                 EXIT_RETRYABLE,
@@ -529,11 +413,7 @@ impl CapturedClient {
 
     pub(super) async fn request_bytes(&self, path: &str) -> Result<Vec<u8>, CliError> {
         let url = self.url(path, &[])?;
-        let mut request = self.client.get(url);
-        if let Some(credentials) = &self.credentials {
-            request = request.basic_auth(&credentials.username, Some(&credentials.password));
-        }
-        let response = request.send().await.map_err(|_| {
+        let response = self.client.get(url).send().await.map_err(|_| {
             CliError::unavailable(format!(
                 "the local capture service is unavailable at {}; open Exalto Capture and try again",
                 self.origin
@@ -572,9 +452,6 @@ impl CapturedClient {
                 "application/vnd.exalto.notary.trace-package+zip",
             )
             .body(bytes);
-        if let Some(credentials) = &self.credentials {
-            request = request.basic_auth(&credentials.username, Some(&credentials.password));
-        }
         if let Some(key) = trusted_notary_key {
             request = request.header("x-notary-trusted-notary-key", key);
         }
@@ -588,7 +465,7 @@ impl CapturedClient {
         let bytes = response.bytes().await.map_err(|_| {
             CliError::new(
                 EXIT_RETRYABLE,
-                "the daemon verification response ended early",
+                "the local service's verification response ended early",
             )
         })?;
         if !status.is_success() {
@@ -597,24 +474,20 @@ impl CapturedClient {
         serde_json::from_slice(&bytes).map_err(|_| {
             CliError::new(
                 EXIT_RETRYABLE,
-                "the daemon returned an invalid verification response",
+                "the local service returned an invalid verification response",
             )
         })
     }
 
-    async fn request_with_auth(
+    async fn send(
         &self,
         method: Method,
         path: &str,
         query: &[(String, String)],
-        include_credentials: bool,
         body: Option<&Value>,
     ) -> Result<Value, CliError> {
         let url = self.url(path, query)?;
         let mut request = self.client.request(method, url);
-        if include_credentials && let Some(credentials) = &self.credentials {
-            request = request.basic_auth(&credentials.username, Some(&credentials.password));
-        }
         if let Some(body) = body {
             request = request.json(body);
         }
@@ -628,7 +501,7 @@ impl CapturedClient {
         let bytes = response.bytes().await.map_err(|_| {
             CliError::new(
                 EXIT_RETRYABLE,
-                "the daemon response ended before it could be read; try again",
+                "the local service's response ended before it could be read; try again",
             )
         })?;
         if !status.is_success() {
@@ -640,7 +513,7 @@ impl CapturedClient {
         serde_json::from_slice(&bytes).map_err(|_| {
             CliError::new(
                 EXIT_RETRYABLE,
-                "the daemon returned an invalid JSON response; check that the CLI and daemon versions match",
+                "the local service returned an invalid JSON response; check that capture and Exalto Capture are up to date",
             )
         })
     }
@@ -661,13 +534,14 @@ pub(super) fn api_error(status: StatusCode, bytes: &[u8]) -> CliError {
             EXIT_INVALID_INPUT,
             "invalid_input",
             message
-                .unwrap_or("the daemon rejected the command input")
+                .unwrap_or("the local service rejected the command input")
                 .to_owned(),
         ),
         StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => (
             EXIT_AUTHENTICATION,
             "authentication_failed",
-            "local admin authentication failed; check the configured username and password"
+            message
+                .unwrap_or("the local service refused the request")
                 .to_owned(),
         ),
         StatusCode::NOT_FOUND => (
@@ -681,31 +555,33 @@ pub(super) fn api_error(status: StatusCode, bytes: &[u8]) -> CliError {
             EXIT_CONFLICT,
             "conflict",
             message
-                .unwrap_or("the requested operation conflicts with current daemon state")
+                .unwrap_or(
+                    "the requested operation conflicts with the local service's current state",
+                )
                 .to_owned(),
         ),
         StatusCode::TOO_MANY_REQUESTS | StatusCode::SERVICE_UNAVAILABLE => (
             EXIT_RETRYABLE,
             "retryable",
             message
-                .unwrap_or("the daemon is temporarily unable to accept this operation")
+                .unwrap_or("the local service is temporarily unable to accept this operation")
                 .to_owned(),
         ),
         status if status.is_server_error() => (
             EXIT_RETRYABLE,
-            "daemon_error",
+            "service_error",
             match code {
                 Some(code) => {
-                    format!("the daemon could not complete the request ({code}); try again")
+                    format!("the local service could not complete the request ({code}); try again")
                 }
-                None => "the daemon could not complete the request; try again".to_owned(),
+                None => "the local service could not complete the request; try again".to_owned(),
             },
         ),
         _ => (
             EXIT_ERROR,
             "command_rejected",
             message
-                .unwrap_or("the daemon rejected the command")
+                .unwrap_or("the local service rejected the command")
                 .to_owned(),
         ),
     };

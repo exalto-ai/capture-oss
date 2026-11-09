@@ -25,7 +25,7 @@ mod skill;
 mod update_cli;
 
 use cli::*;
-use client::{CapturedClient, load_admin_credentials, load_config_for_cli};
+use client::{CapturedClient, LOCAL_SERVICE_ADDRESS};
 use commands::execute;
 use output::human_output;
 use skill::{install_agent_skill, skill_install_human_output};
@@ -102,7 +102,7 @@ impl CliError {
 fn default_error_code(exit_code: i32) -> &'static str {
     match exit_code {
         EXIT_INVALID_INPUT => "invalid_input",
-        EXIT_UNAVAILABLE => "daemon_unavailable",
+        EXIT_UNAVAILABLE => "service_unavailable",
         EXIT_AUTHENTICATION => "authentication_failed",
         EXIT_NOT_FOUND => "not_found",
         EXIT_CONFLICT => "conflict",
@@ -228,10 +228,8 @@ async fn run_parsed(
         let human = skill_install_human_output(&value)?;
         return write_direct_output(cli.json, &value, human, stdout);
     }
-    let config = load_config_for_cli(cli.config.as_deref())?;
-    let mut client = CapturedClient::new(config.admin.listen, None)?;
+    let client = CapturedClient::connect_loopback(LOCAL_SERVICE_ADDRESS)?;
     client.verify_version().await?;
-    client.credentials = load_admin_credentials(&config, cli.admin_password_file.as_deref())?;
     let value = execute(&client, &cli.command, stderr, !cli.json).await?;
     let output = if cli.json {
         serde_json::to_string_pretty(&value)
@@ -268,11 +266,10 @@ mod tests {
         http::StatusCode as AxumStatus,
         routing::{get, post},
     };
-    use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
     use output::trace_status_label;
 
     #[test]
-    fn every_initial_command_parses_and_the_cli_never_has_an_implicit_daemon_mode() {
+    fn every_initial_command_parses() {
         assert!(Cli::try_parse_from(["capture"]).is_err());
         for arguments in [
             vec!["capture", "version"],
@@ -345,16 +342,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn version_bypasses_configuration_and_the_daemon() {
-        let missing = tempfile::tempdir().unwrap().path().join("missing.toml");
-        let cli = Cli::try_parse_from([
-            "capture",
-            "--json",
-            "--config",
-            missing.to_str().unwrap(),
-            "version",
-        ])
-        .unwrap();
+    async fn version_bypasses_the_local_service() {
+        let cli = Cli::try_parse_from(["capture", "--json", "version"]).unwrap();
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
@@ -387,15 +376,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn skill_install_bypasses_configuration_and_the_daemon() {
+    async fn skill_install_bypasses_the_local_service() {
         let directory = tempfile::tempdir().unwrap();
-        let missing = directory.path().join("missing.toml");
         let skills = directory.path().join("skills");
         let cli = Cli::try_parse_from([
             "capture",
             "--json",
-            "--config",
-            missing.to_str().unwrap(),
             "skill",
             "install",
             "--skills-dir",
@@ -611,7 +597,7 @@ mod tests {
             ),
         );
         let (address, server) = serve(router).await;
-        let client = CapturedClient::new(address, None).unwrap();
+        let client = CapturedClient::connect_loopback(address).unwrap();
 
         let shown = execute(
             &client,
@@ -710,7 +696,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn trace_metadata_only_is_applied_to_daemon_output() {
+    async fn trace_metadata_only_is_applied_to_service_output() {
         let router = Router::new().route(
             "/v1/traces",
             get(|| async {
@@ -727,7 +713,7 @@ mod tests {
             }),
         );
         let (address, server) = serve(router).await;
-        let client = CapturedClient::new(address, None).unwrap();
+        let client = CapturedClient::connect_loopback(address).unwrap();
         let command = CliCommand::Traces {
             command: TracesCommand::List(TraceListArgs {
                 metadata_only: true,
@@ -756,7 +742,7 @@ mod tests {
             }),
         );
         let (address, server) = serve(router).await;
-        let client = CapturedClient::new(address, None).unwrap();
+        let client = CapturedClient::connect_loopback(address).unwrap();
         let directory = tempfile::tempdir().unwrap();
         let output = directory.path().join("export.llmtrace");
 
@@ -994,8 +980,8 @@ mod tests {
     }
 
     #[test]
-    fn rejects_non_loopback_admin_addresses() {
-        let error = CapturedClient::new("0.0.0.0:8788".parse().unwrap(), None)
+    fn rejects_non_loopback_service_addresses() {
+        let error = CapturedClient::connect_loopback("0.0.0.0:8788".parse().unwrap())
             .err()
             .unwrap();
         assert_eq!(error.exit_code(), EXIT_INVALID_INPUT);
@@ -1003,17 +989,20 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn password_files_must_be_private_and_trim_one_line_ending() {
+    fn secret_files_must_be_private_and_trim_one_line_ending() {
         use std::os::unix::fs::PermissionsExt as _;
 
         let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("admin-password");
+        let path = directory.path().join("share-password");
         fs::write(&path, b"local secret\n").unwrap();
         fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
-        let error = read_password_file(&path).unwrap_err();
+        let error = read_private_secret_file(&path, "share password").unwrap_err();
         assert_eq!(error.exit_code(), EXIT_AUTHENTICATION);
         fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
-        assert_eq!(read_password_file(&path).unwrap(), "local secret");
+        assert_eq!(
+            read_private_secret_file(&path, "share password").unwrap(),
+            "local secret"
+        );
     }
 
     #[tokio::test]
@@ -1035,7 +1024,7 @@ mod tests {
                 }),
             );
         let (address, server) = serve(router).await;
-        let client = CapturedClient::new(address, None).unwrap();
+        let client = CapturedClient::connect_loopback(address).unwrap();
         client.verify_version().await.unwrap();
         let error = client
             .request(Method::GET, "/v1/status", &[])
@@ -1043,49 +1032,6 @@ mod tests {
             .unwrap_err();
         assert_eq!(error.exit_code(), EXIT_CONFLICT);
         assert_eq!(error.to_string(), "operation is already active");
-        server.abort();
-    }
-
-    #[tokio::test]
-    async fn basic_secret_is_sent_only_to_protected_api_calls() {
-        let expected = format!("Basic {}", BASE64_STANDARD.encode("local-admin:secret"));
-        let router = Router::new()
-            .route(
-                "/healthz",
-                get(|headers: axum::http::HeaderMap| async move {
-                    assert!(!headers.contains_key(axum::http::header::AUTHORIZATION));
-                    Json(json!({ "service": "capture-app", "api_version": "v1" }))
-                }),
-            )
-            .route(
-                "/v1/status",
-                get(move |headers: axum::http::HeaderMap| {
-                    let expected = expected.clone();
-                    async move {
-                        assert_eq!(
-                            headers
-                                .get(axum::http::header::AUTHORIZATION)
-                                .and_then(|value| value.to_str().ok()),
-                            Some(expected.as_str())
-                        );
-                        Json(json!({ "version": "test" }))
-                    }
-                }),
-            );
-        let (address, server) = serve(router).await;
-        let client = CapturedClient::new(
-            address,
-            Some(AdminCredentials {
-                username: "local-admin".to_owned(),
-                password: "secret".to_owned(),
-            }),
-        )
-        .unwrap();
-        client.verify_version().await.unwrap();
-        client
-            .request(Method::GET, "/v1/status", &[])
-            .await
-            .unwrap();
         server.abort();
     }
 
@@ -1109,7 +1055,7 @@ mod tests {
             }),
         );
         let (address, server) = serve(router).await;
-        let client = CapturedClient::new(address, None).unwrap();
+        let client = CapturedClient::connect_loopback(address).unwrap();
         let response = client.start_account_connection().await.unwrap();
         assert_eq!(response.request_id, "request_123");
         assert_eq!(response.poll_interval_seconds, 5);
@@ -1149,7 +1095,7 @@ mod tests {
             ),
         );
         let (address, server) = serve(router).await;
-        let client = CapturedClient::new(address, None).unwrap();
+        let client = CapturedClient::connect_loopback(address).unwrap();
 
         let response = list_request(
             &client,
@@ -1174,7 +1120,7 @@ mod tests {
             get(|| async { Json(json!({ "service": "capture-app", "api_version": "v2" })) }),
         );
         let (address, server) = serve(router).await;
-        let client = CapturedClient::new(address, None).unwrap();
+        let client = CapturedClient::connect_loopback(address).unwrap();
         let error = client.verify_version().await.unwrap_err();
         assert_eq!(error.exit_code(), EXIT_VERSION_MISMATCH);
         assert!(error.to_string().contains("requires v1"));
@@ -1182,11 +1128,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn unavailable_daemon_has_an_actionable_exit_class() {
+    async fn unavailable_service_has_an_actionable_exit_class() {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         drop(listener);
-        let client = CapturedClient::new(address, None).unwrap();
+        let client = CapturedClient::connect_loopback(address).unwrap();
         let error = client.verify_version().await.unwrap_err();
         assert_eq!(error.exit_code(), EXIT_UNAVAILABLE);
         assert!(

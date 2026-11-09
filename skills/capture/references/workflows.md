@@ -127,8 +127,7 @@ account; it does not expose the vault-held account credential to the agent.
 The CLI intentionally covers the common safe workflows. For another supported
 operation:
 
-1. Resolve the local service's address from the Exalto Capture configuration
-   (`admin.listen`, default `127.0.0.1:8788`). Keep it on loopback.
+1. Use the local service at `http://127.0.0.1:8788`. Keep it on loopback.
 2. Check `GET /healthz` and require service `capture-app` with API version
    `v1`.
 3. Fetch `GET /openapi.json`.

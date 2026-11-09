@@ -370,7 +370,7 @@ pub(super) fn list_lines(
         .ok_or_else(|| {
             CliError::new(
                 EXIT_RETRYABLE,
-                "the daemon returned an incomplete response; check that the CLI and daemon versions match",
+                "the local service returned an incomplete response; check that capture and Exalto Capture are up to date",
             )
         })?;
     if items.is_empty() {

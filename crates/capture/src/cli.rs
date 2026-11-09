@@ -14,10 +14,6 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 pub(super) struct Cli {
     #[arg(long, global = true)]
     pub(super) json: bool,
-    #[arg(long, global = true)]
-    pub(super) config: Option<PathBuf>,
-    #[arg(long, global = true, value_name = "PATH")]
-    pub(super) admin_password_file: Option<PathBuf>,
     #[command(subcommand)]
     pub(super) command: CliCommand,
 }

@@ -27,7 +27,7 @@ pub(super) async fn execute(
         | CliCommand::Update(_)
         | CliCommand::ApplyUpdate(_)
         | CliCommand::Skill { .. } => {
-            unreachable!("direct commands are handled before daemon configuration")
+            unreachable!("direct commands are handled before connecting to the local service")
         }
         CliCommand::Status => client.request(Method::GET, "/v1/status", &[]).await,
         CliCommand::Mode(args) => {
@@ -304,7 +304,7 @@ pub(super) fn validate_identifier(value: &str, prefix: &str) -> Result<(), CliEr
 
 pub(super) fn serialize_client_model<T: Serialize>(value: T) -> Result<Value, CliError> {
     serde_json::to_value(value)
-        .map_err(|_| CliError::new(EXIT_ERROR, "could not serialize the local daemon response"))
+        .map_err(|_| CliError::new(EXIT_ERROR, "could not serialize the local service response"))
 }
 
 pub(super) async fn connect_account(
@@ -345,7 +345,7 @@ pub(super) fn required_string<'value>(
         .ok_or_else(|| {
             CliError::new(
                 EXIT_RETRYABLE,
-                "the daemon returned an incomplete response; check that the CLI and daemon versions match",
+                "the local service returned an incomplete response; check that capture and Exalto Capture are up to date",
             )
         })
 }
@@ -439,7 +439,7 @@ pub(super) async fn list_request(
 pub(super) fn incomplete_page_error() -> CliError {
     CliError::new(
         EXIT_RETRYABLE,
-        "the daemon returned an incomplete page; check that the CLI and daemon versions match",
+        "the local service returned an incomplete page; check that capture and Exalto Capture are up to date",
     )
 }
 
