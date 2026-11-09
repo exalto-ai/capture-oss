@@ -41,7 +41,7 @@ export type DesktopState = {
 
 export type SealingServiceIdentity = {
   name: string;
-  kind: 'exalto_seal' | 'registry' | 'configured';
+  kind: 'exalto' | 'registry' | 'configured';
 };
 
 export type SealingServiceReadinessPhase =

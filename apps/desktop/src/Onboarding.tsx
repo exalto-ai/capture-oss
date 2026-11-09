@@ -271,7 +271,7 @@ function WelcomeStep({ state, onContinue }: { state: DesktopState; onContinue: (
         <h1>Set up Exalto Capture</h1>
         <p>
           {fresh
-            ? 'Capture a model exchange on this Mac, review what a sealed trace can reveal, then send it to Exalto Seal or another compatible notary for sealing.'
+            ? 'Capture a model exchange on this Mac, review what a sealed trace can reveal, then send it to Exalto’s notary or another compatible notary for sealing.'
             : 'This Mac already has capture settings. Setup will preserve them while it checks the path from your AI tool to a portable trace.'}
         </p>
         <figure className="trace-receipt" aria-label="A sample local trace receipt">

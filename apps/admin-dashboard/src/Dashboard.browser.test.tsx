@@ -746,7 +746,7 @@ describe('Notary admin dashboard', () => {
     await page.getByRole('tab', { name: 'Sealing' }).click();
     const failure = page.getByRole('alert');
     await expect
-      .element(failure.getByText('Exalto Seal closed the connection', { exact: true }))
+      .element(failure.getByText('The notary closed the connection', { exact: true }))
       .toBeVisible();
     await expect
       .element(failure.getByText('notary_connection_closed', { exact: true }))
@@ -1293,7 +1293,7 @@ describe('Notary admin dashboard', () => {
     await expect
       .element(page.getByText('Kept on this Mac outside the vault', { exact: true }))
       .toBeVisible();
-    await expect.element(page.getByText('Exalto Seal', { exact: true })).toBeVisible();
+    await expect.element(page.getByText('Exalto’s notary', { exact: true })).toBeVisible();
     await expect.element(page.getByText('Version 0.1.0', { exact: true })).toBeVisible();
     for (const removed of [
       'Active verification key',
@@ -1363,7 +1363,7 @@ describe('Notary admin dashboard', () => {
       .toBe('light');
   });
 
-  test('does not brand third-party or explicit sealing trust as Exalto Seal', async () => {
+  test('does not brand third-party or explicit sealing trust as Exalto’s notary', async () => {
     const thirdParty: LocalApi = {
       ...createFixtureApi(),
       notaries: async () => ({
@@ -1377,7 +1377,9 @@ describe('Notary admin dashboard', () => {
     };
     renderDesktopSettings(thirdParty, desktopSettings);
     await expect.element(page.getByText('Northstar Seal', { exact: true }).first()).toBeVisible();
-    await expect.element(page.getByText('Exalto Seal', { exact: true })).not.toBeInTheDocument();
+    await expect
+      .element(page.getByText('Exalto’s notary', { exact: true }))
+      .not.toBeInTheDocument();
 
     cleanup();
     const explicit: LocalApi = {
@@ -1400,7 +1402,9 @@ describe('Notary admin dashboard', () => {
     await expect
       .element(page.getByText('Configured sealing service', { exact: true }))
       .toBeVisible();
-    await expect.element(page.getByText('Exalto Seal', { exact: true })).not.toBeInTheDocument();
+    await expect
+      .element(page.getByText('Exalto’s notary', { exact: true }))
+      .not.toBeInTheDocument();
   });
 
   test('renders reconnect and blocked-update states without implying local upload', async () => {

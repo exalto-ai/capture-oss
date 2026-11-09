@@ -101,7 +101,7 @@ async fn relay(
         .await
         .map_err(|_| {
             if let Ok(mut failure) = state.failure.lock() {
-                *failure = Some("The local capture proxy is unavailable. Restart the capture service; if it cannot start, check the Exalto Seal connection in Settings.".into());
+                *failure = Some("The local capture proxy is unavailable. Restart the capture service; if it cannot start, check the sealing service in Settings.".into());
             }
             StatusCode::BAD_GATEWAY
         })?;

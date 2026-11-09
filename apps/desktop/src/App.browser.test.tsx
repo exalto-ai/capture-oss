@@ -426,7 +426,9 @@ describe('Exalto Capture desktop shell', () => {
 
     cleanup();
     await renderApp(states.serviceStarting);
-    await expect.element(page.getByText(/Checking the connection to Exalto Seal/)).toBeVisible();
+    await expect
+      .element(page.getByText(/Checking the connection to Exalto’s notary/))
+      .toBeVisible();
     await expect.element(page.getByText('Sealing service is unavailable')).not.toBeInTheDocument();
     await expect.element(captureOption('Witnessed')).toBeDisabled();
     await expect.element(captureOption('Notarized')).toBeDisabled();
@@ -440,9 +442,9 @@ describe('Exalto Capture desktop shell', () => {
     expect(document.querySelector('.traces-header-notice')).toBeNull();
   });
 
-  test('distinguishes trusted but unreachable Seal from unavailable trust', async () => {
+  test('distinguishes a trusted but unreachable notary from unavailable trust', async () => {
     await renderApp(states.sealUnreachable);
-    await expect.element(page.getByText('Exalto Seal can’t be reached')).toBeVisible();
+    await expect.element(page.getByText('Exalto’s notary can’t be reached')).toBeVisible();
     await expect.element(page.getByText(/transport handshake did not complete/)).toBeVisible();
     await expect.element(captureOption('Witnessed')).toBeDisabled();
     await expect.element(captureOption('Notarized')).toBeDisabled();
@@ -457,7 +459,7 @@ describe('Exalto Capture desktop shell', () => {
     await expect.element(captureOption('Notarized')).toBeDisabled();
   });
 
-  test('reports Seal ready only after trust and transport checks succeed', async () => {
+  test('reports the notary ready only after trust and transport checks succeed', async () => {
     await renderApp(states.captureOff);
     await expect.element(page.getByText(/can’t be reached/)).not.toBeInTheDocument();
     await expect.element(captureOption('Notarized')).toBeEnabled();
@@ -498,13 +500,13 @@ describe('Exalto Capture desktop shell', () => {
     await expect
       .element(page.getByRole('heading', { name: 'What would you like to capture?' }))
       .toBeVisible();
-    expect(document.body.textContent).not.toContain('Exalto Seal');
+    expect(document.body.textContent).not.toContain('Exalto’s notary');
     expect(document.body.textContent).not.toContain('Sealing service');
 
     cleanup();
     await renderApp(states.captureThirdParty);
     await expect.element(captureOption('Notarized')).toBeChecked();
-    expect(document.body.textContent).not.toContain('Exalto Seal');
+    expect(document.body.textContent).not.toContain('Exalto’s notary');
   });
 
   test('keeps the connection setup action visible at the minimum desktop size', async () => {

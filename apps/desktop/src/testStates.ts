@@ -11,7 +11,7 @@ const counts = {
   capture_failed: 0,
 };
 
-const exaltoSeal = { name: 'Exalto Seal', kind: 'exalto_seal' } as const;
+const exalto = { name: 'Exalto’s notary', kind: 'exalto' } as const;
 
 const sealReady: SealingServiceReadiness = {
   phase: 'ready',
@@ -61,7 +61,7 @@ const capturing = (capture_mode: DesktopState['capture_mode']) =>
     capture_mode,
     version: '0.1.0',
     daemon_build_id: 'dev',
-    sealing_service: exaltoSeal,
+    sealing_service: exalto,
     sealing_service_readiness: sealReady,
     counts: { ...counts, captured: 3, notarizing: 1, notarized: 8, needs_attention: 2 },
   });
@@ -72,7 +72,7 @@ export const states = {
     agent_configured: false,
     onboarding_complete: false,
     vault_mode: 'not configured',
-    sealing_service: exaltoSeal,
+    sealing_service: exalto,
     sealing_service_readiness: sealReady,
   }),
   onboardingThirdParty: desktopState({
@@ -98,7 +98,7 @@ export const states = {
   sealUnreachable: desktopState({
     running: true,
     managed_by_desktop: true,
-    sealing_service: exaltoSeal,
+    sealing_service: exalto,
     sealing_service_readiness: {
       phase: 'unreachable',
       configured: true,

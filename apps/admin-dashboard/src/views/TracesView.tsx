@@ -147,16 +147,16 @@ function notarizationPhaseLabel(phase: string) {
 
 const sealingFailureCopy: Record<string, { title: string; detail: string }> = {
   notary_connection_closed: {
-    title: 'Exalto Seal closed the connection',
+    title: 'The notary closed the connection',
     detail:
       'Sealing stopped before a seal was issued. The service may have refused this request, or the connection dropped.',
   },
   notary_timeout: {
-    title: 'Exalto Seal stopped responding',
+    title: 'The notary stopped responding',
     detail: 'Sealing did not finish within its time limit, so this attempt was stopped.',
   },
   notary_capacity: {
-    title: 'Exalto Seal is at capacity',
+    title: 'The notary is at capacity',
     detail: 'The service could not accept another sealing session.',
   },
   service_restarted: {

@@ -153,7 +153,7 @@ function GeneralSection({
 function serviceName(record: Notary, source: string | undefined, registry: string | null) {
   if (source === 'explicit_configuration') return 'Configured sealing service';
   if (source === 'registry' && registry === 'https://api.capture.exalto.ai/api/registry')
-    return 'Exalto Seal';
+    return 'Exalto’s notary';
   return record.name.trim() || 'Registry sealing service';
 }
 

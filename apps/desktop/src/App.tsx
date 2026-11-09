@@ -46,7 +46,7 @@ export const SENSITIVE_INPUT_RESET_EVENT = 'exalto:sensitive-input-reset';
 export const CAPTURE_STATE_CHANGED_EVENT = 'exalto:capture-state-changed';
 
 const CAPTURE_NEEDS_TRANSPORT =
-  'Capture needs a reachable trusted transport. No Exalto Seal account is required. Try the connection again before capturing.';
+  'Capture needs a reachable trusted transport. No Exalto account is required. Try the connection again before capturing.';
 
 /** Tries `attempt` up to 12 times, 250 ms apart, while the local service starts. */
 async function retry<T>(attempt: () => Promise<T>): Promise<T> {

@@ -12,7 +12,7 @@ const OFFICIAL_EXALTO_REGISTRY_SOURCES: [&str; 1] = ["https://api.capture.exalto
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(super) enum SealingServiceKind {
-    ExaltoSeal,
+    Exalto,
     Registry,
     Configured,
 }
@@ -50,8 +50,8 @@ fn resolve_sealing_service(trust: &NotaryTrust) -> Option<SealingServiceIdentity
     match trust.source.as_str() {
         "registry" if official_exalto_registry(trust.registry_source.as_deref()) => {
             Some(SealingServiceIdentity {
-                name: "Exalto Seal".into(),
-                kind: SealingServiceKind::ExaltoSeal,
+                name: "Exalto’s notary".into(),
+                kind: SealingServiceKind::Exalto,
             })
         }
         "registry" => Some(SealingServiceIdentity {
@@ -229,8 +229,8 @@ mod tests {
         assert_eq!(
             resolve_sealing_service(&official),
             Some(SealingServiceIdentity {
-                name: "Exalto Seal".into(),
-                kind: SealingServiceKind::ExaltoSeal,
+                name: "Exalto’s notary".into(),
+                kind: SealingServiceKind::Exalto,
             })
         );
 

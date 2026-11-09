@@ -45,7 +45,7 @@ export function TracesHeader({
       notifications.show({ color: 'red', title: 'Auto-seal', message: errorMessage(error) }),
   });
   const autoSealing = autoSeal.data?.enabled === true;
-  const sealingServiceName = state.sealing_service?.name ?? 'Exalto Seal';
+  const sealingServiceName = state.sealing_service?.name ?? 'Exalto’s notary';
   const sealingPhase = state.sealing_service_readiness.phase;
   const sealingReady = sealingPhase === 'ready';
   const captureCanStart = sealingReady || (!state.running && sealingPhase === 'off');

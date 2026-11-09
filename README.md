@@ -4,8 +4,8 @@
 [![MIT license](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE-MIT)
 
 The open-source foundation of **Exalto Capture** and the **Exalto Capture Protocol (ECP)**.
-Capture model-provider HTTP exchanges locally, seal them with Exalto Seal or a
-compatible self-hosted notary, and verify portable Traces.
+Capture model-provider HTTP exchanges locally, seal them with Exalto's notary or
+a compatible self-hosted notary, and verify portable Traces.
 
 The public source includes the desktop app and its local capture service, the
 capture server, CLI, generic remote notary, dashboard, updater, and protocol
