@@ -7,7 +7,7 @@ bytes go (S3, a database, a file) is up to you.
 | Package | Tree | |
 | --- | --- | --- |
 | Rust | [`rust`](rust) | `exalto-capture`, the only implementation |
-| Python | [`python`](python) | `exalto_capture`: PyO3 bindings plus `httpx` transports |
+| Python | [`python`](python) | `exalto_capture`: PyO3 bindings plus `httpx2` transports |
 | Node.js | [`js`](js) | `@exalto/capture`: napi-rs bindings plus a `fetch` for SDK clients |
 
 No packages are published yet; build them from this tree (below).
@@ -51,12 +51,12 @@ sealed.
 
 ## Use
 
-Python, with any client that accepts an `httpx` client:
+Python, with any client that accepts an `httpx2` client:
 
 ```python
 import os
 
-import httpx
+import httpx2
 from anthropic import Anthropic
 from exalto_capture import Client, Notary
 from exalto_capture.transport import CaptureTransport
@@ -65,7 +65,7 @@ def keep(artifact):  # artifact.trace_id, .kind, .extension, .data
     bucket.put_object(Key=f"traces/{artifact.trace_id}.{artifact.extension}", Body=artifact.data)
 
 client = Client(Notary.exalto(api_key=os.environ["EXALTO_API_KEY"]))
-anthropic = Anthropic(http_client=httpx.Client(
+anthropic = Anthropic(http_client=httpx2.Client(
     transport=CaptureTransport(client, mode="witnessed", on_artifact=keep),
 ))
 ```
@@ -110,7 +110,7 @@ cargo test --manifest-path ../Cargo.toml -p exalto-capture
 
 ```bash
 cd python
-python3 -m venv .venv && .venv/bin/pip install maturin httpx
+python3 -m venv .venv && .venv/bin/pip install maturin httpx2
 VIRTUAL_ENV="$PWD/.venv" .venv/bin/maturin develop
 .venv/bin/python -m unittest discover -s tests
 ```

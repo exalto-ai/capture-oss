@@ -1,9 +1,11 @@
-"""Offline tests: the native module's local behavior and the httpx transports."""
+"""Offline tests: the native module's local behavior and the httpx2 transports."""
 
 import asyncio
+import importlib.util
+import json
 import unittest
 
-import httpx
+import httpx2
 
 import exalto_capture
 from exalto_capture import CaptureError, CaptureKey, CaptureTimeout, Client, Notary
@@ -44,10 +46,10 @@ class NativeTest(unittest.TestCase):
 
 
 class FakeResponse:
-    def __init__(self, status, chunks, artifact="artifact"):
+    def __init__(self, status, chunks, artifact="artifact", content_type=b"text/event-stream"):
         self.status = status
         self.trace_id = "trc-1"
-        self.headers = [(b"content-type", b"text/event-stream")]
+        self.headers = [(b"content-type", content_type)]
         self._chunks = list(chunks)
         self._artifact = artifact
         self.artifacts_taken = 0
@@ -92,7 +94,7 @@ class TransportTest(unittest.TestCase):
         fake = FakeClient(FakeResponse(200, [b"data: 1\n\n", b"data: 2\n\n"]))
         artifacts = []
         transport = CaptureTransport(fake, mode="witnessed", on_artifact=artifacts.append)
-        with httpx.Client(transport=transport) as http:
+        with httpx2.Client(transport=transport) as http:
             response = http.post(
                 "https://api.anthropic.com/v1/messages",
                 headers={"x-api-key": "secret"},
@@ -109,7 +111,7 @@ class TransportTest(unittest.TestCase):
         fake = FakeClient(FakeResponse(429, [b'{"error":"rate"}']))
         artifacts = []
         transport = CaptureTransport(fake, mode="witnessed", on_artifact=artifacts.append)
-        with httpx.Client(transport=transport) as http:
+        with httpx2.Client(transport=transport) as http:
             response = http.post("https://api.openai.com/v1/responses", content=b"{}")
         self.assertEqual(response.status_code, 429)
         self.assertEqual(artifacts, [])
@@ -123,7 +125,7 @@ class TransportTest(unittest.TestCase):
             CaptureTransport(fake, mode="witnessed", on_artifact=print, key=CaptureKey.generate())
         key = CaptureKey.generate()
         transport = CaptureTransport(fake, mode="notarized", on_artifact=lambda _: None, key=key)
-        with httpx.Client(transport=transport) as http:
+        with httpx2.Client(transport=transport) as http:
             http.post("https://api.openai.com/v1/responses", content=b"{}")
         self.assertEqual(fake.sent[0], "capture")
         self.assertIs(fake.sent[5], key)
@@ -134,7 +136,7 @@ class TransportTest(unittest.TestCase):
         fake = FakeClient(FakeResponse(200, [b"{}"], artifact=CaptureError("no receipt")))
         errors = []
         transport = CaptureTransport(fake, mode="witnessed", on_artifact=print, on_error=errors.append)
-        with httpx.Client(transport=transport) as http:
+        with httpx2.Client(transport=transport) as http:
             response = http.post("https://api.openai.com/v1/responses", content=b"{}")
         self.assertEqual(response.content, b"{}")
         self.assertEqual([str(error) for error in errors], ["no receipt"])
@@ -145,15 +147,15 @@ class TransportTest(unittest.TestCase):
         fake = FakeClient(FakeResponse(200, [b"{}"]))
         errors = []
         transport = CaptureTransport(fake, mode="witnessed", on_artifact=fail, on_error=errors.append)
-        with httpx.Client(transport=transport) as http:
+        with httpx2.Client(transport=transport) as http:
             self.assertEqual(http.post("https://api.openai.com/v1/responses", content=b"{}").status_code, 200)
         self.assertEqual([str(error) for error in errors], ["bucket unavailable"])
 
     def test_the_read_timeout_bounds_each_wait(self):
         fake = FakeClient(FakeResponse(200, [b"a", TIMEOUT]))
         transport = CaptureTransport(fake, mode="witnessed", on_artifact=print)
-        with httpx.Client(transport=transport, timeout=httpx.Timeout(5.0, read=7.0)) as http:
-            with self.assertRaises(httpx.ReadTimeout):
+        with httpx2.Client(transport=transport, timeout=httpx2.Timeout(5.0, read=7.0)) as http:
+            with self.assertRaises(httpx2.ReadTimeout):
                 http.post("https://api.openai.com/v1/responses", content=b"{}")
         self.assertEqual(fake.response.timeouts, [7.0, 7.0])
 
@@ -161,7 +163,7 @@ class TransportTest(unittest.TestCase):
         fake = FakeClient(FakeResponse(200, [b"a", b"b"]))
         artifacts = []
         transport = CaptureTransport(fake, mode="witnessed", on_artifact=artifacts.append)
-        with httpx.Client(transport=transport) as http:
+        with httpx2.Client(transport=transport) as http:
             with http.stream("POST", "https://api.openai.com/v1/responses", content=b"{}") as response:
                 next(response.iter_raw())
         self.assertTrue(fake.response.closed)
@@ -176,11 +178,81 @@ class TransportTest(unittest.TestCase):
 
         async def run():
             transport = AsyncCaptureTransport(fake, mode="witnessed", on_artifact=keep)
-            async with httpx.AsyncClient(transport=transport) as http:
+            async with httpx2.AsyncClient(transport=transport) as http:
                 response = await http.post("https://api.openai.com/v1/responses", content=b"{}")
                 return response.content
 
         self.assertEqual(asyncio.run(run()), b"ab")
+        self.assertEqual(artifacts, ["artifact"])
+
+
+
+def json_response(body):
+    return FakeResponse(200, [json.dumps(body).encode()], content_type=b"application/json")
+
+
+# The provider clients the SDK docs name. CI installs both; a local run
+# without them skips these tests.
+@unittest.skipUnless(
+    importlib.util.find_spec("anthropic") and importlib.util.find_spec("openai"),
+    "needs the anthropic and openai packages",
+)
+class ProviderClientTest(unittest.TestCase):
+    def test_anthropic_sends_through_the_transport(self):
+        from anthropic import Anthropic
+
+        fake = FakeClient(
+            json_response(
+                {
+                    "id": "msg_1",
+                    "type": "message",
+                    "role": "assistant",
+                    "model": "claude-test",
+                    "content": [{"type": "text", "text": "hello"}],
+                    "stop_reason": "end_turn",
+                    "stop_sequence": None,
+                    "usage": {"input_tokens": 1, "output_tokens": 1},
+                }
+            )
+        )
+        artifacts = []
+        transport = CaptureTransport(fake, mode="witnessed", on_artifact=artifacts.append)
+        anthropic = Anthropic(api_key="test", max_retries=0, http_client=httpx2.Client(transport=transport))
+        message = anthropic.messages.create(
+            model="claude-test", max_tokens=8, messages=[{"role": "user", "content": "hi"}]
+        )
+        self.assertEqual(message.content[0].text, "hello")
+        self.assertEqual(fake.sent[2], "https://api.anthropic.com/v1/messages")
+        self.assertEqual(artifacts, ["artifact"])
+
+    def test_openai_sends_through_the_transport(self):
+        from openai import OpenAI
+
+        fake = FakeClient(
+            json_response(
+                {
+                    "id": "chatcmpl-1",
+                    "object": "chat.completion",
+                    "created": 0,
+                    "model": "gpt-test",
+                    "choices": [
+                        {
+                            "index": 0,
+                            "message": {"role": "assistant", "content": "hello"},
+                            "finish_reason": "stop",
+                        }
+                    ],
+                }
+            )
+        )
+        artifacts = []
+        transport = CaptureTransport(fake, mode="witnessed", on_artifact=artifacts.append)
+        openai = OpenAI(api_key="test", max_retries=0, http_client=httpx2.Client(transport=transport))
+        completion = openai.chat.completions.create(
+            model="gpt-test", messages=[{"role": "user", "content": "hi"}]
+        )
+        self.assertEqual(completion.choices[0].message.content, "hello")
+        self.assertEqual(fake.sent[2], "https://api.openai.com/v1/chat/completions")
         self.assertEqual(artifacts, ["artifact"])
 
 
