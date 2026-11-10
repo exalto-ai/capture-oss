@@ -17,6 +17,7 @@
 //! contacting the provider or the notary.
 
 mod admission;
+mod error;
 mod provider;
 
 use std::{
@@ -25,7 +26,7 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
-use anyhow::{Context as _, Result, bail, ensure};
+use anyhow::{Context as _, Result, anyhow, bail, ensure};
 use bytes::Bytes;
 use capture_core::{
     CaptureCheckpoint, CaptureConfig, DEFAULT_MAX_ATTESTABLE_HTTP_BYTES,
@@ -52,6 +53,7 @@ use crate::{
 };
 
 pub use capture_core::archive::EvidenceKind;
+pub use error::ErrorCode;
 
 /// Exalto's public API, which publishes its notary Registry and issues
 /// notary admission tickets.
@@ -514,7 +516,8 @@ impl Client {
     /// request, credential included, and the artifact is a Sealed `.llmtrace`.
     pub async fn witness(&self, request: Request) -> Result<Response> {
         let request =
-            ProviderRequest::new(request.method, &request.url, &request.headers, request.body)?;
+            ProviderRequest::new(request.method, &request.url, &request.headers, request.body)
+                .context(ErrorCode::NotCapturable)?;
         let session = self.notary.session(REGISTRY_MAX_AGE).await?;
         let ticket = self.notary.admit(AdmissionRequest::Witness).await?;
         let (trace_id, _) = new_trace_id()?;
@@ -568,23 +571,28 @@ impl Client {
     /// [`notarize`](Self::notarize).
     pub async fn capture(&self, request: Request, key: &CaptureKey) -> Result<Response> {
         let request =
-            ProviderRequest::new(request.method, &request.url, &request.headers, request.body)?;
+            ProviderRequest::new(request.method, &request.url, &request.headers, request.body)
+                .context(ErrorCode::NotCapturable)?;
         let request_bytes = request
             .header_bytes()?
             .checked_add(request.body.len())
             .context("provider request is too large")?;
-        ensure!(
-            request_bytes <= self.max_attestable_http_bytes,
-            "provider request exceeds the {}-byte maximum attestable HTTP budget",
-            self.max_attestable_http_bytes
-        );
+        if request_bytes > self.max_attestable_http_bytes {
+            return Err(anyhow!(
+                "provider request exceeds the {}-byte maximum attestable HTTP budget",
+                self.max_attestable_http_bytes
+            )
+            .context(ErrorCode::NotCapturable));
+        }
         let session = self.notary.session(REGISTRY_MAX_AGE).await?;
         let ticket = self.notary.admit(AdmissionRequest::Capture).await?;
         let (max_attestable_http_bytes, max_frame_bytes) = self.limits(ticket.as_ref());
-        ensure!(
-            request_bytes <= max_attestable_http_bytes,
-            "provider request exceeds the notary's {max_attestable_http_bytes}-byte maximum attestable HTTP budget"
-        );
+        if request_bytes > max_attestable_http_bytes {
+            return Err(anyhow!(
+                "provider request exceeds the notary's {max_attestable_http_bytes}-byte maximum attestable HTTP budget"
+            )
+            .context(ErrorCode::NotCapturable));
+        }
         let (trace_id, created_at_unix_ms) = new_trace_id()?;
         let provider = request.provider;
         let config = CaptureConfig {
@@ -771,7 +779,8 @@ async fn fetch_registry(http: &reqwest::Client, api_origin: &Url) -> Result<Regi
         .send()
         .await
         .and_then(reqwest::Response::error_for_status)
-        .with_context(|| format!("fetching Exalto's notary Registry from {url}"))?;
+        .with_context(|| format!("fetching Exalto's notary Registry from {url}"))
+        .context(ErrorCode::Unavailable)?;
     let mut bytes = Vec::new();
     while let Some(chunk) = response
         .chunk()
@@ -873,37 +882,59 @@ mod tests {
         .unwrap()
     }
 
+    /// An HTTP/1.1 server on loopback that answers each request with
+    /// `respond(request line)`: a status and a JSON body.
+    async fn api_server(respond: impl Fn(&str) -> (u16, Vec<u8>) + Send + 'static) -> String {
+        use tokio::io::{AsyncBufReadExt as _, AsyncReadExt as _, AsyncWriteExt as _};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let origin = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move {
+            loop {
+                let (stream, _) = listener.accept().await.unwrap();
+                let mut stream = tokio::io::BufReader::new(stream);
+                let mut request_line = String::new();
+                stream.read_line(&mut request_line).await.unwrap();
+                let mut content_length = 0;
+                loop {
+                    let mut header = String::new();
+                    stream.read_line(&mut header).await.unwrap();
+                    if header == "\r\n" {
+                        break;
+                    }
+                    if let Some((name, value)) = header.split_once(':')
+                        && name.eq_ignore_ascii_case("content-length")
+                    {
+                        content_length = value.trim().parse().unwrap();
+                    }
+                }
+                let mut body = vec![0; content_length];
+                stream.read_exact(&mut body).await.unwrap();
+                let (status, body) = respond(request_line.trim_end());
+                let head = format!(
+                    "HTTP/1.1 {status} Test\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+                    body.len()
+                );
+                stream.write_all(head.as_bytes()).await.unwrap();
+                stream.write_all(&body).await.unwrap();
+            }
+        });
+        origin
+    }
+
     /// Serves each document once, in order, then the last one forever, and
     /// counts the Registry reads.
     async fn registry_server(
         documents: Vec<Vec<u8>>,
     ) -> (String, Arc<std::sync::atomic::AtomicUsize>) {
-        use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
-
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let origin = format!("http://{}", listener.local_addr().unwrap());
         let reads = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let counter = reads.clone();
-        tokio::spawn(async move {
-            loop {
-                let (mut stream, _) = listener.accept().await.unwrap();
-                let mut request = Vec::new();
-                let mut buffer = [0; 1024];
-                while !request.windows(4).any(|window| window == b"\r\n\r\n") {
-                    let read = stream.read(&mut buffer).await.unwrap();
-                    request.extend_from_slice(&buffer[..read]);
-                }
-                assert!(request.starts_with(b"GET /api/registry "));
-                let read = counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                let body = &documents[read.min(documents.len() - 1)];
-                let head = format!(
-                    "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
-                    body.len()
-                );
-                stream.write_all(head.as_bytes()).await.unwrap();
-                stream.write_all(body).await.unwrap();
-            }
-        });
+        let origin = api_server(move |request| {
+            assert!(request.starts_with("GET /api/registry "), "{request}");
+            let read = counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            (200, documents[read.min(documents.len() - 1)].clone())
+        })
+        .await;
         (origin, reads)
     }
 
@@ -1003,6 +1034,96 @@ mod tests {
                 .await
                 .is_err()
         );
+    }
+
+    const TEST_NOTARY_KEY: &str =
+        "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798";
+
+    fn provider_request() -> Request {
+        Request::post(
+            "https://api.openai.com/v1/responses",
+            HeaderMap::new(),
+            "{}",
+        )
+    }
+
+    async fn witness_error(client: &Client, request: Request) -> anyhow::Error {
+        match client.witness(request).await {
+            Ok(_) => panic!("the call was sent"),
+            Err(error) => error,
+        }
+    }
+
+    #[tokio::test]
+    async fn a_request_that_can_never_be_captured_is_not_capturable() {
+        let client = Client::new(Notary::new("tcp://127.0.0.1:1", TEST_NOTARY_KEY).unwrap());
+        for request in [
+            Request {
+                method: Method::GET,
+                ..provider_request()
+            },
+            Request::post("https://example.com/v1/responses", HeaderMap::new(), "{}"),
+        ] {
+            let error = witness_error(&client, request).await;
+            assert_eq!(ErrorCode::of(&error), Some(ErrorCode::NotCapturable));
+        }
+
+        let too_large = Request::post(
+            "https://api.openai.com/v1/responses",
+            HeaderMap::new(),
+            vec![b'x'; DEFAULT_MAX_ATTESTABLE_HTTP_BYTES + 1],
+        );
+        let error = match client.capture(too_large, &CaptureKey::generate()).await {
+            Ok(_) => panic!("the call was sent"),
+            Err(error) => error,
+        };
+        assert_eq!(ErrorCode::of(&error), Some(ErrorCode::NotCapturable));
+    }
+
+    #[tokio::test]
+    async fn a_notary_that_cannot_be_reached_is_unavailable() {
+        // Nothing listens on port 1 of the loopback address.
+        let client = Client::new(Notary::new("tcp://127.0.0.1:1", TEST_NOTARY_KEY).unwrap());
+        let error = witness_error(&client, provider_request()).await;
+        assert_eq!(ErrorCode::of(&error), Some(ErrorCode::Unavailable));
+    }
+
+    #[tokio::test]
+    async fn exalto_admission_refusals_carry_their_code() {
+        let (_, record) = notary_record(1);
+        let registry = registry_document(1, &[&record]);
+        for (status, code) in [
+            (402, Some(ErrorCode::AllowanceExhausted)),
+            (401, Some(ErrorCode::Unauthorized)),
+            (403, Some(ErrorCode::Unauthorized)),
+            (503, Some(ErrorCode::Unavailable)),
+            (409, None),
+        ] {
+            let registry = registry.clone();
+            let origin = api_server(move |request| {
+                if request.starts_with("GET /api/registry ") {
+                    (200, registry.clone())
+                } else {
+                    assert!(
+                        request.starts_with("POST /api/notary/admissions "),
+                        "{request}"
+                    );
+                    (status, br#"{"error":"refused"}"#.to_vec())
+                }
+            })
+            .await;
+            let client = Client::new(Notary::exalto_at(&origin, Some("key")).await.unwrap());
+            let error = witness_error(&client, provider_request()).await;
+            assert_eq!(ErrorCode::of(&error), code, "{status}: {error:#}");
+        }
+    }
+
+    #[tokio::test]
+    async fn an_unreachable_exalto_api_is_unavailable() {
+        let error = Notary::exalto_at("http://127.0.0.1:1", None)
+            .await
+            .unwrap_err();
+        assert_eq!(ErrorCode::of(&error), Some(ErrorCode::Unavailable));
     }
 
     #[test]

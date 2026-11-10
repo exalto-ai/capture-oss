@@ -1,7 +1,38 @@
 'use strict';
 
+const native = require('./binding.js');
+
 const SEALABLE = (status) => status >= 200 && status < 300;
 const NULL_BODY_STATUSES = new Set([101, 204, 205, 304]);
+
+const CODE_TAG = /^\[(not_capturable|allowance_exhausted|unauthorized|unavailable)\] /;
+
+/** Moves the binding's code tag from the start of `error.message` to `error.code`. */
+function coded(error) {
+  const tag = error instanceof Error ? CODE_TAG.exec(error.message) : null;
+  if (tag) {
+    error.message = error.message.slice(tag[0].length);
+    if (typeof error.stack === 'string') error.stack = error.stack.replace(tag[0], '');
+    error.code = tag[1];
+  }
+  return error;
+}
+
+function rethrowCoded(error) {
+  throw coded(error);
+}
+
+for (const name of ['witness', 'capture', 'notarize']) {
+  const call = native.Client.prototype[name];
+  native.Client.prototype[name] = function (...args) {
+    return call.apply(this, args).catch(rethrowCoded);
+  };
+}
+
+/** Exalto's notary, found through Exalto's Registry. */
+function exaltoNotary(apiKey, apiOrigin) {
+  return native.exaltoNotary(apiKey, apiOrigin).catch(rethrowCoded);
+}
 
 function logError(error) {
   console.error('Exalto Capture produced no artifact for a provider response:', error?.message ?? error);
@@ -127,4 +158,4 @@ function createFetch(client, options) {
 // Spreading `require(...)` directly, rather than a variable holding it, is what
 // lets Node's ESM loader see the binding's names, so that
 // `import { Client } from '@exalto/capture'` works as well as the default import.
-module.exports = { ...require('./binding.js'), createFetch };
+module.exports = { ...require('./binding.js'), exaltoNotary, createFetch };

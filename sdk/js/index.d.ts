@@ -2,6 +2,19 @@ import type { Artifact, CaptureKey, CaptureRequest, Response as CaptureResponse 
 
 export * from './binding';
 
+/**
+ * The `code` of an error from `witness`, `capture`, `notarize` or
+ * `exaltoNotary`, for the failures a caller can act on; any other failure has
+ * none of these. A `witness` or `capture` that fails with one sent nothing to
+ * the provider.
+ *
+ * - `not_capturable`: not a `POST` to a supported provider path, or too large to attest.
+ * - `allowance_exhausted`: the organization's allowance or plan doesn't cover the session.
+ * - `unauthorized`: Exalto refused the API key: unknown, revoked, or without the scope needed.
+ * - `unavailable`: Exalto's API or the notary couldn't be reached; trying again later may work.
+ */
+export type CaptureErrorCode = 'not_capturable' | 'allowance_exhausted' | 'unauthorized' | 'unavailable';
+
 /** The part of `Client` that `createFetch` uses. */
 export interface CaptureClient {
   witness(request: CaptureRequest): Promise<CaptureResponse>;

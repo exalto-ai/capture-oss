@@ -27,8 +27,20 @@ test('only POST to a fixed provider is sent', async () => {
     ['GET', 'https://api.openai.com/v1/models'],
     ['POST', 'https://example.com/v1/responses'],
   ]) {
-    await assert.rejects(client.witness({ method, url, headers: [], body: Buffer.from('{}') }));
+    await assert.rejects(client.witness({ method, url, headers: [], body: Buffer.from('{}') }), (error) => {
+      assert.equal(error.code, 'not_capturable');
+      assert.match(error.message, /^this request can't be captured: /);
+      return true;
+    });
   }
+});
+
+test('a notary that cannot be reached is unavailable', async () => {
+  // Nothing listens on port 1 of the loopback address.
+  const client = new Client(new Notary('tcp://127.0.0.1:1', NOTARY_KEY));
+  const request = { method: 'POST', url: 'https://api.openai.com/v1/responses', headers: [], body: Buffer.from('{}') };
+  await assert.rejects(client.witness(request), { code: 'unavailable' });
+  await assert.rejects(client.capture(request, CaptureKey.generate()), { code: 'unavailable' });
 });
 
 test('an ES module can import every export by name', async () => {

@@ -2208,6 +2208,19 @@ fn verified_connection_metadata_with_roots(
     ))
 }
 
+/// The context of a failure to open a notary connection: the notary could not
+/// be reached, or its TLS certificate did not validate. Nothing reached the
+/// provider, so a caller may try again. Find it with
+/// [`anyhow::Error::downcast_ref`].
+#[derive(Debug)]
+pub struct NotaryUnreachable(String);
+
+impl fmt::Display for NotaryUnreachable {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.0)
+    }
+}
+
 async fn connect_notary(
     notary: &NotaryEndpoint,
     mode: u8,
@@ -2221,7 +2234,7 @@ async fn connect_notary(
     }
     let socket = TcpStream::connect((notary.host.as_str(), notary.port))
         .await
-        .with_context(|| format!("connecting to notary at {notary}"))?;
+        .with_context(|| NotaryUnreachable(format!("connecting to notary at {notary}")))?;
     socket.set_nodelay(true)?;
 
     match notary.transport {
@@ -2234,7 +2247,9 @@ async fn connect_notary(
         NotaryTransport::Tls => {
             let mut socket = connect_notary_tls(&notary.host, socket, default_notary_tls_config())
                 .await
-                .with_context(|| format!("validating TLS for notary at {notary}"))?;
+                .with_context(|| {
+                    NotaryUnreachable(format!("validating TLS for notary at {notary}"))
+                })?;
             write_selected_notary_prelude(&mut socket, mode, admission_value).await?;
             read_notary_admission(&mut socket).await?;
             Ok(Box::new(socket.compat()))

@@ -1,9 +1,12 @@
 //! One-operation tickets for Exalto's notary, issued by Exalto's API.
 
-use anyhow::{Context as _, Result, bail};
+use anyhow::{Context as _, Result, anyhow, bail};
+use http::StatusCode;
 use serde::{Deserialize, Serialize};
 use url::Url;
 use zeroize::Zeroizing;
+
+use crate::ErrorCode;
 
 const MAX_RESPONSE_BYTES: usize = 16 << 10;
 
@@ -80,7 +83,8 @@ impl ExaltoAdmission {
         let mut response = call
             .send()
             .await
-            .context("Exalto's admission service is unavailable")?;
+            .context("reaching Exalto's admission service")
+            .context(ErrorCode::Unavailable)?;
         let status = response.status();
         let mut body = Vec::new();
         while let Some(chunk) = response
@@ -105,7 +109,16 @@ impl ExaltoAdmission {
                 })
                 .take(64)
                 .collect();
-            bail!("Exalto refused notary admission ({status}): {code}");
+            let refusal = anyhow!("Exalto refused notary admission ({status}): {code}");
+            return Err(match status {
+                StatusCode::PAYMENT_REQUIRED => refusal.context(ErrorCode::AllowanceExhausted),
+                StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => {
+                    refusal.context(ErrorCode::Unauthorized)
+                }
+                StatusCode::TOO_MANY_REQUESTS => refusal.context(ErrorCode::Unavailable),
+                status if status.is_server_error() => refusal.context(ErrorCode::Unavailable),
+                _ => refusal,
+            });
         }
         let ticket: TicketResponse =
             serde_json::from_slice(&body).context("decoding Exalto's admission ticket")?;

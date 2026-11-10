@@ -13,30 +13,42 @@ those bytes wherever you like.
   with ``Client.notarize``.
 
 ``verify`` and ``Notary.verify`` check a ``.llmtrace`` offline.
+
+Every failure raises ``CaptureError``. The ones a caller can act on raise a
+subclass: ``NotCapturable``, ``AllowanceExhausted``, ``Unauthorized``,
+``Unavailable`` and ``CaptureTimeout``.
 """
 
 from ._native import (
     EXALTO_API_ORIGIN,
+    AllowanceExhausted,
     Artifact,
     CaptureError,
     CaptureKey,
     CaptureTimeout,
     Client,
+    NotCapturable,
     Notary,
     Response,
+    Unauthorized,
+    Unavailable,
     Verification,
     verify,
 )
 
 __all__ = [
     "EXALTO_API_ORIGIN",
+    "AllowanceExhausted",
     "Artifact",
     "CaptureError",
     "CaptureKey",
     "CaptureTimeout",
     "Client",
+    "NotCapturable",
     "Notary",
     "Response",
+    "Unauthorized",
+    "Unavailable",
     "Verification",
     "verify",
 ]

@@ -23,6 +23,30 @@ create_exception!(
     CaptureError,
     "The provider response did not arrive within the timeout."
 );
+create_exception!(
+    _native,
+    NotCapturable,
+    CaptureError,
+    "The request can never be captured: it isn't a POST to a supported provider path, or it's too large to attest. Nothing was sent."
+);
+create_exception!(
+    _native,
+    AllowanceExhausted,
+    CaptureError,
+    "Exalto refused the session: the organization's allowance or plan doesn't cover it. Nothing was sent to the provider."
+);
+create_exception!(
+    _native,
+    Unauthorized,
+    CaptureError,
+    "Exalto refused the API key: unknown, revoked, or without the scope the call needs. Nothing was sent to the provider."
+);
+create_exception!(
+    _native,
+    Unavailable,
+    CaptureError,
+    "Exalto's API or the notary couldn't be reached. Nothing was sent to the provider, and trying again later may work."
+);
 
 fn runtime() -> &'static tokio::runtime::Runtime {
     static RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
@@ -36,7 +60,14 @@ fn runtime() -> &'static tokio::runtime::Runtime {
 }
 
 fn error(error: anyhow::Error) -> PyErr {
-    CaptureError::new_err(format!("{error:#}"))
+    let message = format!("{error:#}");
+    match capture::ErrorCode::of(&error) {
+        Some(capture::ErrorCode::NotCapturable) => NotCapturable::new_err(message),
+        Some(capture::ErrorCode::AllowanceExhausted) => AllowanceExhausted::new_err(message),
+        Some(capture::ErrorCode::Unauthorized) => Unauthorized::new_err(message),
+        Some(capture::ErrorCode::Unavailable) => Unavailable::new_err(message),
+        _ => CaptureError::new_err(message),
+    }
 }
 
 enum Failure {
@@ -447,6 +478,13 @@ fn verify(py: Python<'_>, trace: Vec<u8>, notary_public_key: &str) -> PyResult<V
 fn _native(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add("CaptureError", module.py().get_type::<CaptureError>())?;
     module.add("CaptureTimeout", module.py().get_type::<CaptureTimeout>())?;
+    module.add("NotCapturable", module.py().get_type::<NotCapturable>())?;
+    module.add(
+        "AllowanceExhausted",
+        module.py().get_type::<AllowanceExhausted>(),
+    )?;
+    module.add("Unauthorized", module.py().get_type::<Unauthorized>())?;
+    module.add("Unavailable", module.py().get_type::<Unavailable>())?;
     module.add("EXALTO_API_ORIGIN", capture::EXALTO_API_ORIGIN)?;
     module.add_class::<CaptureKey>()?;
     module.add_class::<Notary>()?;

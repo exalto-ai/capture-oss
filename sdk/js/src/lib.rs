@@ -10,7 +10,12 @@ use napi_derive::napi;
 use tokio::sync::Mutex;
 
 fn error(error: anyhow::Error) -> Error {
-    Error::from_reason(format!("{error:#}"))
+    match capture::ErrorCode::of(&error) {
+        // napi can't give an async function's error a code of its own, so the
+        // message carries it as a tag that index.js moves to `error.code`.
+        Some(code) => Error::from_reason(format!("[{}] {error:#}", code.as_str())),
+        None => Error::from_reason(format!("{error:#}")),
+    }
 }
 
 fn header_map(headers: Vec<Vec<String>>) -> Result<HeaderMap> {

@@ -102,6 +102,11 @@ A failure to produce or keep an artifact never fails the model call, which a
 client would retry as a new, paid request: the Python transports and
 `createFetch` pass it to `on_error` / `onError`, which logs it by default.
 
+The failures a caller can act on carry a code: `not_capturable`,
+`allowance_exhausted`, `unauthorized` or `unavailable`. Python raises a
+`CaptureError` subclass for each, Node.js sets `error.code`, and Rust returns it
+from `ErrorCode::of`.
+
 ## Build and test
 
 ```bash

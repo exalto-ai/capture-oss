@@ -8,7 +8,15 @@ import unittest
 import httpx2
 
 import exalto_capture
-from exalto_capture import CaptureError, CaptureKey, CaptureTimeout, Client, Notary
+from exalto_capture import (
+    CaptureError,
+    CaptureKey,
+    CaptureTimeout,
+    Client,
+    NotCapturable,
+    Notary,
+    Unavailable,
+)
 from exalto_capture.transport import AsyncCaptureTransport, CaptureTransport
 
 # The public key of secp256k1 secret key 1, a valid SEC1 point.
@@ -37,8 +45,15 @@ class NativeTest(unittest.TestCase):
             ("GET", "https://api.openai.com/v1/models"),
             ("POST", "https://example.com/v1/responses"),
         ]:
-            with self.assertRaises(CaptureError):
+            with self.assertRaises(NotCapturable):
                 client.witness(method, url, [], b"{}")
+
+    def test_a_notary_that_cannot_be_reached_is_unavailable(self):
+        # Nothing listens on port 1 of the loopback address.
+        client = Client(Notary("tcp://127.0.0.1:1", NOTARY_KEY))
+        with self.assertRaises(Unavailable) as raised:
+            client.witness("POST", "https://api.openai.com/v1/responses", [], b"{}")
+        self.assertIsInstance(raised.exception, CaptureError)
 
     def test_verify_rejects_bytes_that_are_not_a_trace(self):
         with self.assertRaises(CaptureError):
