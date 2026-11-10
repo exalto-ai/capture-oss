@@ -41,9 +41,11 @@ sealed.
 ## Notaries
 
 - `Notary.exalto(api_key)` uses Exalto's notary, found through Exalto's
-  Registry. Each session is charged to the organization that owns the API key
-  (scopes `capture:request` and `notarization:request`), or to a small
-  allowance for your network address without one.
+  Registry, which it reads again once its copy is a few minutes old or a
+  notary signs with a key the copy doesn't list yet. Each session is charged
+  to the organization that owns the API key (scopes `capture:request` and
+  `notarization:request`), or to a small allowance for your network address
+  without one.
 - `Notary(endpoint, public_key)` uses a notary you run (see
   [self-hosting](../docs/self-hosting.md)): `tls://host:port`, or `tcp://` on
   loopback, and its hex public key. A Trace your own notary signs is only as

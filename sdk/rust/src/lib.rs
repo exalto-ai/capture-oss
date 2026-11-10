@@ -21,8 +21,8 @@ mod provider;
 
 use std::{
     fmt, io,
-    sync::Arc,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    sync::{Arc, Mutex},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use anyhow::{Context as _, Result, bail, ensure};
@@ -61,6 +61,10 @@ const USER_AGENT: &str = concat!("exalto-capture-sdk/", env!("CARGO_PKG_VERSION"
 const API_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const API_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_REGISTRY_BYTES: usize = 1 << 20;
+/// How long a copy of Exalto's Registry serves new sessions before it is read
+/// again. The Registry changes rarely and in planned steps, so a long-running
+/// process follows a new notary within minutes for one small request.
+const REGISTRY_MAX_AGE: Duration = Duration::from_secs(5 * 60);
 
 /// The 32-byte key that encrypts a `.llmcapture`. Keep it with your other
 /// secrets: without it a capture can never be sealed, and with it the capture
@@ -102,9 +106,97 @@ impl fmt::Debug for CaptureKey {
 /// notary, the admission that pays for each session.
 #[derive(Clone)]
 pub struct Notary {
+    source: Source,
+}
+
+#[derive(Clone)]
+enum Source {
+    /// A notary you run, trusted by one explicitly configured key.
+    Own {
+        endpoint: NotaryEndpoint,
+        key: Vec<u8>,
+    },
+    /// Exalto's notary, found through Exalto's Registry.
+    Exalto(Arc<Exalto>),
+}
+
+struct Exalto {
+    admission: ExaltoAdmission,
+    registry: Mutex<RegistryCopy>,
+    /// Held while the Registry is read again, so that sessions starting
+    /// together wait for one read instead of each making their own.
+    reading: tokio::sync::Mutex<()>,
+}
+
+#[derive(Clone)]
+struct RegistryCopy {
+    generation: u64,
+    endpoint: NotaryEndpoint,
+    records: Vec<RegistryRecord>,
+    read_at: Instant,
+}
+
+impl RegistryCopy {
+    fn new(registry: Registry) -> Result<Self> {
+        Ok(Self {
+            generation: registry.generation,
+            endpoint: registry.active()?.endpoint()?,
+            records: registry.notaries,
+            read_at: Instant::now(),
+        })
+    }
+
+    fn session(&self) -> Session {
+        Session {
+            endpoint: self.endpoint.clone(),
+            trust: Trust::Registry(self.records.clone()),
+        }
+    }
+}
+
+impl Exalto {
+    fn copy(&self) -> std::sync::MutexGuard<'_, RegistryCopy> {
+        // The copy is only ever replaced whole, so a poisoned lock still
+        // holds a consistent one.
+        self.registry
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    fn cached(&self, max_age: Duration) -> Option<Session> {
+        let copy = self.copy();
+        (copy.read_at.elapsed() < max_age).then(|| copy.session())
+    }
+
+    /// A session from a copy of the Registry read less than `max_age` ago,
+    /// reading it again if the copy is older.
+    async fn session(&self, max_age: Duration) -> Result<Session> {
+        if let Some(session) = self.cached(max_age) {
+            return Ok(session);
+        }
+        let _reading = self.reading.lock().await;
+        if let Some(session) = self.cached(max_age) {
+            return Ok(session);
+        }
+        let registry = fetch_registry(self.admission.http(), self.admission.api_origin()).await?;
+        let mut copy = self.copy();
+        // A lower generation is an older Registry served again, which could
+        // trust a key Exalto has since revoked, so the newer copy stays.
+        if registry.generation >= copy.generation {
+            *copy = RegistryCopy::new(registry)?;
+        } else {
+            copy.read_at = Instant::now();
+        }
+        Ok(copy.session())
+    }
+}
+
+/// The notary one session uses: its endpoint and the keys its evidence is
+/// checked against.
+#[derive(Clone)]
+struct Session {
     endpoint: NotaryEndpoint,
     trust: Trust,
-    admission: Option<Arc<ExaltoAdmission>>,
 }
 
 #[derive(Clone)]
@@ -122,15 +214,21 @@ impl Notary {
     /// public key, the trust anchor for everything it signs.
     pub fn new(endpoint: &str, public_key: &str) -> Result<Self> {
         Ok(Self {
-            endpoint: endpoint.parse()?,
-            trust: Trust::Key(parse_public_key(public_key)?),
-            admission: None,
+            source: Source::Own {
+                endpoint: endpoint.parse()?,
+                key: parse_public_key(public_key)?,
+            },
         })
     }
 
     /// Exalto's notary, found through Exalto's Registry. Sessions are charged
     /// to the organization that owns `api_key`, or to a small allowance for
     /// your network address without one.
+    ///
+    /// The Registry is read here, and again before a session once the copy is
+    /// a few minutes old, or when evidence is signed by a key the copy doesn't
+    /// list yet. A long-running process so follows key rotations and notary
+    /// changes without restarting.
     pub async fn exalto(api_key: Option<&str>) -> Result<Self> {
         Self::exalto_at(EXALTO_API_ORIGIN, api_key).await
     }
@@ -144,20 +242,67 @@ impl Notary {
             .timeout(API_REQUEST_TIMEOUT)
             .build()
             .context("building the HTTP client")?;
-        let registry = fetch_registry(&http, &api_origin).await?;
-        let endpoint = registry.active()?.endpoint()?;
+        let registry = RegistryCopy::new(fetch_registry(&http, &api_origin).await?)?;
         Ok(Self {
-            endpoint,
-            trust: Trust::Registry(registry.notaries),
-            admission: Some(Arc::new(ExaltoAdmission::new(api_origin, api_key, http))),
+            source: Source::Exalto(Arc::new(Exalto {
+                admission: ExaltoAdmission::new(api_origin, api_key, http),
+                registry: Mutex::new(registry),
+                reading: tokio::sync::Mutex::new(()),
+            })),
         })
     }
 
-    /// Fully verifies a `.llmtrace` against this notary's keys.
+    /// Fully verifies a `.llmtrace` against this notary's keys: for Exalto's
+    /// notary, the latest copy of its Registry. It contacts nothing.
     pub fn verify(&self, trace: &[u8]) -> Result<Verification> {
-        let key = match &self.trust {
-            Trust::Key(key) => key.clone(),
-            Trust::Registry(records) => {
+        let trust = match &self.source {
+            Source::Own { key, .. } => Trust::Key(key.clone()),
+            Source::Exalto(exalto) => Trust::Registry(exalto.copy().records.clone()),
+        };
+        trust.verify(trace)
+    }
+
+    /// The notary for a session starting now, from a Registry copy read less
+    /// than `max_age` ago.
+    async fn session(&self, max_age: Duration) -> Result<Session> {
+        match &self.source {
+            Source::Own { endpoint, key } => Ok(Session {
+                endpoint: endpoint.clone(),
+                trust: Trust::Key(key.clone()),
+            }),
+            Source::Exalto(exalto) => exalto.session(max_age).await,
+        }
+    }
+
+    /// `check` against `session`, or for Exalto's notary, if that fails,
+    /// against the Registry read again: a key Exalto publishes after the copy
+    /// was read signs evidence that would otherwise be lost, for a provider
+    /// call already paid for.
+    async fn checked<T>(
+        &self,
+        session: &Session,
+        check: impl Fn(&Session) -> Result<T>,
+    ) -> Result<T> {
+        match (check(session), &self.source) {
+            (Ok(value), _) => Ok(value),
+            (Err(error), Source::Own { .. }) => Err(error),
+            (Err(_), Source::Exalto(exalto)) => check(&exalto.session(Duration::ZERO).await?),
+        }
+    }
+
+    async fn admit(&self, request: AdmissionRequest<'_>) -> Result<Option<Ticket>> {
+        match &self.source {
+            Source::Exalto(exalto) => exalto.admission.issue(request).await.map(Some),
+            Source::Own { .. } => Ok(None),
+        }
+    }
+}
+
+impl Trust {
+    fn verify(&self, trace: &[u8]) -> Result<Verification> {
+        let key = match self {
+            Self::Key(key) => key.clone(),
+            Self::Registry(records) => {
                 let embedded = trace_package_notary_key_bytes(trace)?;
                 let created_at = trace_package_created_at_unix_ms_bytes(trace)?;
                 trusted_key_at(records, created_at, |key| {
@@ -172,30 +317,9 @@ impl Notary {
         };
         verify_with_key(trace, &key)
     }
+}
 
-    /// This notary with Exalto's current Registry, or unchanged for a notary
-    /// trusted by its key.
-    async fn refreshed(&self) -> Result<Self> {
-        match &self.admission {
-            Some(admission) => {
-                let registry = fetch_registry(admission.http(), admission.api_origin()).await?;
-                Ok(Self {
-                    endpoint: registry.active()?.endpoint()?,
-                    trust: Trust::Registry(registry.notaries),
-                    admission: Some(admission.clone()),
-                })
-            }
-            None => Ok(self.clone()),
-        }
-    }
-
-    async fn admit(&self, request: AdmissionRequest<'_>) -> Result<Option<Ticket>> {
-        match &self.admission {
-            Some(admission) => admission.issue(request).await.map(Some),
-            None => Ok(None),
-        }
-    }
-
+impl Session {
     fn witness_key(&self, exchange: &WitnessedExchange) -> Result<Vec<u8>> {
         match &self.trust {
             Trust::Key(key) => {
@@ -239,10 +363,14 @@ impl Notary {
 
 impl fmt::Debug for Notary {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let (endpoint, exalto) = match &self.source {
+            Source::Own { endpoint, .. } => (endpoint.to_string(), false),
+            Source::Exalto(exalto) => (exalto.copy().endpoint.to_string(), true),
+        };
         formatter
             .debug_struct("Notary")
-            .field("endpoint", &self.endpoint.to_string())
-            .field("exalto", &self.admission.is_some())
+            .field("endpoint", &endpoint)
+            .field("exalto", &exalto)
             .finish()
     }
 }
@@ -387,11 +515,12 @@ impl Client {
     pub async fn witness(&self, request: Request) -> Result<Response> {
         let request =
             ProviderRequest::new(request.method, &request.url, &request.headers, request.body)?;
+        let session = self.notary.session(REGISTRY_MAX_AGE).await?;
         let ticket = self.notary.admit(AdmissionRequest::Witness).await?;
         let (trace_id, _) = new_trace_id()?;
         let provider = request.provider;
         let upstream = witness_streaming_request(
-            &self.notary.endpoint,
+            &session.endpoint,
             provider.host,
             WitnessConfig {
                 provider_name: provider.name.to_owned(),
@@ -409,7 +538,9 @@ impl Client {
                 .await
                 .context("the Witnessed session ended without a receipt")??;
             ensure_sealable(status)?;
-            let key = notary.witness_key(&exchange)?;
+            let key = notary
+                .checked(&session, |session| session.witness_key(&exchange))
+                .await?;
             let bytes = tokio::task::spawn_blocking(move || {
                 build_witnessed_trace_package_bytes(&exchange, artifact_trace_id.clone(), &key)
                     .map(|bytes| (artifact_trace_id, bytes))
@@ -447,6 +578,7 @@ impl Client {
             "provider request exceeds the {}-byte maximum attestable HTTP budget",
             self.max_attestable_http_bytes
         );
+        let session = self.notary.session(REGISTRY_MAX_AGE).await?;
         let ticket = self.notary.admit(AdmissionRequest::Capture).await?;
         let (max_attestable_http_bytes, max_frame_bytes) = self.limits(ticket.as_ref());
         ensure!(
@@ -464,7 +596,7 @@ impl Client {
             max_frame_bytes,
         };
         let upstream = capture_streaming_request(
-            &self.notary.endpoint,
+            &session.endpoint,
             provider.host,
             config,
             request.into_http()?,
@@ -481,7 +613,9 @@ impl Client {
                 .await
                 .context("the Notarized session ended without a receipt")??;
             ensure_sealable(status)?;
-            notary.check_capture_key(&checkpoint)?;
+            notary
+                .checked(&session, |session| session.check_capture_key(&checkpoint))
+                .await?;
             let bytes = tokio::task::spawn_blocking(move || checkpoint.to_encrypted_bytes(&vault))
                 .await
                 .context("the encryption task ended")??;
@@ -514,8 +648,8 @@ impl Client {
         .context("the decryption task ended")??;
         // Sealing may run long after the capture, so Exalto's Registry is read
         // again: a key may have been rotated or a notary retired since.
-        let notary = self.notary.refreshed().await?;
-        let (trusted_key, endpoint) = notary.sealing_notary(&checkpoint)?;
+        let session = self.notary.session(Duration::ZERO).await?;
+        let (trusted_key, endpoint) = session.sealing_notary(&checkpoint)?;
         let allowance = checkpoint.notarization_allowance_bytes()?;
         ensure!(
             allowance <= self.max_attestable_http_bytes,
@@ -523,7 +657,8 @@ impl Client {
             self.max_attestable_http_bytes
         );
         let record_digest = checkpoint.record_digest_hex();
-        let ticket = notary
+        let ticket = self
+            .notary
             .admit(AdmissionRequest::Notarization {
                 record_digest: &record_digest,
                 requested_allowance_bytes: allowance,
@@ -704,6 +839,170 @@ mod tests {
         assert!(parse_api_origin("http://127.0.0.1:8080").is_ok());
         assert!(parse_api_origin("http://api.capture.exalto.ai").is_err());
         assert!(parse_api_origin("https://api.capture.exalto.ai/v1").is_err());
+    }
+
+    /// A hex public key and its Registry record, active from the epoch.
+    fn notary_record(seed: u8) -> (String, serde_json::Value) {
+        let signing = k256::ecdsa::SigningKey::from_slice(&[seed; 32]).unwrap();
+        let public = signing.verifying_key().to_sec1_bytes();
+        let key = hex::encode(&public);
+        let record = serde_json::json!({
+            "name": format!("Notary {seed}"),
+            "operator": "Exalto",
+            "host": format!("notary-{seed}.example"),
+            "port": 7047,
+            "transport": "tls",
+            "key_id": registry::key_id(&public),
+            "verification_key": key,
+            "status": "active",
+            "valid_from_unix_ms": 0,
+            "valid_until_unix_ms": null,
+            "notarize_until_unix_ms": null,
+        });
+        (key, record)
+    }
+
+    fn registry_document(generation: u64, records: &[&serde_json::Value]) -> Vec<u8> {
+        let active = records.last().unwrap()["key_id"].clone();
+        serde_json::to_vec(&serde_json::json!({
+            "format": "ecp/registry/v1",
+            "generation": generation,
+            "active_key_id": active,
+            "notaries": records,
+        }))
+        .unwrap()
+    }
+
+    /// Serves each document once, in order, then the last one forever, and
+    /// counts the Registry reads.
+    async fn registry_server(
+        documents: Vec<Vec<u8>>,
+    ) -> (String, Arc<std::sync::atomic::AtomicUsize>) {
+        use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let origin = format!("http://{}", listener.local_addr().unwrap());
+        let reads = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = reads.clone();
+        tokio::spawn(async move {
+            loop {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut request = Vec::new();
+                let mut buffer = [0; 1024];
+                while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+                    let read = stream.read(&mut buffer).await.unwrap();
+                    request.extend_from_slice(&buffer[..read]);
+                }
+                assert!(request.starts_with(b"GET /api/registry "));
+                let read = counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let body = &documents[read.min(documents.len() - 1)];
+                let head = format!(
+                    "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+                    body.len()
+                );
+                stream.write_all(head.as_bytes()).await.unwrap();
+                stream.write_all(body).await.unwrap();
+            }
+        });
+        (origin, reads)
+    }
+
+    fn reads(counter: &std::sync::atomic::AtomicUsize) -> usize {
+        counter.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    fn trusts(session: &Session, key: &str) -> Result<()> {
+        match &session.trust {
+            Trust::Registry(records) if records.iter().any(|record| record.public_key == key) => {
+                Ok(())
+            }
+            _ => bail!("not a trusted key"),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_registry_copy_serves_sessions_until_it_is_too_old() {
+        let (_, first) = notary_record(1);
+        let (origin, counter) = registry_server(vec![registry_document(1, &[&first])]).await;
+        let notary = Notary::exalto_at(&origin, None).await.unwrap();
+        assert_eq!(reads(&counter), 1);
+
+        notary.session(REGISTRY_MAX_AGE).await.unwrap();
+        assert_eq!(reads(&counter), 1);
+        notary.session(Duration::ZERO).await.unwrap();
+        assert_eq!(reads(&counter), 2);
+    }
+
+    #[tokio::test]
+    async fn a_new_registry_endpoint_serves_the_next_session() {
+        let (_, first) = notary_record(1);
+        let (_, second) = notary_record(2);
+        let (origin, _) = registry_server(vec![
+            registry_document(1, &[&first]),
+            registry_document(2, &[&first, &second]),
+        ])
+        .await;
+        let notary = Notary::exalto_at(&origin, None).await.unwrap();
+        let session = notary.session(Duration::ZERO).await.unwrap();
+        assert_eq!(session.endpoint.to_string(), "tls://notary-2.example:7047");
+    }
+
+    #[tokio::test]
+    async fn a_key_published_since_the_last_read_is_trusted() {
+        let (_, first) = notary_record(1);
+        let (rotated, second) = notary_record(2);
+        let (origin, counter) = registry_server(vec![
+            registry_document(1, &[&first]),
+            registry_document(2, &[&first, &second]),
+        ])
+        .await;
+        let notary = Notary::exalto_at(&origin, None).await.unwrap();
+        let session = notary.session(REGISTRY_MAX_AGE).await.unwrap();
+        assert!(trusts(&session, &rotated).is_err());
+
+        notary
+            .checked(&session, |session| trusts(session, &rotated))
+            .await
+            .unwrap();
+        assert_eq!(reads(&counter), 2);
+        // A key nobody published still fails, after one more read.
+        assert!(
+            notary
+                .checked(&session, |session| trusts(session, "02ab"))
+                .await
+                .is_err()
+        );
+        assert_eq!(reads(&counter), 3);
+    }
+
+    #[tokio::test]
+    async fn an_older_registry_generation_is_ignored() {
+        let (_, first) = notary_record(1);
+        let (rotated, second) = notary_record(2);
+        let (origin, _) = registry_server(vec![
+            registry_document(2, &[&first, &second]),
+            registry_document(1, &[&first]),
+        ])
+        .await;
+        let notary = Notary::exalto_at(&origin, None).await.unwrap();
+        let session = notary.session(Duration::ZERO).await.unwrap();
+        trusts(&session, &rotated).unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_notary_you_run_never_reads_a_registry() {
+        let notary = Notary::new(
+            "tls://notary.example:443",
+            "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
+        )
+        .unwrap();
+        let session = notary.session(Duration::ZERO).await.unwrap();
+        assert!(
+            notary
+                .checked(&session, |_| -> Result<()> { bail!("untrusted") })
+                .await
+                .is_err()
+        );
     }
 
     #[test]
