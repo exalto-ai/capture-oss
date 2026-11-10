@@ -21,8 +21,11 @@ export interface CaptureClient {
   capture(request: CaptureRequest, key: CaptureKey): Promise<CaptureResponse>;
 }
 
+/** An artifact as `createFetch` hands it over, with its request's `captureContext` fields. */
+export type CapturedArtifact = Artifact & { context: Record<string, unknown> };
+
 type ArtifactHandlers = {
-  onArtifact: (artifact: Artifact) => unknown;
+  onArtifact: (artifact: CapturedArtifact) => unknown;
   /** Receives a failure to produce or keep an artifact; logs it by default. */
   onError?: (error: unknown) => unknown;
   /**
@@ -51,3 +54,11 @@ export type CreateFetchOptions =
  * request this fetch tries to capture and can't is never sent unrecorded.
  */
 export function createFetch(client: CaptureClient, options: CreateFetchOptions): typeof fetch;
+
+/**
+ * Runs `fn`, handing `fields` to `onArtifact`, as `artifact.context`, with the
+ * artifact of every request sent while it runs. Nested calls merge, the inner
+ * one winning. The fields stay in your process: they are never sent anywhere
+ * or written into the evidence.
+ */
+export function captureContext<T>(fields: Record<string, unknown>, fn: () => T): T;

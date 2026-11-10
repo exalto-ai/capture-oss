@@ -9,7 +9,12 @@ use std::{
 
 use exalto_capture as capture;
 use http::{HeaderMap, HeaderName, HeaderValue, Method};
-use pyo3::{create_exception, exceptions::PyException, prelude::*, types::PyBytes};
+use pyo3::{
+    create_exception,
+    exceptions::PyException,
+    prelude::*,
+    types::{PyBytes, PyDict},
+};
 
 create_exception!(
     _native,
@@ -356,7 +361,9 @@ impl Response {
 
     /// The artifact, after reading and discarding whatever body is left. A
     /// provider error response can't be sealed, so this raises for one.
-    fn artifact(&self, py: Python<'_>) -> PyResult<Artifact> {
+    /// `context` becomes the artifact's `context`.
+    #[pyo3(signature = (context=None))]
+    fn artifact(&self, py: Python<'_>, context: Option<Bound<'_, PyDict>>) -> PyResult<Artifact> {
         let artifact = py
             .detach(|| match self.take()? {
                 Some(response) => runtime().block_on(response.artifact()),
@@ -371,12 +378,15 @@ impl Response {
             },
             extension: artifact.kind.extension(),
             data: PyBytes::new(py, &artifact.bytes).unbind(),
+            context: context.unwrap_or_else(|| PyDict::new(py)).unbind(),
         })
     }
 }
 
 /// The evidence for one exchange: `kind` is `"trace"` (a Sealed `.llmtrace`)
-/// or `"capture"` (a private `.llmcapture`).
+/// or `"capture"` (a private `.llmcapture`). `context` holds the
+/// `capture_context` fields its request was sent with; they are never part of
+/// the evidence.
 #[pyclass(frozen, module = "exalto_capture._native")]
 struct Artifact {
     #[pyo3(get)]
@@ -387,6 +397,8 @@ struct Artifact {
     extension: &'static str,
     #[pyo3(get)]
     data: Py<PyBytes>,
+    #[pyo3(get)]
+    context: Py<PyDict>,
 }
 
 #[pymethods]

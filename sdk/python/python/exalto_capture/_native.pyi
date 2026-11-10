@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Any, Optional
 
 EXALTO_API_ORIGIN: str
 
@@ -38,13 +38,14 @@ class Artifact:
     kind: str
     extension: str
     data: bytes
+    context: dict[str, Any]
 
 class Response:
     status: int
     trace_id: str
     headers: list[tuple[bytes, bytes]]
     def next_chunk(self, timeout: Optional[float] = None) -> Optional[bytes]: ...
-    def artifact(self) -> Artifact: ...
+    def artifact(self, context: Optional[dict[str, Any]] = None) -> Artifact: ...
     def close(self) -> None: ...
 
 class Client:

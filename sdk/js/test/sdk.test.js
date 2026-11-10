@@ -3,7 +3,7 @@
 const assert = require('node:assert/strict');
 const { test } = require('node:test');
 
-const { CaptureKey, Client, Notary, createFetch, verify } = require('..');
+const { CaptureKey, Client, Notary, captureContext, createFetch, verify } = require('..');
 
 // The public key of secp256k1 secret key 1, a valid SEC1 point.
 const NOTARY_KEY = '0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798';
@@ -55,7 +55,7 @@ test('verify rejects bytes that are not a trace', async () => {
   await assert.rejects(verify(Buffer.from('not a trace'), NOTARY_KEY));
 });
 
-function fakeClient(status, chunks, { artifact = 'artifact', headersAfter } = {}) {
+function fakeClient(status, chunks, { artifact = { traceId: 'trc-1' }, headersAfter } = {}) {
   const sent = [];
   let artifactsTaken = 0;
   let closed = 0;
@@ -103,7 +103,7 @@ test('createFetch streams the body, then hands over the artifact', async () => {
   });
   assert.equal(response.status, 200);
   assert.equal(await response.text(), 'data: 1\n\ndata: 2\n\n');
-  assert.deepEqual(artifacts, ['artifact']);
+  assert.deepEqual(artifacts, [{ traceId: 'trc-1', context: {} }]);
   const [kind, request] = client.sent[0];
   assert.equal(kind, 'witness');
   assert.equal(request.method, 'POST');
@@ -133,8 +133,22 @@ test('a request shouldCapture declines goes to forward, unrecorded', async () =>
     client.sent.map(([kind, request]) => [kind, request.url]),
     [['witness', 'https://api.openai.com/v1/responses']],
   );
-  assert.deepEqual(artifacts, ['artifact']);
+  assert.deepEqual(artifacts, [{ traceId: 'trc-1', context: {} }]);
   assert.throws(() => createFetch(client, { mode: 'witnessed', onArtifact() {}, shouldCapture: true }), TypeError);
+});
+
+test('an artifact carries the context its request was sent in', async () => {
+  const client = fakeClient(200, ['a', 'b']);
+  const artifacts = [];
+  const captureFetch = createFetch(client, { mode: 'witnessed', onArtifact: (a) => artifacts.push(a) });
+  const response = await captureContext({ user: 'u1', conversation: 'c1' }, () =>
+    captureContext({ conversation: 'c2' }, () =>
+      captureFetch('https://api.openai.com/v1/responses', { method: 'POST', body: '{}' }),
+    ),
+  );
+  // The body is read after both calls have returned.
+  assert.equal(await response.text(), 'ab');
+  assert.deepEqual(artifacts.map((a) => a.context), [{ user: 'u1', conversation: 'c2' }]);
 });
 
 test('a provider error passes through unsealed', async () => {

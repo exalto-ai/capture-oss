@@ -29,6 +29,12 @@ logs it by default.
 The client's read timeout bounds the wait for the response headers and for
 each body chunk; when it passes, the transport raises ``httpx2.ReadTimeout``.
 
+``capture_context`` ties each artifact to the call that made it: the fields
+of the blocks a request is sent in arrive as ``artifact.context``::
+
+    with capture_context(conversation_id=conversation.id):
+        anthropic.messages.create(...)
+
 ``should_capture`` picks which requests to capture. A request it declines goes
 to the provider through ``forward`` instead, unrecorded, as it would without
 the SDK; by default ``forward`` is a plain ``httpx2.HTTPTransport``. The choice
@@ -40,6 +46,8 @@ from __future__ import annotations
 
 import inspect
 import logging
+from contextlib import contextmanager
+from contextvars import ContextVar
 from typing import Any, AsyncIterator, Awaitable, Callable, Iterator, Literal, Optional, Union
 
 import anyio
@@ -50,7 +58,7 @@ from ._native import Artifact, CaptureKey, CaptureTimeout, Client, Response
 Mode = Literal["witnessed", "notarized"]
 ShouldCapture = Callable[[httpx2.Request], bool]
 
-__all__ = ["AsyncCaptureTransport", "CaptureTransport", "Mode", "ShouldCapture"]
+__all__ = ["AsyncCaptureTransport", "CaptureTransport", "Mode", "ShouldCapture", "capture_context"]
 
 _log = logging.getLogger("exalto_capture")
 
@@ -58,6 +66,27 @@ _log = logging.getLogger("exalto_capture")
 # limiter of its own keeps those calls from exhausting the thread pool that
 # the rest of an async application shares.
 _ASYNC_CALLS = 256
+
+
+_context: ContextVar[Optional[dict[str, Any]]] = ContextVar("exalto_capture_context", default=None)
+
+
+@contextmanager
+def capture_context(**fields: Any) -> Iterator[None]:
+    """Hands ``fields`` to ``on_artifact``, as ``artifact.context``, with the
+    artifact of every request sent inside the block. Nested blocks merge, the
+    inner one winning. The fields are read when a request is sent and stay in
+    your process: they are never sent anywhere or written into the evidence.
+    """
+    token = _context.set({**(_context.get() or {}), **fields})
+    try:
+        yield
+    finally:
+        _context.reset(token)
+
+
+def _current_context() -> dict[str, Any]:
+    return dict(_context.get() or {})
 
 
 def _log_error(error: Exception) -> None:
@@ -113,12 +142,14 @@ class _Stream(httpx2.SyncByteStream):
         response: Response,
         request: httpx2.Request,
         timeout: Optional[float],
+        context: dict[str, Any],
         on_artifact: Callable[[Artifact], Any],
         on_error: Callable[[Exception], Any],
     ) -> None:
         self._response = response
         self._request = request
         self._timeout = timeout
+        self._context = context
         self._on_artifact = on_artifact
         self._on_error = on_error
 
@@ -127,7 +158,7 @@ class _Stream(httpx2.SyncByteStream):
             yield chunk
         if _sealable(self._response):
             try:
-                self._on_artifact(self._response.artifact())
+                self._on_artifact(self._response.artifact(self._context))
             except Exception as error:
                 self._on_error(error)
 
@@ -141,6 +172,7 @@ class _AsyncStream(httpx2.AsyncByteStream):
         response: Response,
         request: httpx2.Request,
         timeout: Optional[float],
+        context: dict[str, Any],
         on_artifact: Callable[[Artifact], Union[Any, Awaitable[Any]]],
         on_error: Callable[[Exception], Union[Any, Awaitable[Any]]],
         limiter: anyio.CapacityLimiter,
@@ -148,6 +180,7 @@ class _AsyncStream(httpx2.AsyncByteStream):
         self._response = response
         self._request = request
         self._timeout = timeout
+        self._context = context
         self._on_artifact = on_artifact
         self._on_error = on_error
         self._limiter = limiter
@@ -162,7 +195,8 @@ class _AsyncStream(httpx2.AsyncByteStream):
             yield chunk
         if _sealable(self._response):
             try:
-                result = self._on_artifact(await self._run(self._response.artifact))
+                artifact = await self._run(lambda: self._response.artifact(self._context))
+                result = self._on_artifact(artifact)
                 if inspect.isawaitable(result):
                     await result
             except Exception as error:
@@ -206,11 +240,12 @@ class CaptureTransport(httpx2.BaseTransport):
         if self._should_capture is not None and not self._should_capture(request):
             return self._forward.handle_request(request)
         timeout = _read_timeout(request)
+        context = _current_context()
         response = _send(self._client, self._mode, self._key, request, request.read(), timeout)
         return httpx2.Response(
             status_code=response.status,
             headers=response.headers,
-            stream=_Stream(response, request, timeout, self._on_artifact, self._on_error),
+            stream=_Stream(response, request, timeout, context, self._on_artifact, self._on_error),
         )
 
     def close(self) -> None:
@@ -250,6 +285,7 @@ class AsyncCaptureTransport(httpx2.AsyncBaseTransport):
             self._limiter = anyio.CapacityLimiter(_ASYNC_CALLS)
         body = await request.aread()
         timeout = _read_timeout(request)
+        context = _current_context()
         response = await anyio.to_thread.run_sync(
             lambda: _send(self._client, self._mode, self._key, request, body, timeout),
             abandon_on_cancel=True,
@@ -259,7 +295,13 @@ class AsyncCaptureTransport(httpx2.AsyncBaseTransport):
             status_code=response.status,
             headers=response.headers,
             stream=_AsyncStream(
-                response, request, timeout, self._on_artifact, self._on_error, self._limiter
+                response,
+                request,
+                timeout,
+                context,
+                self._on_artifact,
+                self._on_error,
+                self._limiter,
             ),
         )
 

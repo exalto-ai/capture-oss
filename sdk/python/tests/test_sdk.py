@@ -17,7 +17,7 @@ from exalto_capture import (
     Notary,
     Unavailable,
 )
-from exalto_capture.transport import AsyncCaptureTransport, CaptureTransport
+from exalto_capture.transport import AsyncCaptureTransport, CaptureTransport, capture_context
 
 # The public key of secp256k1 secret key 1, a valid SEC1 point.
 NOTARY_KEY = "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"
@@ -77,8 +77,9 @@ class FakeResponse:
             raise CaptureTimeout("too slow")
         return self._chunks.pop(0) if self._chunks else None
 
-    def artifact(self):
+    def artifact(self, context=None):
         self.artifacts_taken += 1
+        self.context = context
         if isinstance(self._artifact, Exception):
             raise self._artifact
         return self._artifact
@@ -209,6 +210,35 @@ class TransportTest(unittest.TestCase):
 
         self.assertEqual(asyncio.run(run()), {"forwarded": "/v1/messages/count_tokens"})
         self.assertIsNone(fake.sent)
+
+    def test_an_artifact_carries_the_context_its_request_was_sent_in(self):
+        fake = FakeClient(FakeResponse(200, [b"a", b"b"]))
+        transport = CaptureTransport(fake, mode="witnessed", on_artifact=lambda _: None)
+        with httpx2.Client(transport=transport) as http:
+            with capture_context(user="u1", conversation="c1"):
+                with capture_context(conversation="c2"):
+                    stream = http.stream("POST", "https://api.openai.com/v1/responses", content=b"{}")
+                    response = stream.__enter__()
+            # The body is read after both blocks have exited.
+            self.assertEqual(response.read(), b"ab")
+            stream.__exit__(None, None, None)
+            self.assertEqual(fake.response.context, {"user": "u1", "conversation": "c2"})
+
+            fake.response = FakeResponse(200, [b"{}"])
+            http.post("https://api.openai.com/v1/responses", content=b"{}")
+            self.assertEqual(fake.response.context, {})
+
+    def test_the_async_transport_reads_the_context_when_it_sends(self):
+        fake = FakeClient(FakeResponse(200, [b"{}"]))
+
+        async def run():
+            transport = AsyncCaptureTransport(fake, mode="witnessed", on_artifact=lambda _: None)
+            async with httpx2.AsyncClient(transport=transport) as http:
+                with capture_context(user="u2"):
+                    await http.post("https://api.openai.com/v1/responses", content=b"{}")
+
+        asyncio.run(run())
+        self.assertEqual(fake.response.context, {"user": "u2"})
 
     def test_the_read_timeout_bounds_each_wait(self):
         fake = FakeClient(FakeResponse(200, [b"a", TIMEOUT]))

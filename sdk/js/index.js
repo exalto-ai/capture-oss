@@ -1,5 +1,7 @@
 'use strict';
 
+const { AsyncLocalStorage } = require('node:async_hooks');
+
 const native = require('./binding.js');
 
 const SEALABLE = (status) => status >= 200 && status < 300;
@@ -32,6 +34,18 @@ for (const name of ['witness', 'capture', 'notarize']) {
 /** Exalto's notary, found through Exalto's Registry. */
 function exaltoNotary(apiKey, apiOrigin) {
   return native.exaltoNotary(apiKey, apiOrigin).catch(rethrowCoded);
+}
+
+const contextStorage = new AsyncLocalStorage();
+
+/**
+ * Runs `fn`, handing `fields` to `onArtifact`, as `artifact.context`, with the
+ * artifact of every request sent while it runs. Nested calls merge, the inner
+ * one winning. The fields are read when a request is sent and stay in your
+ * process: they are never sent anywhere or written into the evidence.
+ */
+function captureContext(fields, fn) {
+  return contextStorage.run({ ...contextStorage.getStore(), ...fields }, fn);
 }
 
 function logError(error) {
@@ -98,6 +112,7 @@ function createFetch(client, options) {
   if (typeof forward !== 'function') throw new TypeError('forward must be a function');
 
   return async function captureFetch(input, init) {
+    const context = { ...contextStorage.getStore() };
     const request = new Request(input, init);
     const { signal } = request;
     signal.throwIfAborted();
@@ -141,7 +156,7 @@ function createFetch(client, options) {
           open = false;
           if (SEALABLE(response.status)) {
             try {
-              await onArtifact(await response.artifact());
+              await onArtifact({ ...(await response.artifact()), context });
             } catch (error) {
               try {
                 await onError(error);
@@ -169,4 +184,4 @@ function createFetch(client, options) {
 // Spreading `require(...)` directly, rather than a variable holding it, is what
 // lets Node's ESM loader see the binding's names, so that
 // `import { Client } from '@exalto/capture'` works as well as the default import.
-module.exports = { ...require('./binding.js'), exaltoNotary, createFetch };
+module.exports = { ...require('./binding.js'), exaltoNotary, createFetch, captureContext };
