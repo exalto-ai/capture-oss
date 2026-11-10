@@ -74,9 +74,15 @@ function abortable(promise, signal, onLate) {
  * failure to produce or keep one never fails the model call. It goes to
  * `onError`, which logs it by default. Aborting the request's signal, or
  * cancelling its body, releases the provider connection and notary session.
+ *
+ * `shouldCapture` picks which requests to capture. A request it declines goes
+ * to the provider through `forward` instead, by default the global `fetch`,
+ * unrecorded, as it would without the SDK. The choice is made before anything
+ * is sent: a request this fetch tries to capture and can't is never sent
+ * unrecorded.
  */
 function createFetch(client, options) {
-  const { mode, key, onArtifact, onError = logError } = options ?? {};
+  const { mode, key, onArtifact, onError = logError, shouldCapture, forward = globalThis.fetch } = options ?? {};
   if (mode === 'witnessed') {
     if (key !== undefined) throw new TypeError('Witnessed capture produces a Sealed trace and takes no key');
   } else if (mode === 'notarized') {
@@ -86,11 +92,16 @@ function createFetch(client, options) {
   }
   if (typeof onArtifact !== 'function') throw new TypeError('onArtifact must be a function');
   if (typeof onError !== 'function') throw new TypeError('onError must be a function');
+  if (shouldCapture !== undefined && typeof shouldCapture !== 'function') {
+    throw new TypeError('shouldCapture must be a function');
+  }
+  if (typeof forward !== 'function') throw new TypeError('forward must be a function');
 
   return async function captureFetch(input, init) {
     const request = new Request(input, init);
     const { signal } = request;
     signal.throwIfAborted();
+    if (shouldCapture && !shouldCapture(request)) return forward(request);
     const call = {
       method: request.method,
       url: request.url,

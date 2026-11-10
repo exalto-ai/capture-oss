@@ -28,6 +28,12 @@ logs it by default.
 
 The client's read timeout bounds the wait for the response headers and for
 each body chunk; when it passes, the transport raises ``httpx2.ReadTimeout``.
+
+``should_capture`` picks which requests to capture. A request it declines goes
+to the provider through ``forward`` instead, unrecorded, as it would without
+the SDK; by default ``forward`` is a plain ``httpx2.HTTPTransport``. The choice
+is made before anything is sent: a request the transport tries to capture and
+can't is never sent unrecorded.
 """
 
 from __future__ import annotations
@@ -42,8 +48,9 @@ import httpx2
 from ._native import Artifact, CaptureKey, CaptureTimeout, Client, Response
 
 Mode = Literal["witnessed", "notarized"]
+ShouldCapture = Callable[[httpx2.Request], bool]
 
-__all__ = ["AsyncCaptureTransport", "CaptureTransport", "Mode"]
+__all__ = ["AsyncCaptureTransport", "CaptureTransport", "Mode", "ShouldCapture"]
 
 _log = logging.getLogger("exalto_capture")
 
@@ -168,7 +175,8 @@ class _AsyncStream(httpx2.AsyncByteStream):
 
 
 class CaptureTransport(httpx2.BaseTransport):
-    """Sends every request through ``client`` in ``mode``.
+    """Sends every request through ``client`` in ``mode``, or with
+    ``should_capture``, every request it accepts.
 
     ``"witnessed"`` hands ``on_artifact`` a Sealed ``.llmtrace``;
     ``"notarized"`` hands it a ``.llmcapture`` encrypted under ``key``.
@@ -182,6 +190,8 @@ class CaptureTransport(httpx2.BaseTransport):
         on_artifact: Callable[[Artifact], Any],
         key: Optional[CaptureKey] = None,
         on_error: Callable[[Exception], Any] = _log_error,
+        should_capture: Optional[ShouldCapture] = None,
+        forward: Optional[httpx2.BaseTransport] = None,
     ) -> None:
         _checked(mode, key)
         self._client = client
@@ -189,8 +199,12 @@ class CaptureTransport(httpx2.BaseTransport):
         self._key = key
         self._on_artifact = on_artifact
         self._on_error = on_error
+        self._should_capture = should_capture
+        self._forward = forward or (httpx2.HTTPTransport() if should_capture else None)
 
     def handle_request(self, request: httpx2.Request) -> httpx2.Response:
+        if self._should_capture is not None and not self._should_capture(request):
+            return self._forward.handle_request(request)
         timeout = _read_timeout(request)
         response = _send(self._client, self._mode, self._key, request, request.read(), timeout)
         return httpx2.Response(
@@ -198,6 +212,10 @@ class CaptureTransport(httpx2.BaseTransport):
             headers=response.headers,
             stream=_Stream(response, request, timeout, self._on_artifact, self._on_error),
         )
+
+    def close(self) -> None:
+        if self._forward is not None:
+            self._forward.close()
 
 
 class AsyncCaptureTransport(httpx2.AsyncBaseTransport):
@@ -212,6 +230,8 @@ class AsyncCaptureTransport(httpx2.AsyncBaseTransport):
         on_artifact: Callable[[Artifact], Union[Any, Awaitable[Any]]],
         key: Optional[CaptureKey] = None,
         on_error: Callable[[Exception], Union[Any, Awaitable[Any]]] = _log_error,
+        should_capture: Optional[ShouldCapture] = None,
+        forward: Optional[httpx2.AsyncBaseTransport] = None,
     ) -> None:
         _checked(mode, key)
         self._client = client
@@ -219,9 +239,13 @@ class AsyncCaptureTransport(httpx2.AsyncBaseTransport):
         self._key = key
         self._on_artifact = on_artifact
         self._on_error = on_error
+        self._should_capture = should_capture
+        self._forward = forward or (httpx2.AsyncHTTPTransport() if should_capture else None)
         self._limiter: Optional[anyio.CapacityLimiter] = None
 
     async def handle_async_request(self, request: httpx2.Request) -> httpx2.Response:
+        if self._should_capture is not None and not self._should_capture(request):
+            return await self._forward.handle_async_request(request)
         if self._limiter is None:
             self._limiter = anyio.CapacityLimiter(_ASYNC_CALLS)
         body = await request.aread()
@@ -238,3 +262,7 @@ class AsyncCaptureTransport(httpx2.AsyncBaseTransport):
                 response, request, timeout, self._on_artifact, self._on_error, self._limiter
             ),
         )
+
+    async def aclose(self) -> None:
+        if self._forward is not None:
+            await self._forward.aclose()

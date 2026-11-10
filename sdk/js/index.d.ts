@@ -25,6 +25,14 @@ type ArtifactHandlers = {
   onArtifact: (artifact: Artifact) => unknown;
   /** Receives a failure to produce or keep an artifact; logs it by default. */
   onError?: (error: unknown) => unknown;
+  /**
+   * Whether to capture `request`; don't read its body. A request it declines
+   * goes to the provider through `forward`, unrecorded. Without it, every
+   * request is captured.
+   */
+  shouldCapture?: (request: Request) => boolean;
+  /** Sends the requests `shouldCapture` declines; the global `fetch` by default. */
+  forward?: typeof fetch;
 };
 
 export type CreateFetchOptions =
@@ -39,5 +47,7 @@ export type CreateFetchOptions =
  * produces no artifact. A failure to produce or keep an artifact never fails
  * the model call; it goes to `onError`. Aborting the request's signal, or
  * cancelling its body, releases the provider connection and notary session.
+ * A request `shouldCapture` declines goes through `forward`, unrecorded; a
+ * request this fetch tries to capture and can't is never sent unrecorded.
  */
 export function createFetch(client: CaptureClient, options: CreateFetchOptions): typeof fetch;

@@ -166,6 +166,50 @@ class TransportTest(unittest.TestCase):
             self.assertEqual(http.post("https://api.openai.com/v1/responses", content=b"{}").status_code, 200)
         self.assertEqual([str(error) for error in errors], ["bucket unavailable"])
 
+    def test_a_request_should_capture_declines_goes_to_forward_unrecorded(self):
+        fake = FakeClient(FakeResponse(200, [b"{}"]))
+        forwarded = []
+
+        def provider(request):
+            forwarded.append((request.method, request.url.path))
+            return httpx2.Response(200, json={"data": []})
+
+        artifacts = []
+        transport = CaptureTransport(
+            fake,
+            mode="witnessed",
+            on_artifact=artifacts.append,
+            should_capture=lambda request: request.method == "POST",
+            forward=httpx2.MockTransport(provider),
+        )
+        with httpx2.Client(transport=transport) as http:
+            self.assertEqual(http.get("https://api.openai.com/v1/models").json(), {"data": []})
+            http.post("https://api.openai.com/v1/responses", content=b"{}")
+        self.assertEqual(forwarded, [("GET", "/v1/models")])
+        self.assertEqual(fake.sent[:3], ("witness", "POST", "https://api.openai.com/v1/responses"))
+        self.assertEqual(artifacts, ["artifact"])
+
+    def test_the_async_transport_forwards_what_should_capture_declines(self):
+        fake = FakeClient(FakeResponse(200, [b"{}"]))
+
+        async def provider(request):
+            return httpx2.Response(200, json={"forwarded": request.url.path})
+
+        async def run():
+            transport = AsyncCaptureTransport(
+                fake,
+                mode="witnessed",
+                on_artifact=lambda _: None,
+                should_capture=lambda request: not request.url.path.endswith("/count_tokens"),
+                forward=httpx2.MockTransport(provider),
+            )
+            async with httpx2.AsyncClient(transport=transport) as http:
+                response = await http.post("https://api.anthropic.com/v1/messages/count_tokens", content=b"{}")
+                return response.json()
+
+        self.assertEqual(asyncio.run(run()), {"forwarded": "/v1/messages/count_tokens"})
+        self.assertIsNone(fake.sent)
+
     def test_the_read_timeout_bounds_each_wait(self):
         fake = FakeClient(FakeResponse(200, [b"a", TIMEOUT]))
         transport = CaptureTransport(fake, mode="witnessed", on_artifact=print)

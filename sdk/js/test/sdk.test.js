@@ -112,6 +112,31 @@ test('createFetch streams the body, then hands over the artifact', async () => {
   assert.equal(request.body.toString(), '{"stream":true}');
 });
 
+test('a request shouldCapture declines goes to forward, unrecorded', async () => {
+  const client = fakeClient(200, ['{}']);
+  const forwarded = [];
+  const forward = async (request) => {
+    forwarded.push([request.method, new URL(request.url).pathname]);
+    return new Response('{"data":[]}', { status: 200 });
+  };
+  const artifacts = [];
+  const captureFetch = createFetch(client, {
+    mode: 'witnessed',
+    onArtifact: (a) => artifacts.push(a),
+    shouldCapture: (request) => request.method === 'POST',
+    forward,
+  });
+  assert.deepEqual(await (await captureFetch('https://api.openai.com/v1/models')).json(), { data: [] });
+  await (await captureFetch('https://api.openai.com/v1/responses', { method: 'POST', body: '{}' })).text();
+  assert.deepEqual(forwarded, [['GET', '/v1/models']]);
+  assert.deepEqual(
+    client.sent.map(([kind, request]) => [kind, request.url]),
+    [['witness', 'https://api.openai.com/v1/responses']],
+  );
+  assert.deepEqual(artifacts, ['artifact']);
+  assert.throws(() => createFetch(client, { mode: 'witnessed', onArtifact() {}, shouldCapture: true }), TypeError);
+});
+
 test('a provider error passes through unsealed', async () => {
   const client = fakeClient(429, ['{"error":"rate"}']);
   const artifacts = [];
