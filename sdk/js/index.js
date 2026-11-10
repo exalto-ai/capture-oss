@@ -1,7 +1,5 @@
 'use strict';
 
-const native = require('./binding.js');
-
 const SEALABLE = (status) => status >= 200 && status < 300;
 const NULL_BODY_STATUSES = new Set([101, 204, 205, 304]);
 
@@ -126,4 +124,7 @@ function createFetch(client, options) {
   };
 }
 
-module.exports = { ...native, createFetch };
+// Spreading `require(...)` directly, rather than a variable holding it, is what
+// lets Node's ESM loader see the binding's names, so that
+// `import { Client } from '@exalto/capture'` works as well as the default import.
+module.exports = { ...require('./binding.js'), createFetch };

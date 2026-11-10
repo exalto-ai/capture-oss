@@ -31,6 +31,14 @@ test('only POST to a fixed provider is sent', async () => {
   }
 });
 
+test('an ES module can import every export by name', async () => {
+  const esm = await import('../index.js');
+  for (const name of ['CaptureKey', 'Client', 'Notary', 'createFetch', 'exaltoNotary', 'verify']) {
+    assert.equal(typeof esm[name], 'function', name);
+    assert.equal(esm[name], esm.default[name], name);
+  }
+});
+
 test('verify rejects bytes that are not a trace', async () => {
   await assert.rejects(verify(Buffer.from('not a trace'), NOTARY_KEY));
 });

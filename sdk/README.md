@@ -74,9 +74,7 @@ Node.js (an ES module), with any client that accepts a `fetch`:
 
 ```js
 import OpenAI from 'openai';
-import capture from '@exalto/capture';
-
-const { Client, CaptureKey, createFetch, exaltoNotary } = capture;
+import { CaptureKey, Client, createFetch, exaltoNotary } from '@exalto/capture';
 
 const client = new Client(await exaltoNotary(process.env.EXALTO_API_KEY));
 const key = CaptureKey.fromBytes(Buffer.from(process.env.CAPTURE_KEY, 'base64'));
