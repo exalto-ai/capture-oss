@@ -17,7 +17,7 @@ seams, but those implementations are not part of this workspace.
 | --- | --- | --- | --- |
 | Provider client | yes | provider credential | Sends an ordinary provider request to a fixed route, or through an SDK in its own process |
 | SDK (`exalto-capture`) | yes | none; returns each artifact to the caller as bytes, a `.llmcapture` encrypted under the caller's 32-byte capture key | Runs the capture service in the caller's process: shapes the request for a fixed provider host, captures, seals on request, and verifies |
-| `capture-server` | yes | shared vault key, PostgreSQL metadata, S3 artifacts, pinned Registry | Proxies requests, captures private state, notarizes, and verifies on replicated deployments, with provider requests authenticated as organizations, authenticated administration, and an optional private customer API through which capture-api acts for any organization |
+| `capture-server` | yes | shared vault key, PostgreSQL metadata, S3 artifacts | Proxies requests, captures private state, notarizes, and verifies on replicated deployments, with provider requests authenticated as organizations, authenticated administration, and an optional private customer API through which capture-api acts for any organization |
 | Dashboard | only safe metadata store fields and deliberately opened notarized disclosures | browser session preference | Uses the capture server's administration API |
 | `capture-notary` | no in Notarized sessions; yes, in memory only, in Witnessed sessions | signing key | Resolves the provider, relays encrypted TLS records or Witnessed plaintext, witnesses sessions, and completes proof work |
 | Model provider | yes | provider-owned | Serves an ordinary HTTPS request without a Notary integration |
@@ -99,7 +99,7 @@ privacy guarantee for sealing that costs one signature regardless of size.
    request and response.
 5. The daemon recomputes the same redacted disclosure and checks the receipt.
 6. The daemon verifies the receipt under its trusted notary key, the
-   configured key or a Registry key trusted at the receipt's time, and stores
+   configured key or a key listed in the Registry, and stores
    the Witnessed `.llmtrace` as the Trace's only artifact. No `.llmcapture`
    is written, because nothing remains to prove later. A non-2xx provider
    response still reaches the caller, but, as in Notarized mode, it cannot
@@ -173,13 +173,12 @@ An explicit self-hosted configuration pairs `notary.endpoint` and
 TLS on the notary transport authenticates the network endpoint but does not
 replace it.
 
-When no explicit notary is configured, the capture server retrieves the
-versioned Registry from its configured public HTTPS origin. The JSON document is
-not separately signed. Replicas pin accepted generations in shared PostgreSQL
-metadata, reject rollback or conflicting same-generation documents, and
-remember revocations monotonically. Authenticated HTTPS and that pinned state
-are therefore part of Registry distribution, while the notary signing key
-remains the evidence trust anchor.
+When no explicit notary is configured, the capture server reads the Registry
+from its configured public HTTPS origin. The JSON document is not separately
+signed, so authenticated HTTPS is part of its distribution, while the notary
+signing key remains the evidence trust anchor. Each replica keeps its own copy
+in memory and reads it again when evidence is signed by a key the copy doesn't
+list and before every seal.
 
 Full package verification checks:
 
@@ -197,7 +196,7 @@ Full package verification checks:
 Verification is offline after the trust source is available. It does not
 contact a live provider or notary. Read [Artifact formats](artifact-formats.md)
 for the archive contract and [Notary key lifecycle](notary-key-lifecycle.md)
-for hosted-directory rotation and revocation.
+for the Registry, key rotation, and compromise.
 
 ## Authenticated, derived, and observed data
 

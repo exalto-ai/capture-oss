@@ -22,7 +22,9 @@ use bytes::{Bytes, BytesMut};
 use capture_core::{
     CaptureCheckpoint, CaptureConfig, NotaryAdmissionRejection, attestable_request_header_bytes,
     capture_streaming_request, chunked_request_body, notary_admission_error,
-    registry::NotaryEndpoint, vault::Vault, witness::WitnessedExchange,
+    registry::{NotaryEndpoint, Registry},
+    vault::Vault,
+    witness::WitnessedExchange,
 };
 use http_body_util::BodyExt as _;
 use sha2::{Digest as _, Sha256};
@@ -33,7 +35,7 @@ use crate::{
     admission::{Admission, AdmissionTicket, hosted_admission_failure},
     artifact_store::{ArtifactKey, ArtifactKind, ArtifactStoreError},
     capture_ledger::{CaptureEntry, CaptureLedger},
-    metadata::{CaptureCompletion, CaptureMode, EvidenceKind, NewTrace, RegistrySnapshot},
+    metadata::{CaptureCompletion, CaptureMode, EvidenceKind, NewTrace},
     metadata_store::MetadataStoreError,
     providers::{Provider, ProvidersConfig, provider_route},
 };
@@ -79,12 +81,13 @@ pub trait NotaryTrust: Send + Sync {
         checkpoint: &CaptureCheckpoint,
     ) -> Result<(Vec<u8>, NotaryEndpoint)>;
 
-    /// The notary key the host configures explicitly, if any.
-    fn configured_key(&self) -> Result<Option<Vec<u8>>>;
+    /// The notaries the host trusts now: its configured notary, or Exalto's
+    /// Registry. An error means it is not available yet.
+    async fn registry(&self) -> Result<Registry>;
 
-    /// The Registry pinned in metadata the host's replicas share. An error
-    /// means it is not available yet.
-    async fn shared_registry(&self) -> Result<RegistrySnapshot>;
+    /// `configuration` when the host configures its notary, or `registry`
+    /// for Exalto's Registry.
+    fn trust_source(&self) -> &'static str;
 }
 
 /// Everything provider request handling needs from its host.
@@ -1625,12 +1628,12 @@ mod tests {
             bail!("no notary is trusted in this test")
         }
 
-        fn configured_key(&self) -> Result<Option<Vec<u8>>> {
-            Ok(None)
+        async fn registry(&self) -> Result<Registry> {
+            bail!("no Registry is read in this test")
         }
 
-        async fn shared_registry(&self) -> Result<RegistrySnapshot> {
-            bail!("no Registry is pinned in this test")
+        fn trust_source(&self) -> &'static str {
+            "registry"
         }
     }
 

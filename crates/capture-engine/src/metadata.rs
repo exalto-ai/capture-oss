@@ -3,7 +3,6 @@
 use serde::{Deserialize, Serialize};
 
 pub use capture_core::archive::EvidenceKind;
-use capture_core::registry::RegistryRecord;
 
 /// How the daemon admits new provider requests. This is the one durable
 /// capture setting; each request snapshots it once.
@@ -290,18 +289,6 @@ pub struct MetadataCounts {
     pub needs_attention: u64,
     pub capturing: u64,
     pub capture_failed: u64,
-}
-
-/// One validated, server-wide Registry revision plus every retained
-/// historical key needed to verify older traces.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct RegistrySnapshot {
-    pub generation: u64,
-    pub registry_sha256: String,
-    pub registry_source: String,
-    pub active_key_id: String,
-    pub records: Vec<RegistryRecord>,
 }
 
 /// Converts user search text into the deliberately small phrase/token subset

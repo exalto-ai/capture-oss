@@ -24,7 +24,7 @@ bucket = "capture-artifacts"
 
 Run `capture-server migrate --config /etc/capture/config.toml` once, then start two or more identical replicas. Every replica receives the same config, token file or capture service token, database, S3 namespace, admin password, and exact 32-byte `CAPTURE_SERVER_CLUSTER_VAULT_KEY_FILE`. `CAPTURE_SERVER_CLUSTER_INSTANCE_ID` is optional when the scheduler already provides a useful unique hostname.
 
-Use `GET /healthz` for process liveness and `GET /readyz` for traffic routing. Readiness checks the replica lease, PostgreSQL, the S3 namespace, and the shared Registry snapshot. On SIGTERM a replica becomes unready, drains admitted streams for a bounded interval, then releases its lease.
+Use `GET /healthz` for process liveness and `GET /readyz` for traffic routing. Readiness checks the replica lease, PostgreSQL, the S3 namespace, and, while capture is on without a configured notary, that the replica can read Exalto's Registry. On SIGTERM a replica becomes unready, drains admitted streams for a bounded interval, then releases its lease.
 
 Quiesce all replicas for a coordinated PostgreSQL/S3 backup. Preserve the cluster vault key with that backup.
 

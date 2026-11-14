@@ -29,18 +29,18 @@ use super::{
     auth,
     authentication::{self, AuthenticationError, Authenticator, HeaderError},
     http_client_builder,
-    registry::{fetch_registry_from, resolve_notary},
+    registry::fetch_registry_from,
 };
 use crate::{
     CaptureCheckpoint,
     cluster_runtime::{ClusterCaptureLedger, ClusterNotarizationQueue, ClusterRuntime, Lifecycle},
     config::{AuthenticationConfig, CapturedConfig, load_captured_config},
     customer_api::{CustomerApiState, CustomerApiToken},
-    metadata::{CaptureMode, RegistrySnapshot},
+    metadata::CaptureMode,
     metadata_store::MetadataStoreError,
     organization::OrganizationId,
     persistence::{Persistence, default_organization},
-    registry::NotaryEndpoint,
+    registry::{NotaryEndpoint, Registry},
     s3_artifact_store::S3ArtifactStore,
     vault::Vault,
     witness::WitnessedExchange,
@@ -202,13 +202,36 @@ fn organization_storage(
     )
 }
 
-/// Finds the trusted notary: the configured endpoint, or the hosted Registry
-/// pinned in shared metadata. The first success is kept, so every
-/// organization's capture setting shares one discovery.
+/// The notaries this server trusts: its configured notary, or else this
+/// replica's copy of Exalto's Registry, read the first time it is needed.
+pub(crate) async fn trusted_registry(
+    config: &CapturedConfig,
+    cluster_runtime: &ClusterRuntime,
+) -> Result<Registry> {
+    match cluster_runtime.registry_copy() {
+        Some(registry) if config.notary.endpoint.is_none() => Ok(registry),
+        _ => reread_registry(config, cluster_runtime).await,
+    }
+}
+
+/// The notaries this server trusts, with Exalto's Registry read again.
+async fn reread_registry(
+    config: &CapturedConfig,
+    cluster_runtime: &ClusterRuntime,
+) -> Result<Registry> {
+    if let Some(registry) = config.configured_registry()? {
+        return Ok(registry);
+    }
+    let registry = fetch_registry_from(&auth::environment_api_origin()?).await?;
+    cluster_runtime.set_registry_copy(registry.clone());
+    Ok(registry)
+}
+
+/// Finds where new sessions connect: the configured endpoint, or the
+/// Registry's capture endpoint.
 pub(crate) struct DaemonNotaryDiscovery {
     config: Arc<CapturedConfig>,
     cluster_runtime: Arc<ClusterRuntime>,
-    discovered: tokio::sync::Mutex<Option<NotaryEndpoint>>,
 }
 
 impl DaemonNotaryDiscovery {
@@ -216,7 +239,6 @@ impl DaemonNotaryDiscovery {
         Self {
             config,
             cluster_runtime,
-            discovered: tokio::sync::Mutex::new(None),
         }
     }
 }
@@ -224,17 +246,14 @@ impl DaemonNotaryDiscovery {
 #[async_trait::async_trait]
 impl NotaryDiscovery for DaemonNotaryDiscovery {
     async fn discover(&self) -> Result<NotaryEndpoint> {
-        let mut discovered = self.discovered.lock().await;
-        if let Some(notary) = discovered.as_ref() {
-            return Ok(notary.clone());
-        }
-        let notary = initialize_notary(&self.config, &self.cluster_runtime).await?;
-        *discovered = Some(notary.clone());
-        Ok(notary)
+        Ok(trusted_registry(&self.config, &self.cluster_runtime)
+            .await?
+            .capture_endpoint)
     }
 }
 
-/// The configured notary key, or else the Registry pinned in shared metadata.
+/// The configured notary, or else Exalto's Registry, which is read again when
+/// evidence is signed by a key the copy doesn't list and before every seal.
 pub(crate) struct DaemonNotaryTrust {
     config: Arc<CapturedConfig>,
     cluster_runtime: Arc<ClusterRuntime>,
@@ -251,22 +270,18 @@ impl DaemonNotaryTrust {
 
 #[async_trait::async_trait]
 impl NotaryTrust for DaemonNotaryTrust {
-    /// Finds the trusted notary key that signed a witness receipt: the
-    /// explicitly configured key, or a Registry key trusted at the receipt's
-    /// time.
+    /// The trusted key that signed a witness receipt. A key Exalto published
+    /// after this replica read the Registry signs evidence that would
+    /// otherwise be lost, for a provider call already made, so a key the copy
+    /// doesn't list sends it to read the Registry again.
     async fn witness_key(&self, exchange: &WitnessedExchange) -> Result<Vec<u8>> {
-        if let Some(key) = self.config.notary_public_key()? {
-            exchange.verify(&key)?;
-            return Ok(key);
+        let registry = trusted_registry(&self.config, &self.cluster_runtime).await?;
+        match registry.witness_key(exchange) {
+            Ok(key) => Ok(key),
+            Err(_) => reread_registry(&self.config, &self.cluster_runtime)
+                .await?
+                .witness_key(exchange),
         }
-        let records = self
-            .cluster_runtime
-            .metadata()
-            .registry_snapshot()
-            .await?
-            .context("shared Registry is not pinned")?
-            .records;
-        super::registry::witness_key_from_records(&records, exchange)
     }
 
     /// A server never reuses an existing trace package, which is the only
@@ -275,46 +290,27 @@ impl NotaryTrust for DaemonNotaryTrust {
         anyhow::bail!("a capture server does not reuse existing trace packages")
     }
 
+    /// Sealing may run long after the capture, so Exalto's Registry is read
+    /// again: the notary that captured it may have moved or stopped sealing.
     async fn sealing_notary(
         &self,
         checkpoint: &CaptureCheckpoint,
     ) -> Result<(Vec<u8>, NotaryEndpoint)> {
-        match (
-            self.config.notary_public_key()?,
-            self.config.notary_endpoint()?,
-        ) {
-            (Some(key), Some(endpoint)) => {
-                checkpoint.verify_notary_key(&key)?;
-                Ok((key, endpoint))
-            }
-            (None, None) => {
-                let (registry, source) =
-                    fetch_registry_from(&auth::environment_api_origin()?).await?;
-                let trust = self
-                    .cluster_runtime
-                    .metadata()
-                    .pin_registry(registry, source.as_str())
-                    .await?;
-                let (key, record) =
-                    super::registry::registry_record_for_checkpoint(&trust, checkpoint)?;
-                let endpoint = resolve_notary(&record).await?;
-                Ok((key, endpoint))
-            }
-            _ => anyhow::bail!("notary endpoint and public key configuration are inconsistent"),
-        }
-    }
-
-    fn configured_key(&self) -> Result<Option<Vec<u8>>> {
-        self.config.notary_public_key()
-    }
-
-    /// Replicas verify against the Registry pinned in shared metadata.
-    async fn shared_registry(&self) -> Result<RegistrySnapshot> {
-        self.cluster_runtime
-            .metadata()
-            .registry_snapshot()
+        reread_registry(&self.config, &self.cluster_runtime)
             .await?
-            .context("shared Registry is not pinned")
+            .sealing_notary(checkpoint)
+    }
+
+    async fn registry(&self) -> Result<Registry> {
+        trusted_registry(&self.config, &self.cluster_runtime).await
+    }
+
+    fn trust_source(&self) -> &'static str {
+        if self.config.notary.endpoint.is_some() {
+            "configuration"
+        } else {
+            "registry"
+        }
     }
 }
 
@@ -379,10 +375,9 @@ pub async fn run(args: ProxyArgs) -> Result<()> {
     // `persistence.metadata` is its view.
     let operator = default_organization();
     let operator_stored_mode = persistence.metadata.capture_mode().await?;
-    // A configured notary is known without any network request. The hosted
-    // Registry is fetched at startup only when the operator organization
-    // captures, because operator readiness then needs the pinned Registry;
-    // any other organization discovers the notary through the same shared
+    // A configured notary is known without any network request. Exalto's
+    // Registry is read at startup only when the operator organization
+    // captures; any other organization discovers the notary through the same
     // discovery on its first request in a capture mode.
     let notary = if operator_stored_mode != CaptureMode::Off || config.notary.endpoint.is_some() {
         Some(discovery.discover().await?)
@@ -774,29 +769,6 @@ async fn system_shutdown_signal() {
     tokio::select! {
         () = interrupt => {},
         () = terminate => {},
-    }
-}
-
-async fn initialize_notary(
-    config: &CapturedConfig,
-    cluster_runtime: &ClusterRuntime,
-) -> Result<NotaryEndpoint> {
-    match config.notary_endpoint()? {
-        Some(notary) => Ok(notary),
-        None => {
-            let (registry, registry_source_url) =
-                fetch_registry_from(&super::auth::environment_api_origin()?).await?;
-            let snapshot = cluster_runtime
-                .metadata()
-                .pin_registry(registry, registry_source_url.as_str())
-                .await?;
-            let active = snapshot
-                .records
-                .iter()
-                .find(|record| record.key_id == snapshot.active_key_id)
-                .context("shared Registry is missing its active endpoint")?;
-            resolve_notary(active).await
-        }
     }
 }
 

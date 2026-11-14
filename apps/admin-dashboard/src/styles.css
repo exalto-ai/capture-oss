@@ -331,33 +331,20 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible { outline-color:
 
 .capture-mode-setting { margin-top: 0; }
 .settings-notaries { grid-column: 1 / -1; border-right: 0; }
-.settings-notaries-heading { display: flex; align-items: end; justify-content: space-between; gap: 16px; }
-.settings-notaries-heading > div h2 { margin-top: 6px; }
-.settings-notaries-heading > p { color: var(--muted); font: 500 11px var(--mono); text-transform: uppercase; letter-spacing: .05em; }
 .settings-notaries-note { max-width: 720px; margin: 12px 0 20px; }
 .settings-notary-source { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); margin: 0; border-top: 1px solid var(--rule); border-left: 1px solid var(--rule); }
 .settings-notary-source > div { min-width: 0; padding: 10px 12px; border-right: 1px solid var(--rule); border-bottom: 1px solid var(--rule); }
 .settings-notary-source dt, .local-notary-facts dt { color: var(--muted); font: 600 11px var(--ui-font); text-transform: uppercase; letter-spacing: .035em; }
 .settings-notary-source dd, .local-notary-facts dd { margin: 4px 0 0; overflow-wrap: anywhere; font-size: 12px; }
-.explicit-notary-note { margin: 0; padding: 10px 12px; border: 1px solid var(--rule); border-top: 0; color: var(--muted); }
 .local-notary-list { margin-top: 20px; border: 1px solid var(--rule); }
 .local-notary-record { padding: 16px 18px 20px; border-bottom: 1px solid var(--rule); }
 .local-notary-record:last-child { border-bottom: 0; }
-.local-notary-record > header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-.local-notary-record h3 { margin: 18px 0 6px; font-family: var(--ui-font); font-size: 18px; font-weight: 600; letter-spacing: -.015em; }
-.local-notary-record > p { max-width: 760px; margin: 0 0 16px; color: var(--muted); font-size: 12px; }
-.local-notary-state, .local-notary-selected { display: inline-flex; align-items: center; gap: 7px; color: var(--muted); font: 600 11px var(--ui-font); text-transform: uppercase; letter-spacing: .035em; }
-.local-notary-state i { width: 8px; height: 8px; border: 1px solid currentColor; }
-.local-notary-state--active { color: var(--action-ink); }
-.local-notary-state--active i { border-color: var(--action); background: var(--action); }
-.local-notary-state--revoked { color: var(--danger); }
-.local-notary-state--revoked i { background: var(--danger); }
-.local-notary-facts { display: grid; grid-template-columns: 2fr .55fr repeat(3, 1fr); margin: 0; border-top: 1px solid var(--rule); border-left: 1px solid var(--rule); }
+.local-notary-record h3 { margin: 0 0 10px; font-family: var(--ui-font); font-size: 18px; font-weight: 600; letter-spacing: -.015em; }
+.local-notary-facts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); margin: 0; border-top: 1px solid var(--rule); border-left: 1px solid var(--rule); }
 .local-notary-facts > div { min-width: 0; padding: 9px 10px; border-right: 1px solid var(--rule); border-bottom: 1px solid var(--rule); }
-.local-notary-key { display: grid; grid-template-columns: 150px minmax(0, 1fr) 34px; min-height: 36px; align-items: center; margin-top: -1px; border: 1px solid var(--rule); }
-.local-notary-key > span { padding-left: 10px; color: var(--muted); font: 600 11px var(--ui-font); text-transform: uppercase; letter-spacing: .035em; }
+.local-notary-key { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .local-notary-key code { min-width: 0; overflow: hidden; color: var(--ink); font: 500 11px var(--mono); text-overflow: ellipsis; white-space: nowrap; }
-.local-notary-key .mantine-ActionIcon-root { color: var(--ink); }
+.local-notary-key .mantine-ActionIcon-root { flex: none; color: var(--ink); }
 .local-notary-loading { display: grid; border: 1px solid var(--rule); }
 .local-notary-loading i { height: 70px; border-bottom: 1px solid var(--rule); background: var(--subtle); }
 .local-notary-loading i:last-child { border-bottom: 0; }
@@ -376,9 +363,6 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible { outline-color:
 @media (max-width: 820px) {
   .settings-notary-source, .local-notary-facts { grid-template-columns: 1fr; }
   .local-notary-record { padding-inline: 12px; }
-  .local-notary-key { grid-template-columns: 1fr 34px; padding-left: 10px; }
-  .local-notary-key > span { grid-column: 1 / -1; padding: 8px 0 2px; }
-  .local-notary-record > header { align-items: start; flex-direction: column; }
 }
 
 /* Capture rows deliberately expose only the values used to choose a record. */
@@ -550,7 +534,6 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible { outline-color:
 .local-notary-list { border: 0; }
 .local-notary-record { border-bottom: 0; }
 .local-notary-record + .local-notary-record { border-top: 1px solid var(--rule); }
-.local-notary-key { margin-top: 12px; }
 
 /* Exalto Capture visual alignment. */
 ::selection { background: var(--action-soft); color: var(--ink); }
@@ -679,11 +662,9 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible { outline-color:
 
 .status-label--ready,
 .trace-lifecycle-label--ready,
-.event-icon--ready,
-.local-notary-state--active { color: var(--success-ink); }
+.event-icon--ready { color: var(--success-ink); }
 .status-label--ready > span,
-.lifecycle--ready > span,
-.local-notary-state--active i {
+.lifecycle--ready > span {
   border-color: var(--success);
   background: var(--success);
 }

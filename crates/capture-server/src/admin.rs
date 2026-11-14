@@ -128,8 +128,7 @@ impl AdminState {
 async fn probe_dependencies(state: &AdminState) -> DependencyProbeResult {
     let persistence = &state.persistence;
     let cluster_runtime = &state.cluster_runtime;
-    let require_shared_trust =
-        state.capture_mode.enabled() && state.config.notary.endpoint.is_none();
+    let require_registry = state.capture_mode.enabled() && state.config.notary.endpoint.is_none();
     state
         .dependency_probe
         .check(async {
@@ -151,15 +150,10 @@ async fn probe_dependencies(state: &AdminState) -> DependencyProbeResult {
             {
                 return Err("replica_lease_not_ready");
             }
-            if require_shared_trust
-                && cluster_runtime
-                    .metadata()
-                    .registry_snapshot()
+            if require_registry {
+                crate::service::proxy::trusted_registry(&state.config, cluster_runtime)
                     .await
-                    .map_err(|_| "registry_not_ready")?
-                    .is_none()
-            {
-                return Err("registry_not_ready");
+                    .map_err(|_| "registry_not_ready")?;
             }
             Ok(())
         })
@@ -519,21 +513,12 @@ async fn status(State(state): State<AdminState>) -> Result<Json<StatusResponse>,
     }))
 }
 
-#[utoipa::path(get, path = "/v1/notaries", summary = "List Notaries", description = "Returns a safe read-only projection of the Registry pinned in shared metadata or the explicitly configured self-hosted endpoint and key. Registry membership describes allowed protocol use and does not report endpoint health.", responses((status = 200, body = NotariesResponse), (status = 401, body = ErrorEnvelope), (status = 500, body = ErrorEnvelope), (status = 503, body = ErrorEnvelope)), security(("basicAuth" = [])), tag = "admin")]
+#[utoipa::path(get, path = "/v1/notaries", summary = "List Notaries", description = "Returns the notaries this server trusts: the explicitly configured self-hosted endpoint and key, or Exalto's Registry. Registry membership describes which keys are trusted and does not report endpoint health.", responses((status = 200, body = NotariesResponse), (status = 401, body = ErrorEnvelope), (status = 503, body = ErrorEnvelope)), security(("basicAuth" = [])), tag = "admin")]
 async fn notaries(State(state): State<AdminState>) -> Result<Json<NotariesResponse>, ApiError> {
-    let shared = if state.config.notary.endpoint.is_none() {
-        state
-            .cluster_runtime
-            .metadata()
-            .registry_snapshot()
-            .await
-            .map_err(|_| ApiError::service_unavailable("registry_not_ready"))?
-    } else {
-        None
-    };
-    NotariesResponse::for_config(&state.config, shared)
-        .map(Json)
-        .map_err(|_| ApiError::internal("registry_state_invalid"))
+    let registry = crate::service::proxy::trusted_registry(&state.config, &state.cluster_runtime)
+        .await
+        .map_err(|_| ApiError::service_unavailable("registry_not_ready"))?;
+    Ok(Json(NotariesResponse::new(&state.config, registry)))
 }
 
 #[utoipa::path(get, path = "/v1/providers", summary = "List supported providers", description = "Returns only captured's explicit provider adapters, their pinned upstream hosts, client API styles, proxy base URLs, and configured readiness.", responses((status = 200, body = ProvidersResponse), (status = 401, body = ErrorEnvelope)), security(("basicAuth" = [])), tag = "admin")]

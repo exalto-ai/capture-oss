@@ -1,132 +1,78 @@
 # Notary key lifecycle
 
-`GET /api/registry` publishes the official Registry of notary endpoints and secp256k1
-verification keys. The public origin authenticates the response with HTTPS;
-the JSON document is not separately signed. A capture server pins accepted
-generations in its shared metadata so existing evidence remains verifiable when
-a deployment changes keys.
+`GET /api/registry` publishes Exalto's Registry: where new captures go, and
+which notary keys to trust. HTTPS on the API origin authenticates it; the JSON
+document is not separately signed.
 
 ## Registry format
 
 ```json
 {
-  "format": "ecp/registry/v1",
-  "generation": 12,
-  "active_key_id": "sha256:...",
+  "capture_endpoint": "tls://notary.capture.exalto.ai:443",
   "notaries": [
-    {
-      "name": "Seal",
-      "operator": "Exalto",
-      "host": "203.0.113.10",
-      "port": 7047,
-      "transport": "tcp",
-      "key_id": "sha256:...",
-      "verification_key": "02...",
-      "status": "active",
-      "valid_from_unix_ms": 0,
-      "valid_until_unix_ms": null,
-      "notarize_until_unix_ms": null
-    }
+    { "name": "seal2", "public_key": "02...", "seal_endpoint": "tls://notary.capture.exalto.ai:443" },
+    { "name": "seal1", "public_key": "03...", "seal_endpoint": "tls://seal1.capture.exalto.ai:443" },
+    { "name": "seal0", "public_key": "02..." }
   ]
 }
 ```
 
-`name` is the server-supplied signer identity recorded with its signatures. The
-first Exalto notary server uses `Seal`; deployments with multiple signing
-servers may publish identities such as `seal1` and `seal2`. This evidence
-identity is not a product name and is separate from the organization in
-`operator`.
+- `capture_endpoint` is where new sessions connect.
+- `public_key` is a notary's compressed SEC1 secp256k1 public key in
+  hexadecimal. Its key ID, recorded with the evidence it signs, is `sha256:`
+  followed by the SHA-256 of the key bytes.
+- `seal_endpoint` is where a capture whose receipt this key signed is sealed.
+  A notary without one no longer seals.
+- `name` is a label shown beside the evidence a key signed. It is not a
+  product name.
 
-The key ID is `sha256:` followed by the SHA-256 of the compressed SEC1 public
-key. The API rejects malformed keys, duplicate IDs, inverted validity windows,
-and an `active_key_id` that does not select an `active` record. Operators must
-increase `generation` for every changed Registry. Clients reject older
-generations, reject conflicting documents at the same generation, and never
-restore a key ID once they have cached it as revoked.
+Endpoints are `tls://host:port` or `tcp://host:port`. A `tls` endpoint keeps
+`host` for DNS, SNI, and public-CA certificate validation, and clients validate
+TLS before sending the NTRY v1 prelude. The notary receipt key remains the
+evidence trust anchor.
 
-`transport` is either `tcp` or `tls`. A `tls` record retains `host` for DNS,
-SNI, and public-CA certificate validation; clients must validate TLS before
-sending the NTRY v1 prelude. The notary receipt key remains the evidence trust
-anchor. Every Registry record must state its transport explicitly.
+A key is trusted exactly while it is listed: evidence verifies when a listed
+key signed it. There are no validity windows. A stolen key can sign receipts
+with any timestamp, so a window would not limit what it can forge.
 
-## Status semantics
+The SDK's `Notary.exalto` and each capture-server replica read the Registry
+when they first need it, again when evidence is signed by a key their copy
+doesn't list, and before every seal. A key removed from the Registry stays
+trusted in a running process until that process reads the Registry again or
+restarts. Each replica keeps its copy in memory; nothing is shared or stored.
 
-| Status | New captures | Deferred notarization | Historical verification |
-| --- | --- | --- | --- |
-| `active` | yes | yes | within its validity window |
-| `retiring` | no | yes, during the overlap window | within its validity window |
-| `retired` | no | no | within its validity window |
-| `revoked` | no | no | no after the client refreshes the directory |
-
-The active key is used for new proxy sessions. A deferred capture contains a
-notary-signed receipt, so the notarization worker tries the pinned active and
-retiring records and selects the endpoint whose key verifies that receipt.
-This lets a planned rotation drain old bundles without making the notary store
-per-user state.
-
-`valid_until_unix_ms` is the last authenticated provider-connection timestamp
-the key may sign. `notarize_until_unix_ms` is the later wall-clock drain
-deadline for already-created bundles. The authenticated provider-connection
-timestamp in a capture or notarized package selects the historical trust
-window. `POST /v1/traces/{trace_id}/verify` remains offline and
-therefore uses the last pinned Registry.
-
-Setting `notary.endpoint` and `notary.public_key` together in the capture
-server's `config.toml` is an operator override. It does not use Registry
-lifecycle policy. Explicit endpoints
-use `tls://host:port` or `tcp://host:port`. Bare `host:port` values are
+The hosted API reads the Registry only from `CAPTURE_API_REGISTRY_FILE`, stored
+as one compact JSON line, and refuses to start if it lists no notaries or a key
+is not a valid secp256k1 key. Setting `notary.endpoint` and
+`notary.public_key` together in the capture server's `config.toml` is an
+operator override that trusts only that key. Bare `host:port` values are
 rejected so transport can never be selected implicitly.
 
 ## Planned rotation
 
-1. Start the replacement notary and keep the previous instance available.
-2. Publish a higher directory generation that marks the replacement `active`
-   and the previous key `retiring`. Set the old record's
-   `valid_until_unix_ms` to the capture handoff and
-   `notarize_until_unix_ms` to the end of the intended checkpoint-drain period.
-3. Restart the old instance with `capture-notary serve --notarization-only`. New proxy sessions use the
-   replacement; the old process rejects capture mode at the protocol boundary
-   while existing bundles continue to notarize through it.
-4. After the drain period, publish the old key as `retired` and stop its
-   endpoint. Previously notarized evidence remains verifiable within the
-   recorded window.
-
-The hosted API reads the complete Registry only from
-`CAPTURE_API_REGISTRY_FILE`. In the colocated Compose deployment, the active
-record must match `CAPTURE_NOTARY_PUBLIC_KEY`; the notary health check uses
-`capture-notary public-key --signing-key-file ...` to independently confirm that
-the public key matches the mounted private key.
-
-For every endpoint, transport, validity, status, or key change, edit the
-canonical Registry JSON and increment its `generation`. Store the JSON as one
-compact line.
-Retiring notarization-only instances are operated separately until their drain
-deadlines. There is no single-key or inline Registry fallback.
+1. Start the replacement notary, and give the old notary a hostname of its own
+   beside the capture hostname.
+2. Publish a Registry that lists the new key, sealing at the capture hostname,
+   and moves the old key's `seal_endpoint` to the old notary's own hostname.
+3. Point the capture hostname at the replacement, and restart the old notary
+   with `capture-notary serve --notarization-only`: it rejects new capture
+   sessions at the protocol boundary while existing captures still seal
+   through it. `capture_endpoint` keeps its hostname, so clients pick up the
+   rotation the first time they see a receipt signed by the new key.
+4. After the drain period, stop the old notary and remove its
+   `seal_endpoint`. Keep its key: the evidence it signed still verifies.
 
 Before the handoff, back up the old 32-byte private signing-key file to
-encrypted offline storage and verify that the backup reproduces the advertised
-public key. Keep the old key mounted only on the notarize-only drain instance.
-Losing it before `notarize_until_unix_ms` strands every checkpoint created under
-that key; retaining it after the drain expands the compromise window.
+encrypted offline storage and verify that the backup reproduces the published
+key. Keep the old key mounted only on the notarize-only drain instance. Losing
+it before the drain ends strands every capture created under that key;
+retaining it afterwards expands the compromise window.
 
-## Emergency revocation
+## Compromised key
 
-Publish a higher generation with the compromised key marked `revoked` and
-designate a different active key. Do not merely omit it: omission is
-interpreted as a planned retirement so offline historical verification keeps
-working. A client that has observed revocation will not re-enable that key
-after a later or stale directory response.
-
-Revocation intentionally invalidates old evidence after directory refresh. A
-compromised private key can create signatures with arbitrary old-looking
-timestamps, so preserving those signatures as trustworthy would make the
-revocation ineffective. Provider-native signatures or an external
-transparency log would be required to distinguish pre-compromise evidence more
-strongly.
-
-## Invariants for future formats
-
-Any successor package must carry the notary key ID and authenticated provider-
-connection time, use this directory's validity and revocation rules, and define
-migration behavior for already published directory records. A new artifact
-format must not silently reinterpret an existing lifecycle record.
+Delete the key from the Registry. Everything it signed stops verifying,
+genuine evidence included, because a stolen key can sign receipts with
+old-looking timestamps. Running clients stop trusting the key when they next
+read the Registry or restart. Distinguishing evidence made before the
+compromise would need provider-native signatures or an external transparency
+log.

@@ -759,7 +759,7 @@ describe('Notary admin dashboard', () => {
     await expect.element(page.getByRole('button', { name: 'View providers' })).toBeVisible();
   });
 
-  test('shows pinned notary lifecycle records in the service trust order without health claims', async () => {
+  test('shows each trusted notary key and where it seals without health claims', async () => {
     renderDashboard('/settings');
     await expect
       .poll(() =>
@@ -767,13 +767,42 @@ describe('Notary admin dashboard', () => {
           (node) => node.textContent,
         ),
       )
-      .toEqual([
-        'Accepts new captures and sealing',
-        'Sealing-only',
-        'Historical verification only',
-        'Untrusted',
-      ]);
+      .toEqual(['seal2', 'seal1']);
+    await expect.element(page.getByText("Exalto's Registry", { exact: true })).toBeVisible();
+    await expect
+      .element(page.getByText('tls://notary.capture.exalto.ai:443', { exact: true }).first())
+      .toBeVisible();
+    await expect
+      .element(page.getByText('sha256:aaaaaaaaaaa…aaaaaaaa', { exact: true }))
+      .toBeVisible();
+    await expect
+      .element(page.getByText(/This notary no longer seals/, { exact: false }))
+      .toBeVisible();
     await expect.element(page.getByText('Online', { exact: true })).not.toBeInTheDocument();
+  });
+
+  test('names a self-hosted notary as server configuration, not Exalto', async () => {
+    const fixture = createFixtureApi();
+    renderDashboard('/settings', {
+      ...fixture,
+      notaries: async () => ({
+        source: 'explicit_configuration',
+        capture_endpoint: 'tcp://127.0.0.1:7047',
+        notaries: [
+          {
+            name: 'Configured notary',
+            key_id: `sha256:${'c'.repeat(64)}`,
+            public_key: `02${'c'.repeat(64)}`,
+            seal_endpoint: 'tcp://127.0.0.1:7047',
+          },
+        ],
+      }),
+    });
+    await expect.element(page.getByText('Server configuration', { exact: true })).toBeVisible();
+    await expect
+      .element(page.getByText(/trusts only the notary named in its server configuration/))
+      .toBeVisible();
+    await expect.element(page.getByText(/operated by Exalto/)).not.toBeInTheDocument();
   });
 
   test('renders cluster administration context', async () => {

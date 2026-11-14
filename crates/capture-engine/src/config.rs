@@ -16,7 +16,8 @@ use k256::ecdsa::VerifyingKey;
 use serde::{Deserialize, Serialize};
 
 use capture_core::{
-    DEFAULT_MAX_ATTESTABLE_HTTP_BYTES, DEFAULT_NOTARY_MAX_FRAME_BYTES, registry::NotaryEndpoint,
+    DEFAULT_MAX_ATTESTABLE_HTTP_BYTES, DEFAULT_NOTARY_MAX_FRAME_BYTES,
+    registry::{NotaryEndpoint, Registry},
     sha256_hex,
 };
 
@@ -155,8 +156,8 @@ pub struct ProxyConfig {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct NotaryConfig {
-    /// Optional explicit endpoint. Without this the client uses the signed
-    /// Registry at the configured public API origin.
+    /// Optional explicit endpoint. Without this the client uses the Registry
+    /// at the configured public API origin.
     pub endpoint: Option<String>,
     /// Explicit SEC1 secp256k1 trust anchor for `endpoint`. The endpoint and
     /// key are configured together so a self-hosted connection cannot become
@@ -780,6 +781,15 @@ impl CapturedConfig {
                 Ok(key)
             })
             .transpose()
+    }
+
+    /// The Registry of the explicitly configured notary, if the configuration
+    /// names one.
+    pub fn configured_registry(&self) -> Result<Option<Registry>> {
+        Ok(match (self.notary_endpoint()?, self.notary_public_key()?) {
+            (Some(endpoint), Some(key)) => Some(Registry::single(endpoint, key)),
+            _ => None,
+        })
     }
 
     pub fn s3_credentials(&self) -> Result<SecretS3Credentials> {

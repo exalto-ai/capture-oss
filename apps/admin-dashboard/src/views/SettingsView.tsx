@@ -15,8 +15,6 @@ import { CodeXml, Copy, Moon, PanelLeft, ShieldCheck, Sun } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { useEffect, useState } from 'react';
 import type { AdminApi, CaptureMode, Notary, Status } from '../api';
-import { AdminApiError } from '../api';
-import { abbreviatedKeyId, formatNotaryBoundary, notaryLifecycle } from '../notaryLifecycle';
 import { Fact, mutationError } from '../shared';
 
 function SchemeControl() {
@@ -46,139 +44,92 @@ function SchemeControl() {
   );
 }
 
-function LocalNotaryRecord({
-  record,
-  activeKeyId,
-}: {
-  record: Notary;
-  activeKeyId?: string | null;
-}) {
-  const lifecycle = notaryLifecycle(record.lifecycle);
+function NotaryRecord({ record }: { record: Notary }) {
   const copyKey = async () => {
     await navigator.clipboard.writeText(record.key_id);
     notifications.show({
-      title: 'Sealing key ID copied',
+      title: 'Key ID copied',
       message: 'The complete key ID is on the clipboard.',
     });
   };
   return (
-    <article className={`local-notary-record local-notary-record--${record.lifecycle}`}>
-      <header>
-        <span className={`local-notary-state local-notary-state--${record.lifecycle}`}>
-          <i aria-hidden="true" />
-          {record.lifecycle}
-        </span>
-        {record.key_id === activeKeyId && (
-          <span className="local-notary-selected">Selected active key</span>
-        )}
-      </header>
-      <Title order={3}>{lifecycle.label}</Title>
-      <Text>{lifecycle.description}</Text>
+    <article className="local-notary-record">
+      <Title order={3}>{record.name}</Title>
       <dl className="local-notary-facts">
-        <Fact label="Endpoint" value={record.endpoint} />
-        <Fact label="Transport" value={record.transport.toUpperCase()} />
         <Fact
-          label="Valid from"
-          value={formatNotaryBoundary(record.valid_from_unix_ms, {
-            kind: 'lower',
-            missingLabel: 'Not defined by explicit configuration',
-          })}
+          label="Key ID"
+          value={
+            <span className="local-notary-key">
+              <code title={record.key_id}>{abbreviatedKeyId(record.key_id)}</code>
+              <ActionIcon
+                variant="subtle"
+                size="sm"
+                onClick={copyKey}
+                aria-label={`Copy full key ID ${record.key_id}`}
+              >
+                <Copy size={14} />
+              </ActionIcon>
+            </span>
+          }
         />
-        <Fact label="Capture cutoff" value={formatNotaryBoundary(record.valid_until_unix_ms)} />
-        <Fact label="Sealing cutoff" value={formatNotaryBoundary(record.notarize_until_unix_ms)} />
+        <Fact
+          label="Seal endpoint"
+          value={
+            record.seal_endpoint ??
+            'None. This notary no longer seals. Its key is kept so evidence it signed still verifies.'
+          }
+        />
       </dl>
-      <div className="local-notary-key">
-        <span>Key ID / fingerprint</span>
-        <code title={record.key_id}>{abbreviatedKeyId(record.key_id)}</code>
-        <ActionIcon
-          variant="subtle"
-          onClick={copyKey}
-          aria-label={`Copy full key ID ${record.key_id}`}
-        >
-          <Copy size={15} />
-        </ActionIcon>
-      </div>
     </article>
   );
 }
 
+function abbreviatedKeyId(keyId: string) {
+  return keyId.length > 28 ? `${keyId.slice(0, 18)}…${keyId.slice(-8)}` : keyId;
+}
+
 function SettingsNotaries({ api }: { api: AdminApi }) {
   const notaries = useQuery({ queryKey: ['notaries'], queryFn: api.notaries, retry: false });
-  const errorCode = notaries.error instanceof AdminApiError ? notaries.error.code : null;
-  const records = notaries.data?.notaries ?? [];
+  const configured = notaries.data?.source === 'explicit_configuration';
   return (
     <Paper className="settings-panel settings-notaries">
-      <div className="settings-notaries-heading">
-        <div>
-          <Text className="eyebrow">Sealing services</Text>
-          <Title order={2}>Configured trust</Title>
-        </div>
-        {notaries.data?.generation != null && (
-          <Text>Registry generation {notaries.data.generation}</Text>
-        )}
-      </div>
+      <Text className="eyebrow">Sealing services</Text>
+      <Title order={2}>Trusted notaries</Title>
       <Text className="settings-notaries-note">
-        This is the trust state used by the capture server. It describes key lifecycle and permitted
-        work, not endpoint health or availability.
+        {configured
+          ? "This server trusts only the notary named in its server configuration. Evidence verifies when that notary's key signed it."
+          : "This server trusts the notaries in Exalto's Registry, all operated by Exalto. Evidence verifies when one of their keys signed it."}{' '}
+        This is not a report of endpoint health or availability.
       </Text>
       {notaries.isLoading ? (
-        <div className="local-notary-loading" role="status" aria-label="Loading sealing trust">
+        <div className="local-notary-loading" role="status" aria-label="Loading trusted notaries">
           <i />
           <i />
           <i />
         </div>
-      ) : notaries.error ? (
+      ) : notaries.error || !notaries.data ? (
         <div className="local-notary-state-panel" role="alert">
-          <b>
-            {errorCode === 'registry_state_invalid'
-              ? 'Pinned trust state is malformed'
-              : 'Sealing trust is unavailable'}
-          </b>
+          <b>Trusted notaries are unavailable</b>
           <span>
-            {errorCode === 'registry_state_invalid'
-              ? 'The cached Registry could not be validated. No sealing service is presented as usable.'
-              : 'The capture server could not return its configured trust metadata. No endpoint status can be inferred.'}
+            The capture server could not read its trusted notaries. No notary is presented as
+            usable, and no endpoint status can be inferred.
           </span>
           <Button variant="outline" onClick={() => notaries.refetch()}>
             Try again
           </Button>
-        </div>
-      ) : !records.length ? (
-        <div className="local-notary-state-panel">
-          <b>No pinned sealing records</b>
-          <span>
-            The capture server has not retained a Registry generation. No sealing service is
-            presented as available.
-          </span>
         </div>
       ) : (
         <>
           <dl className="settings-notary-source">
             <Fact
               label="Trust source"
-              value={
-                notaries.data?.source === 'explicit_configuration'
-                  ? 'Explicit self-hosted configuration'
-                  : 'Pinned Registry'
-              }
+              value={configured ? 'Server configuration' : "Exalto's Registry"}
             />
-            {notaries.data?.registry_source && (
-              <Fact label="Registry source" value={notaries.data.registry_source} />
-            )}
+            <Fact label="Capture endpoint" value={notaries.data.capture_endpoint} />
           </dl>
-          {notaries.data?.source === 'explicit_configuration' && (
-            <Text className="explicit-notary-note">
-              This endpoint and key come from the server configuration and are not members of the
-              hosted Registry.
-            </Text>
-          )}
           <div className="local-notary-list">
-            {records.map((record) => (
-              <LocalNotaryRecord
-                key={record.key_id}
-                record={record}
-                activeKeyId={notaries.data?.active_key_id}
-              />
+            {notaries.data.notaries.map((record) => (
+              <NotaryRecord key={record.key_id} record={record} />
             ))}
           </div>
         </>

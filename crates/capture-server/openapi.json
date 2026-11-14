@@ -214,7 +214,7 @@
           "admin"
         ],
         "summary": "List Notaries",
-        "description": "Returns a safe read-only projection of the Registry pinned in shared metadata or the explicitly configured self-hosted endpoint and key. Registry membership describes allowed protocol use and does not report endpoint health.",
+        "description": "Returns the notaries this server trusts: the explicitly configured self-hosted endpoint and key, or Exalto's Registry. Registry membership describes which keys are trusted and does not report endpoint health.",
         "operationId": "notaries",
         "responses": {
           "200": {
@@ -228,16 +228,6 @@
             }
           },
           "401": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "500": {
             "description": "",
             "content": {
               "application/json": {
@@ -1444,40 +1434,24 @@
         "type": "object",
         "required": [
           "source",
+          "capture_endpoint",
           "notaries"
         ],
         "properties": {
-          "active_key_id": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "Selected active Registry key. Explicit configuration has no Registry\nlifecycle selection and therefore leaves this field unset."
-          },
-          "generation": {
-            "type": [
-              "integer",
-              "null"
-            ],
-            "format": "int64",
-            "minimum": 0
+          "capture_endpoint": {
+            "type": "string",
+            "description": "Where new sessions connect."
           },
           "notaries": {
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/Notary"
-            }
-          },
-          "registry_source": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "Public URL from which the current pinned Registry generation came."
+            },
+            "description": "Every trusted notary key. Evidence verifies when one of them signed\nit."
           },
           "source": {
             "type": "string",
-            "description": "`registry` for the locally pinned trust store or\n`explicit_configuration` for a self-hosted endpoint and key."
+            "description": "`explicit_configuration` for a self-hosted endpoint and key, or\n`registry` for Exalto's Registry."
           }
         }
       },
@@ -1541,59 +1515,25 @@
         "type": "object",
         "required": [
           "name",
-          "operator",
-          "endpoint",
-          "transport",
           "key_id",
-          "verification_key",
-          "lifecycle"
+          "public_key"
         ],
         "properties": {
-          "endpoint": {
-            "type": "string"
-          },
           "key_id": {
             "type": "string"
-          },
-          "lifecycle": {
-            "type": "string",
-            "description": "One of `active`, `retiring`, `retired`, `revoked`, or `configured`."
           },
           "name": {
             "type": "string"
           },
-          "notarize_until_unix_ms": {
-            "type": [
-              "integer",
-              "null"
-            ],
-            "format": "int64",
-            "minimum": 0
-          },
-          "operator": {
+          "public_key": {
             "type": "string"
           },
-          "transport": {
-            "type": "string"
-          },
-          "valid_from_unix_ms": {
+          "seal_endpoint": {
             "type": [
-              "integer",
+              "string",
               "null"
             ],
-            "format": "int64",
-            "minimum": 0
-          },
-          "valid_until_unix_ms": {
-            "type": [
-              "integer",
-              "null"
-            ],
-            "format": "int64",
-            "minimum": 0
-          },
-          "verification_key": {
-            "type": "string"
+            "description": "Where captures whose receipt this key signed are sealed. Unset once\nthe notary no longer seals."
           }
         }
       },

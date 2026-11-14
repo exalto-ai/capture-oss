@@ -951,17 +951,6 @@ impl CaptureCheckpoint {
         self.created_at_unix_ms
     }
 
-    /// Returns the provider connection time authenticated by the notary
-    /// receipt. Trust stores use this—not the local file timestamp—when
-    /// evaluating a rotated key's validity window.
-    pub fn authenticated_connection_time_unix_ms(&self) -> Result<u64> {
-        self.receipt
-            .connection_info
-            .time
-            .checked_mul(1000)
-            .context("authenticated connection timestamp does not fit in milliseconds")
-    }
-
     /// Checks whether this pending checkpoint's receipt was issued by a key.
     pub fn verify_notary_key(&self, public_key: &[u8]) -> Result<()> {
         self.receipt.verify(public_key)

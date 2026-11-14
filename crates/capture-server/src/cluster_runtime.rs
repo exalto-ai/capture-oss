@@ -29,6 +29,7 @@ use crate::{
     },
     organization::OrganizationId,
     postgres_metadata_store::PostgresMetadataStore,
+    registry::Registry,
     s3_artifact_store::S3ArtifactStore,
     service::admission::ServerAdmission,
     vault::Vault,
@@ -69,6 +70,9 @@ pub(crate) struct ClusterRuntime {
     identity: ReplicaIdentity,
     lifecycle: AtomicU8,
     metadata: Arc<PostgresMetadataStore>,
+    /// This replica's latest copy of Exalto's Registry, only ever replaced
+    /// whole.
+    registry: std::sync::Mutex<Option<Registry>>,
 }
 
 impl ClusterRuntime {
@@ -89,11 +93,26 @@ impl ClusterRuntime {
             identity,
             lifecycle: AtomicU8::new(Lifecycle::Starting as u8),
             metadata,
+            registry: std::sync::Mutex::new(None),
         }
     }
 
     pub(crate) fn metadata(&self) -> &Arc<PostgresMetadataStore> {
         &self.metadata
+    }
+
+    pub(crate) fn registry_copy(&self) -> Option<Registry> {
+        self.registry
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
+    pub(crate) fn set_registry_copy(&self, registry: Registry) {
+        *self
+            .registry
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(registry);
     }
 
     pub(crate) fn identity(&self) -> &ReplicaIdentity {

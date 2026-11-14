@@ -10,16 +10,13 @@ use std::{
 };
 
 use anyhow::Result;
-use capture_core::registry::{NotaryKeyStatus, RegistryRecord, key_id};
+use capture_core::registry::Registry;
 use serde::Serialize;
 use tokio::sync::Mutex;
 use utoipa::ToSchema;
 
 use crate::{
-    api::ApiError,
-    config::CapturedConfig,
-    metadata::{MetadataCounts, RegistrySnapshot},
-    metadata_store::MetadataStore,
+    api::ApiError, config::CapturedConfig, metadata::MetadataCounts, metadata_store::MetadataStore,
 };
 
 const DEPENDENCY_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
@@ -122,129 +119,48 @@ impl From<MetadataCounts> for TraceCounts {
 
 #[derive(Debug, Serialize, ToSchema)]
 pub struct NotariesResponse {
-    /// `registry` for the locally pinned trust store or
-    /// `explicit_configuration` for a self-hosted endpoint and key.
+    /// `explicit_configuration` for a self-hosted endpoint and key, or
+    /// `registry` for Exalto's Registry.
     source: String,
-    /// Public URL from which the current pinned Registry generation came.
-    registry_source: Option<String>,
-    generation: Option<u64>,
-    /// Selected active Registry key. Explicit configuration has no Registry
-    /// lifecycle selection and therefore leaves this field unset.
-    active_key_id: Option<String>,
+    /// Where new sessions connect.
+    capture_endpoint: String,
+    /// Every trusted notary key. Evidence verifies when one of them signed
+    /// it.
     notaries: Vec<Notary>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
 pub struct Notary {
     name: String,
-    operator: String,
-    endpoint: String,
-    transport: String,
     key_id: String,
-    verification_key: String,
-    /// One of `active`, `retiring`, `retired`, `revoked`, or `configured`.
-    lifecycle: String,
-    valid_from_unix_ms: Option<u64>,
-    valid_until_unix_ms: Option<u64>,
-    notarize_until_unix_ms: Option<u64>,
+    public_key: String,
+    /// Where captures whose receipt this key signed are sealed. Unset once
+    /// the notary no longer seals.
+    seal_endpoint: Option<String>,
 }
 
 impl NotariesResponse {
-    /// The explicitly configured self-hosted notary when the configuration
-    /// names both its endpoint and key; otherwise the `pinned` Registry, if
-    /// one is pinned yet.
-    pub fn for_config(config: &CapturedConfig, pinned: Option<RegistrySnapshot>) -> Result<Self> {
-        if let (Some(endpoint), Some(public_key)) =
-            (config.notary_endpoint()?, config.notary_public_key()?)
-        {
-            return Ok(Self {
-                source: "explicit_configuration".into(),
-                registry_source: None,
-                generation: None,
-                active_key_id: None,
-                notaries: vec![Notary {
-                    name: "Configured notary".into(),
-                    operator: "Self-hosted".into(),
-                    endpoint: endpoint.to_string(),
-                    transport: endpoint.transport.scheme().into(),
-                    key_id: key_id(&public_key),
-                    verification_key: hex::encode(public_key),
-                    lifecycle: "configured".into(),
-                    valid_from_unix_ms: None,
-                    valid_until_unix_ms: None,
-                    notarize_until_unix_ms: None,
-                }],
-            });
-        }
-
-        let Some(pinned) = pinned else {
-            return Ok(Self {
-                source: "registry".into(),
-                registry_source: None,
-                generation: None,
-                active_key_id: None,
-                notaries: Vec::new(),
-            });
-        };
-        Ok(Self::from(pinned))
-    }
-}
-
-impl From<RegistrySnapshot> for NotariesResponse {
-    fn from(pinned: RegistrySnapshot) -> Self {
-        let active_key_id = pinned.active_key_id;
-        let mut records = pinned.records;
-        records.sort_by(|left, right| {
-            notary_record_order(left, &active_key_id)
-                .cmp(&notary_record_order(right, &active_key_id))
-                .then_with(|| right.valid_from_unix_ms.cmp(&left.valid_from_unix_ms))
-                .then_with(|| left.key_id.cmp(&right.key_id))
-        });
+    /// The notaries the host trusts: its explicitly configured notary when
+    /// the configuration names one, or else Exalto's `registry`.
+    pub fn new(config: &CapturedConfig, registry: Registry) -> Self {
         Self {
-            source: "registry".into(),
-            registry_source: Some(pinned.registry_source),
-            generation: Some(pinned.generation),
-            active_key_id: Some(active_key_id),
-            notaries: records.into_iter().map(Notary::from).collect(),
-        }
-    }
-}
-
-fn notary_record_order(record: &RegistryRecord, active_key_id: &str) -> u8 {
-    if record.key_id == active_key_id {
-        return 0;
-    }
-    match record.status {
-        NotaryKeyStatus::Active => 1,
-        NotaryKeyStatus::Retiring => 2,
-        NotaryKeyStatus::Retired => 3,
-        NotaryKeyStatus::Revoked => 4,
-    }
-}
-
-impl From<RegistryRecord> for Notary {
-    fn from(record: RegistryRecord) -> Self {
-        let endpoint = record
-            .endpoint()
-            .expect("validated pinned notary record has an endpoint")
-            .to_string();
-        Self {
-            name: record.name,
-            operator: record.operator,
-            endpoint,
-            transport: record.transport.scheme().into(),
-            key_id: record.key_id,
-            verification_key: record.public_key,
-            lifecycle: match record.status {
-                NotaryKeyStatus::Active => "active",
-                NotaryKeyStatus::Retiring => "retiring",
-                NotaryKeyStatus::Retired => "retired",
-                NotaryKeyStatus::Revoked => "revoked",
+            source: if config.notary.endpoint.is_some() {
+                "explicit_configuration"
+            } else {
+                "registry"
             }
             .into(),
-            valid_from_unix_ms: Some(record.valid_from_unix_ms),
-            valid_until_unix_ms: record.valid_until_unix_ms,
-            notarize_until_unix_ms: record.notarize_until_unix_ms,
+            capture_endpoint: registry.capture_endpoint.to_string(),
+            notaries: registry
+                .notaries
+                .into_iter()
+                .map(|notary| Notary {
+                    key_id: notary.key_id(),
+                    public_key: hex::encode(&notary.public_key),
+                    name: notary.name,
+                    seal_endpoint: notary.seal_endpoint.as_ref().map(ToString::to_string),
+                })
+                .collect(),
         }
     }
 }
@@ -336,82 +252,29 @@ impl ProvidersResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use capture_core::registry::NotaryTransport;
-
-    fn notary_record(seed: u8, status: NotaryKeyStatus, valid_from: u64) -> RegistryRecord {
-        let signing = k256::ecdsa::SigningKey::from_slice(&[seed; 32]).unwrap();
-        let public_key = signing.verifying_key().to_sec1_bytes().to_vec();
-        RegistryRecord {
-            name: format!("Notary {seed}"),
-            operator: "Test operator".to_owned(),
-            host: format!("notary-{seed}.example"),
-            port: 7047,
-            transport: NotaryTransport::Tls,
-            key_id: key_id(&public_key),
-            public_key: hex::encode(public_key),
-            status,
-            valid_from_unix_ms: valid_from,
-            valid_until_unix_ms: Some(valid_from + 1_000),
-            notarize_until_unix_ms: Some(valid_from + 2_000),
-        }
-    }
 
     #[test]
-    fn registry_notary_projection_orders_lifecycle_and_retains_revocations() {
-        let active = notary_record(1, NotaryKeyStatus::Active, 100);
-        let retiring = notary_record(2, NotaryKeyStatus::Retiring, 90);
-        let retired = notary_record(3, NotaryKeyStatus::Retired, 80);
-        let revoked = notary_record(4, NotaryKeyStatus::Revoked, 110);
-        let response = NotariesResponse::from(RegistrySnapshot {
-            registry_sha256: "0".repeat(64),
-            registry_source: "https://example.test/api/registry".into(),
-            generation: 7,
-            active_key_id: active.key_id.clone(),
-            records: vec![
-                revoked.clone(),
-                retired.clone(),
-                active.clone(),
-                retiring.clone(),
-            ],
-        });
-
-        assert_eq!(response.source, "registry");
-        assert_eq!(response.generation, Some(7));
-        assert_eq!(
-            response.active_key_id.as_deref(),
-            Some(active.key_id.as_str())
-        );
-        assert_eq!(
-            response
-                .notaries
-                .iter()
-                .map(|record| record.lifecycle.as_str())
-                .collect::<Vec<_>>(),
-            ["active", "retiring", "retired", "revoked"]
-        );
-        let revoked_response = response.notaries.last().unwrap();
-        assert_eq!(revoked_response.key_id, revoked.key_id);
-        assert_eq!(revoked_response.endpoint, "tls://notary-4.example:7047");
-    }
-
-    #[test]
-    fn explicit_notary_projection_does_not_claim_registry_membership() {
+    fn notary_projection_names_each_trusted_key() {
         let signing = k256::ecdsa::SigningKey::from_slice(&[9; 32]).unwrap();
         let public_key = signing.verifying_key().to_sec1_bytes().to_vec();
         let mut config = CapturedConfig::default();
         config.notary.endpoint = Some("tcp://127.0.0.1:7047".into());
         config.notary.public_key = Some(hex::encode(&public_key));
 
-        let response = NotariesResponse::for_config(&config, None).unwrap();
+        let response =
+            NotariesResponse::new(&config, config.configured_registry().unwrap().unwrap());
 
         assert_eq!(response.source, "explicit_configuration");
-        assert_eq!(response.registry_source, None);
-        assert_eq!(response.generation, None);
-        assert_eq!(response.active_key_id, None);
+        assert_eq!(response.capture_endpoint, "tcp://127.0.0.1:7047");
         assert_eq!(response.notaries.len(), 1);
-        assert_eq!(response.notaries[0].lifecycle, "configured");
-        assert_eq!(response.notaries[0].key_id, key_id(&public_key));
-        assert_eq!(response.notaries[0].endpoint, "tcp://127.0.0.1:7047");
+        assert_eq!(
+            response.notaries[0].key_id,
+            capture_core::registry::key_id(&public_key)
+        );
+        assert_eq!(
+            response.notaries[0].seal_endpoint.as_deref(),
+            Some("tcp://127.0.0.1:7047")
+        );
     }
 
     #[test]

@@ -17,12 +17,9 @@ use axum::{
 };
 use capture_core::{
     archive::{ARCHIVE_CONTENT_TYPE, MAX_ARCHIVE_WIRE_BYTES, read_trace_package_archive},
-    notarization::{
-        trace_package_created_at_unix_ms_bytes, trace_package_notary_key_bytes,
-        verify_trace_package_bytes,
-    },
+    notarization::{trace_package_notary_key_bytes, verify_trace_package_bytes},
     pagination::{CursorScope, Page, PageQuery, PaginationError, decode_cursor, encode_cursor},
-    registry::key_id,
+    registry::{Registry, key_id},
 };
 use serde::{Deserialize, Serialize};
 use tokio::sync::Notify;
@@ -32,11 +29,9 @@ use crate::{
     artifact_store::{ArtifactKind, ArtifactRecord, ArtifactStoreError},
     metadata::{
         CaptureMode, Event, EventFilters, EvidenceKind, Operation, OperationAttempt,
-        OperationFilters, RegistrySnapshot, TraceFilters, TracePagePosition,
-        TraceSummary as StoredTraceSummary,
+        OperationFilters, TraceFilters, TracePagePosition, TraceSummary as StoredTraceSummary,
     },
     metadata_store::{MetadataStore, MetadataStoreError},
-    platform::registry::registry_key_at,
     proxy::{CaptureModeSource, NotaryTrust},
     storage::Storage,
 };
@@ -141,6 +136,15 @@ fn parse_explicit_key(value: &str) -> Result<(Vec<u8>, String)> {
     k256::ecdsa::VerifyingKey::from_sec1_bytes(&key)
         .context("trusted notary key must be a SEC1 secp256k1 key")?;
     Ok((key.clone(), key_id(&key)))
+}
+
+/// The Registry key that signed a trace package, and its ID.
+fn registry_key(registry: &Registry, package: &[u8]) -> Result<(Vec<u8>, String)> {
+    let embedded = trace_package_notary_key_bytes(package)?;
+    let notary = registry
+        .notary(&embedded)
+        .context("no trusted notary key in the Registry signed this package")?;
+    Ok((notary.public_key.clone(), notary.key_id()))
 }
 
 /// The current time in Unix milliseconds.
@@ -476,35 +480,15 @@ pub async fn verify_trace(
     validate_id(&trace_id, "trc-")?;
     let bytes = trace_package_bytes(&state.storage, &trace_id).await?;
     let verified_at_unix_ms = now_ms().map_err(|_| ApiError::internal("clock_error"))?;
-    let configured_key = state
+    let registry = state
         .trust
-        .configured_key()
-        .map_err(|_| ApiError::internal("notary_configuration_invalid"))?;
-    let shared_trust: Option<RegistrySnapshot> = if configured_key.is_none() {
-        Some(
-            state
-                .trust
-                .shared_registry()
-                .await
-                .map_err(|_| ApiError::service_unavailable("registry_not_ready"))?,
-        )
-    } else {
-        None
-    };
+        .registry()
+        .await
+        .map_err(|_| ApiError::service_unavailable("registry_not_ready"))?;
+    let trust_source = state.trust.trust_source();
     let value = tokio::task::spawn_blocking(move || -> Result<VerificationResult> {
-        let embedded_key = trace_package_notary_key_bytes(&bytes)?;
-        let (trusted_key, notary_key_id, trust_source) = match configured_key {
-            Some(key) => {
-                let key_id = key_id(&key);
-                (key, key_id, "configuration".to_owned())
-            }
-            None => {
-                let created_at = trace_package_created_at_unix_ms_bytes(&bytes)?;
-                let shared = shared_trust.context("the shared Registry is not loaded")?;
-                let (key_id, trust) = registry_key_at(&shared, &embedded_key, created_at)?;
-                (embedded_key, key_id, trust)
-            }
-        };
+        let (trusted_key, notary_key_id) = registry_key(&registry, &bytes)?;
+        let trust_source = trust_source.to_owned();
         let manifest = verify_trace_package_bytes(&bytes, &trusted_key)?.manifest;
         Ok(VerificationResult {
             outcome: VerificationOutcome::Passed,
@@ -534,35 +518,26 @@ pub async fn verify_uploaded_trace(
         .transpose()
         .map_err(|_| ApiError::bad_request("invalid_trusted_notary_key"))?;
     let verified_at_unix_ms = now_ms().map_err(|_| ApiError::internal("clock_error"))?;
-    let configured_key = state
-        .trust
-        .configured_key()
-        .map_err(|_| ApiError::internal("notary_configuration_invalid"))?;
-    let shared_trust: Option<RegistrySnapshot> =
-        if explicit_key.is_none() && configured_key.is_none() {
-            Some(
-                state
-                    .trust
-                    .shared_registry()
-                    .await
-                    .map_err(|_| ApiError::service_unavailable("registry_not_ready"))?,
-            )
-        } else {
-            None
-        };
+    let registry = if explicit_key.is_none() {
+        Some(
+            state
+                .trust
+                .registry()
+                .await
+                .map_err(|_| ApiError::service_unavailable("registry_not_ready"))?,
+        )
+    } else {
+        None
+    };
+    let trust_source = state.trust.trust_source();
     let value = tokio::task::spawn_blocking(move || -> Result<VerificationResult> {
-        let embedded_key = trace_package_notary_key_bytes(&bytes)?;
         let (trusted_key, notary_key_id, trust_source) = if let Some(value) = explicit_key {
             let (key, key_id) = parse_explicit_key(&value)?;
             (key, key_id, "explicit_key".to_owned())
-        } else if let Some(key) = configured_key {
-            let key_id = key_id(&key);
-            (key, key_id, "configuration".to_owned())
         } else {
-            let created_at = trace_package_created_at_unix_ms_bytes(&bytes)?;
-            let shared = shared_trust.context("the shared Registry is not loaded")?;
-            let (key_id, trust) = registry_key_at(&shared, &embedded_key, created_at)?;
-            (embedded_key, key_id, trust)
+            let registry = registry.context("the Registry is not loaded")?;
+            let (key, key_id) = registry_key(&registry, &bytes)?;
+            (key, key_id, trust_source.to_owned())
         };
         let manifest = verify_trace_package_bytes(&bytes, &trusted_key)?.manifest;
         Ok(VerificationResult {

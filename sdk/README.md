@@ -41,8 +41,8 @@ sealed.
 ## Notaries
 
 - `Notary.exalto(api_key)` uses Exalto's notary, found through Exalto's
-  Registry, which it reads again once its copy is a few minutes old or a
-  notary signs with a key the copy doesn't list yet. Each session is charged
+  Registry, which it reads again when a notary signs with a key the copy
+  doesn't list yet and before every seal. Each session is charged
   to the organization that owns the API key (scopes `capture:request` and
   `notarization:request`), or to a small allowance for your network address
   without one.

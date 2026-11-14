@@ -93,7 +93,7 @@ export interface paths {
         };
         /**
          * List Notaries
-         * @description Returns a safe read-only projection of the Registry pinned in shared metadata or the explicitly configured self-hosted endpoint and key. Registry membership describes allowed protocol use and does not report endpoint health.
+         * @description Returns the notaries this server trusts: the explicitly configured self-hosted endpoint and key, or Exalto's Registry. Registry membership describes which keys are trusted and does not report endpoint health.
          */
         get: operations["notaries"];
         put?: never;
@@ -409,19 +409,16 @@ export interface components {
             status: string;
         };
         NotariesResponse: {
+            /** @description Where new sessions connect. */
+            capture_endpoint: string;
             /**
-             * @description Selected active Registry key. Explicit configuration has no Registry
-             *     lifecycle selection and therefore leaves this field unset.
+             * @description Every trusted notary key. Evidence verifies when one of them signed
+             *     it.
              */
-            active_key_id?: string | null;
-            /** Format: int64 */
-            generation?: number | null;
             notaries: components["schemas"]["Notary"][];
-            /** @description Public URL from which the current pinned Registry generation came. */
-            registry_source?: string | null;
             /**
-             * @description `registry` for the locally pinned trust store or
-             *     `explicit_configuration` for a self-hosted endpoint and key.
+             * @description `explicit_configuration` for a self-hosted endpoint and key, or
+             *     `registry` for Exalto's Registry.
              */
             source: string;
         };
@@ -441,20 +438,14 @@ export interface components {
             trace_id: string;
         };
         Notary: {
-            endpoint: string;
             key_id: string;
-            /** @description One of `active`, `retiring`, `retired`, `revoked`, or `configured`. */
-            lifecycle: string;
             name: string;
-            /** Format: int64 */
-            notarize_until_unix_ms?: number | null;
-            operator: string;
-            transport: string;
-            /** Format: int64 */
-            valid_from_unix_ms?: number | null;
-            /** Format: int64 */
-            valid_until_unix_ms?: number | null;
-            verification_key: string;
+            public_key: string;
+            /**
+             * @description Where captures whose receipt this key signed are sealed. Unset once
+             *     the notary no longer seals.
+             */
+            seal_endpoint?: string | null;
         };
         OperationProgressResponse: {
             /**
@@ -756,14 +747,6 @@ export interface operations {
                 };
             };
             401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            500: {
                 headers: {
                     [name: string]: unknown;
                 };

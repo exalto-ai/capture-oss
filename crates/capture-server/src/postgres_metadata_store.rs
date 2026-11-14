@@ -26,7 +26,7 @@ use crate::{
     config::PostgresSslMode,
     metadata::{
         CaptureCompletion, CaptureMode, Event, EventFilters, EventSnapshot, IncompleteCapture,
-        MetadataCounts, NewTrace, Operation, OperationAttempt, OperationFilters, RegistrySnapshot,
+        MetadataCounts, NewTrace, Operation, OperationAttempt, OperationFilters,
         TerminalOperationResult, TraceFilters, TraceSummary, trace_search_parts,
     },
     metadata_store::{
@@ -35,12 +35,11 @@ use crate::{
         validate_operation_id, validate_trace_id,
     },
     organization::OrganizationId,
-    registry::Registry,
 };
 
 const JOURNAL: &str = "captured.schema_migrations";
 const MIGRATION_LOCK_NAMESPACE: &str = "ecp/captured-postgres-migrations/v1";
-const LATEST_SCHEMA_VERSION: i64 = 5;
+const LATEST_SCHEMA_VERSION: i64 = 6;
 const INITIAL_MIGRATION: &str = include_str!("../migrations-postgres-daemon/0001_initial.sql");
 const CAPTURE_MODES_MIGRATION: &str =
     include_str!("../migrations-postgres-daemon/0002_capture_modes.sql");
@@ -49,7 +48,9 @@ const ORGANIZATIONS_MIGRATION: &str =
 const VAULT_PIN_MIGRATION: &str = include_str!("../migrations-postgres-daemon/0004_vault_pin.sql");
 const DROP_TRACE_SHARES_MIGRATION: &str =
     include_str!("../migrations-postgres-daemon/0005_drop_trace_shares.sql");
-const MIGRATIONS: [(i64, &str, &str); 5] = [
+const DROP_REGISTRY_MIGRATION: &str =
+    include_str!("../migrations-postgres-daemon/0006_drop_registry.sql");
+const MIGRATIONS: [(i64, &str, &str); 6] = [
     (1, "initial captured metadata schema", INITIAL_MIGRATION),
     (
         2,
@@ -59,12 +60,13 @@ const MIGRATIONS: [(i64, &str, &str); 5] = [
     (3, "organizations", ORGANIZATIONS_MIGRATION),
     (4, "pin only the vault key", VAULT_PIN_MIGRATION),
     (5, "drop trace shares", DROP_TRACE_SHARES_MIGRATION),
+    (6, "drop the shared Registry", DROP_REGISTRY_MIGRATION),
 ];
 
 /// A pooled PostgreSQL metadata backend whose schema has already been migrated.
 ///
 /// This is the cluster's view: replica coordination, claims that span
-/// organizations, dashboard sessions and the Registry. Everything else goes
+/// organizations and dashboard sessions. Everything else goes
 /// through [`PostgresOrganizationStore`].
 #[derive(Clone)]
 pub(crate) struct PostgresMetadataStore {
@@ -1472,7 +1474,7 @@ impl MetadataStore for PostgresOrganizationStore {
 
 /// Coordination for the multi-replica server: replica leases, claims that
 /// span organizations and carry the organization of the work they claim,
-/// dashboard sessions and the Registry. Everything else goes through
+/// and dashboard sessions. Everything else goes through
 /// [`Self::organization`], whose every read and write is limited to one
 /// organization.
 impl PostgresMetadataStore {
@@ -2439,86 +2441,6 @@ impl PostgresMetadataStore {
             .bind(limit).execute(&self.pool).await.map_err(|error| db(anyhow!(error).context("pruning dashboard sessions")))?.rows_affected();
         usize::try_from(affected).map_err(|error| db(error.into()))
     }
-
-    pub(crate) async fn pin_registry(
-        &self,
-        registry: Registry,
-        registry_source: &str,
-    ) -> MetadataResult<RegistrySnapshot> {
-        let mut transaction = self
-            .pool
-            .begin()
-            .await
-            .map_err(|error| db(anyhow!(error).context("starting Registry transaction")))?;
-        let current = sqlx::query_scalar::<_, Vec<u8>>(
-            "SELECT registry_json FROM captured.registry
-             WHERE singleton = TRUE FOR UPDATE",
-        )
-        .fetch_optional(&mut *transaction)
-        .await
-        .map_err(|error| db(anyhow!(error).context("locking shared Registry snapshot")))?
-        .map(|bytes| {
-            serde_json::from_slice::<RegistrySnapshot>(&bytes)
-                .context("parsing shared Registry snapshot")
-                .map_err(db)
-        })
-        .transpose()?;
-        let snapshot =
-            crate::service::registry::merge_registry_snapshot(current, registry, registry_source)
-                .map_err(|error| db(error.context("merging shared Registry snapshot")))?;
-        let generation = i64::try_from(snapshot.generation)
-            .map_err(|_| MetadataStoreError::InvalidInput("notary_generation_out_of_range"))?;
-        let registry_json = serde_json::to_vec(&snapshot)
-            .map_err(|error| db(anyhow!(error).context("encoding shared Registry snapshot")))?;
-        if registry_json.len() > 1_048_576 {
-            return Err(MetadataStoreError::InvalidInput("registry_too_large"));
-        }
-        sqlx::query(
-            "INSERT INTO captured.registry(
-                 singleton,generation,registry_sha256,registry_source,active_key_id,registry_json,updated_at)
-             VALUES(TRUE,$1,$2,$3,$4,$5,clock_timestamp())
-             ON CONFLICT(singleton) DO UPDATE SET
-                 generation=excluded.generation,
-                 registry_sha256=excluded.registry_sha256,
-                 registry_source=excluded.registry_source,
-                 active_key_id=excluded.active_key_id,
-                 registry_json=excluded.registry_json,
-                 updated_at=clock_timestamp()",
-        )
-        .bind(generation)
-        .bind(&snapshot.registry_sha256)
-        .bind(&snapshot.registry_source)
-        .bind(&snapshot.active_key_id)
-        .bind(&registry_json)
-        .execute(&mut *transaction)
-        .await
-        .map_err(|error| db(anyhow!(error).context("storing shared Registry snapshot")))?;
-        transaction
-            .commit()
-            .await
-            .map_err(|error| db(anyhow!(error).context("committing shared Registry snapshot")))?;
-        Ok(snapshot)
-    }
-
-    pub(crate) async fn registry_snapshot(&self) -> MetadataResult<Option<RegistrySnapshot>> {
-        let value = sqlx::query_scalar::<_, Vec<u8>>(
-            "SELECT registry_json FROM captured.registry WHERE singleton = TRUE",
-        )
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(|error| db(anyhow!(error).context("reading shared Registry snapshot")))?
-        .map(|bytes| {
-            serde_json::from_slice::<RegistrySnapshot>(&bytes)
-                .context("parsing shared Registry snapshot")
-                .and_then(|snapshot| {
-                    crate::service::registry::validate_registry_snapshot(&snapshot)?;
-                    Ok(snapshot)
-                })
-                .map_err(db)
-        })
-        .transpose()?;
-        Ok(value)
-    }
 }
 
 fn push_event_filters<'a>(query: &mut QueryBuilder<'a, Postgres>, filters: &'a EventFilters) {
@@ -2733,9 +2655,6 @@ mod tests {
             CaptureClaim, MetadataStore, MetadataStoreError, ReplicaIdentity, conformance,
         },
         organization::OrganizationId,
-        registry::{
-            NotaryKeyStatus, NotaryTransport, REGISTRY_FORMAT, Registry, RegistryRecord, key_id,
-        },
     };
 
     use super::{
@@ -3452,164 +3371,6 @@ mod tests {
         assert!(store.dashboard_session_valid(&token_hash, 0).await.unwrap());
         store.revoke_dashboard_session(&token_hash).await.unwrap();
         assert!(!store.dashboard_session_valid(&token_hash, 0).await.unwrap());
-
-        let registry_record = |seed: u8| {
-            let signing = k256::ecdsa::SigningKey::from_slice(&[seed; 32]).unwrap();
-            let public_key = signing.verifying_key().to_sec1_bytes().to_vec();
-            RegistryRecord {
-                name: format!("Notary {seed}"),
-                operator: "Test operator".to_owned(),
-                host: "notary.example".into(),
-                port: 7047,
-                transport: NotaryTransport::Tcp,
-                key_id: key_id(&public_key),
-                public_key: hex::encode(public_key),
-                status: NotaryKeyStatus::Active,
-                valid_from_unix_ms: 0,
-                valid_until_unix_ms: None,
-                notarize_until_unix_ms: None,
-            }
-        };
-        let old = registry_record(9);
-        let new = registry_record(10);
-        let source = "https://api.example/api/registry";
-        let first_registry = Registry {
-            format: REGISTRY_FORMAT.into(),
-            generation: 1,
-            active_key_id: old.key_id.clone(),
-            notaries: vec![old.clone()],
-        };
-        store
-            .pin_registry(first_registry.clone(), source)
-            .await
-            .unwrap();
-        let second_registry = Registry {
-            format: REGISTRY_FORMAT.into(),
-            generation: 2,
-            active_key_id: new.key_id.clone(),
-            notaries: vec![new.clone()],
-        };
-        let updated = store
-            .pin_registry(second_registry.clone(), source)
-            .await
-            .unwrap();
-        assert_eq!(updated.generation, 2);
-        assert_eq!(
-            updated
-                .records
-                .iter()
-                .find(|record| record.key_id == old.key_id)
-                .unwrap()
-                .status,
-            NotaryKeyStatus::Retired
-        );
-
-        let replayed = store
-            .pin_registry(second_registry.clone(), source)
-            .await
-            .unwrap();
-        assert_eq!(replayed.generation, updated.generation);
-        assert_eq!(replayed.registry_sha256, updated.registry_sha256);
-        assert_eq!(replayed.registry_source, updated.registry_source);
-        assert_eq!(
-            replayed
-                .records
-                .iter()
-                .find(|record| record.key_id == old.key_id)
-                .unwrap()
-                .status,
-            NotaryKeyStatus::Retired
-        );
-
-        let mirror_source = "https://mirror.example/api/registry";
-        assert!(
-            store
-                .pin_registry(second_registry.clone(), mirror_source)
-                .await
-                .is_err()
-        );
-        let source_unchanged = store.registry_snapshot().await.unwrap().unwrap();
-        assert_eq!(source_unchanged.generation, updated.generation);
-        assert_eq!(source_unchanged.registry_sha256, updated.registry_sha256);
-        assert_eq!(source_unchanged.registry_source, source);
-        assert_eq!(
-            source_unchanged
-                .records
-                .iter()
-                .find(|record| record.key_id == old.key_id)
-                .unwrap()
-                .status,
-            NotaryKeyStatus::Retired
-        );
-
-        let mut conflicting_new = new.clone();
-        conflicting_new.host = "conflict.example".into();
-        assert!(
-            store
-                .pin_registry(
-                    Registry {
-                        format: REGISTRY_FORMAT.into(),
-                        generation: 2,
-                        active_key_id: conflicting_new.key_id.clone(),
-                        notaries: vec![conflicting_new],
-                    },
-                    source,
-                )
-                .await
-                .is_err()
-        );
-        assert!(store.pin_registry(first_registry, source).await.is_err());
-
-        let mut revoked_old = old.clone();
-        revoked_old.status = NotaryKeyStatus::Revoked;
-        let revoked = store
-            .pin_registry(
-                Registry {
-                    format: REGISTRY_FORMAT.into(),
-                    generation: 3,
-                    active_key_id: new.key_id.clone(),
-                    notaries: vec![new.clone(), revoked_old],
-                },
-                source,
-            )
-            .await
-            .unwrap();
-        assert_eq!(
-            revoked
-                .records
-                .iter()
-                .find(|record| record.key_id == old.key_id)
-                .unwrap()
-                .status,
-            NotaryKeyStatus::Revoked
-        );
-        let mut attempted_restore = old.clone();
-        attempted_restore.status = NotaryKeyStatus::Retired;
-        let non_resurrected = store
-            .pin_registry(
-                Registry {
-                    format: REGISTRY_FORMAT.into(),
-                    generation: 4,
-                    active_key_id: new.key_id.clone(),
-                    notaries: vec![new, attempted_restore],
-                },
-                source,
-            )
-            .await
-            .unwrap();
-        assert_eq!(
-            non_resurrected
-                .records
-                .iter()
-                .find(|record| record.key_id == old.key_id)
-                .unwrap()
-                .status,
-            NotaryKeyStatus::Revoked
-        );
-        assert_eq!(
-            store.registry_snapshot().await.unwrap().unwrap().generation,
-            4
-        );
     }
 
     #[tokio::test]
@@ -3875,13 +3636,19 @@ mod tests {
                 .fetch_all(&pool)
                 .await
                 .unwrap();
-        assert_eq!(versions, [1, 2, 3, 4, 5]);
+        assert_eq!(versions, [1, 2, 3, 4, 5, 6]);
         let trace_shares: bool =
             sqlx::query_scalar("SELECT to_regclass('captured.trace_shares') IS NOT NULL")
                 .fetch_one(&pool)
                 .await
                 .unwrap();
         assert!(!trace_shares, "migration 5 drops share metadata");
+        let registry: bool =
+            sqlx::query_scalar("SELECT to_regclass('captured.registry') IS NOT NULL")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert!(!registry, "migration 6 drops the shared Registry");
         for table in ["traces", "operations", "events"] {
             let organizations: Vec<String> = sqlx::query_scalar(&format!(
                 "SELECT DISTINCT organization_id FROM captured.{table}"
