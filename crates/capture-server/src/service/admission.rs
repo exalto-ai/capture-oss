@@ -326,7 +326,6 @@ pub(crate) mod test_capture_api {
                                     body["admission"]["mode"].as_str().unwrap()
                                 ),
                                 "expires_at": 1,
-                                "registry_generation": 1,
                                 "limits": {
                                     "max_attestable_http_bytes": 65_536,
                                     "max_frame_bytes": 65_536,

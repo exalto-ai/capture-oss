@@ -95,14 +95,11 @@ The hosted API reads the complete Registry only from
 `CAPTURE_API_REGISTRY_FILE`. In the colocated Compose deployment, the active
 record must match `CAPTURE_NOTARY_PUBLIC_KEY`; the notary health check uses
 `capture-notary public-key --signing-key-file ...` to independently confirm that
-the public key matches the mounted private key. The platform policy adapter's
-required `CAPTURE_NOTARY_REGISTRY_GENERATION` must equal the generation in that
-canonical Registry file, so a ticket cannot be redeemed against different
-directory metadata.
+the public key matches the mounted private key.
 
 For every endpoint, transport, validity, status, or key change, edit the
-canonical Registry JSON, increment its `generation`, and deploy the matching
-`CAPTURE_NOTARY_REGISTRY_GENERATION`. Store the JSON as one compact line.
+canonical Registry JSON and increment its `generation`. Store the JSON as one
+compact line.
 Retiring notarization-only instances are operated separately until their drain
 deadlines. There is no single-key or inline Registry fallback.
 
