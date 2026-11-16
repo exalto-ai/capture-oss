@@ -1,5 +1,10 @@
 //! Backend conformance scenarios for [`ArtifactStore`](super::ArtifactStore).
 
+#![allow(
+    clippy::unwrap_used,
+    reason = "backends run these scenarios as tests, where a failed unwrap is a failed test"
+)]
+
 use std::sync::Arc;
 
 use sha2::{Digest as _, Sha256};

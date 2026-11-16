@@ -19,6 +19,17 @@ tokio = { version = "1.45", features = ["rt-multi-thread", "sync"] }
 [build-dependencies]
 napi-build = "2.6.0"
 
+# The runtime workspace's lints (oss/Cargo.toml); oss/clippy.toml applies here.
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+allow_attributes_without_reason = "warn"
+dbg_macro = "warn"
+print_stderr = "warn"
+print_stdout = "warn"
+unwrap_used = "warn"
+
 # Its own workspace, so the runtime workspace never builds a Node addon.
 [workspace]
 

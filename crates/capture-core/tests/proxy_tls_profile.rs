@@ -148,6 +148,7 @@ struct NotaryPhaseTimings {
     notarize_verify_ms: u128,
 }
 
+#[expect(clippy::print_stderr, reason = "the profile reports its measurements")]
 async fn run_proxy_tls_http_commitment_and_proof(profile: ProofProfile) -> Result<()> {
     let (body, profile_tokens) = profile_body(profile.bytes, profile.tokens, profile.json)?;
     let bytes = body.len();

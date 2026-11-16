@@ -42,6 +42,19 @@ utoipa = "5.5"
 uuid = "1.16"
 zeroize = "1.8"
 
+# Every member opts in with `[lints] workspace = true`. CI runs clippy with
+# `-D warnings`, so these warnings fail it; clippy.toml exempts tests from the
+# unwrap, print, and dbg lints.
+[workspace.lints.rust]
+unsafe_code = "deny"
+
+[workspace.lints.clippy]
+allow_attributes_without_reason = "warn"
+dbg_macro = "warn"
+print_stderr = "warn"
+print_stdout = "warn"
+unwrap_used = "warn"
+
 # The vendored spansy carries a local patch for input-proportional parser
 # stack usage; see vendor/tlsn-utils/README.md.
 [patch."https://github.com/tlsnotary/tlsn-utils"]

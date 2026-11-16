@@ -476,7 +476,6 @@ where
 
 /// Runs the Witnessed relay with an injectable provider connector, so tests
 /// can supply a private-CA fixture without resolving a public hostname.
-#[allow(clippy::too_many_arguments)]
 async fn run_witness_session_with_connector<S, U, C, F>(
     socket: S,
     signing_key: Arc<SigningKey>,

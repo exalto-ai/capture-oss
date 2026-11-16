@@ -1244,7 +1244,10 @@ pub async fn notarize_capture_checkpoint(
 /// Runs one sealing session that always ends: a notary close or reset during
 /// any phase, a stalled notary, or an overlong session becomes a typed
 /// [`NotaryConnectionError`] instead of a pending future.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the public entry point's arguments plus the deadlines that tests shorten"
+)]
 async fn notarize_capture_checkpoint_within(
     notary: &NotaryEndpoint,
     checkpoint: &CaptureCheckpoint,
@@ -1516,7 +1519,10 @@ pub async fn run_notary_session_with_limits_after_prelude(
     })
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "dispatches three session kinds, each using a different subset of these inputs"
+)]
 async fn run_notary_session_with_limits(
     socket: TcpStream,
     mode: NotarySessionMode,
@@ -1701,7 +1707,6 @@ fn application_data_bytes(records: &[tlsn::transcript::Record]) -> Result<usize>
         })
 }
 
-#[allow(clippy::too_many_arguments)]
 async fn run_notarization_session(
     mut socket: TcpStream,
     signing_key: Arc<SigningKey>,

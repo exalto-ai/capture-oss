@@ -435,7 +435,13 @@ pub async fn serve_on_listener(
         max_concurrent_witnesses = config.max_concurrent_witnesses,
         "Notary server listening"
     );
-    println!("Notary server public key: {}", config.public_key);
+    #[expect(
+        clippy::print_stdout,
+        reason = "docs/self-hosting.md tells operators the server prints its public key"
+    )]
+    {
+        println!("Notary server public key: {}", config.public_key);
+    }
 
     enum ServeEvent {
         Shutdown,

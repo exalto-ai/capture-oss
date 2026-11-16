@@ -552,7 +552,7 @@ fn event_from_row(row: &PgRow) -> anyhow::Result<Event> {
 
 /// Records one activity event for `organization`, the organization of the
 /// Trace, operation or setting the event describes.
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments, reason = "one argument per event column")]
 async fn insert_event(
     connection: &mut PgConnection,
     organization: &OrganizationId,

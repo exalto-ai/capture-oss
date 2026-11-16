@@ -61,3 +61,6 @@ tiktoken-rs = "0.12"
 tls-server-fixture = { path = "../../vendor/tlsn/crates/tls-server-fixture" }
 tlsn = { path = "../../vendor/tlsn/crates/tlsn", features = ["mozilla-certs", "test-utils"] }
 uuid = { workspace = true, features = ["v4"] }
+
+[lints]
+workspace = true

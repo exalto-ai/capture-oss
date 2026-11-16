@@ -340,6 +340,10 @@ pub(crate) fn read_signing_key(path: &Path) -> Result<SigningKey> {
     SigningKey::from_slice(&bytes).context("invalid secp256k1 key")
 }
 
+#[expect(
+    clippy::print_stdout,
+    reason = "the command's output is the public key"
+)]
 pub fn print_public_key(args: &CaptureNotaryPublicKeyArgs) -> Result<()> {
     let key = read_signing_key(&args.signing_key_file)?;
     println!("{}", hex::encode(key.verifying_key().to_sec1_bytes()));

@@ -2,6 +2,8 @@
 //!
 //! This binary cannot be built unless the `daemon-e2e` feature is explicit.
 
+#![expect(clippy::print_stderr, reason = "the E2E fixture logs ended sessions")]
+
 use std::{env, fs, sync::Arc};
 
 use anyhow::{Context as _, Result, bail};

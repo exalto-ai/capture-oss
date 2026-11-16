@@ -58,3 +58,6 @@ http-body-util = { workspace = true }
 testcontainers-modules = { version = "0.15", default-features = false, features = ["postgres"] }
 tower = { version = "0.5", features = ["util"] }
 tracing-subscriber = { workspace = true, features = ["fmt"] }
+
+[lints]
+workspace = true

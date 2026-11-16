@@ -1,0 +1,5 @@
+# Tests may unwrap, print, and use dbg!; the workspace lints still cover
+# everything that ships.
+allow-unwrap-in-tests = true
+allow-print-in-tests = true
+allow-dbg-in-tests = true

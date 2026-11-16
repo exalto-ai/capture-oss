@@ -251,7 +251,10 @@ impl Client {
     /// encrypted under `key`. `timeout` bounds the wait for the response
     /// headers, in seconds.
     #[pyo3(signature = (method, url, headers, body, key, timeout=None))]
-    #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the arguments are the Python method's parameters"
+    )]
     fn capture(
         &self,
         py: Python<'_>,

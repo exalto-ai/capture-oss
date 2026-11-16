@@ -241,7 +241,10 @@ pub struct S3ArtifactStoreConfig {
 }
 
 impl S3ArtifactStoreConfig {
-    #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "one argument per setting it validates"
+    )]
     pub fn new(
         endpoint: Option<url::Url>,
         region: String,

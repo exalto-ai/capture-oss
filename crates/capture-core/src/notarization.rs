@@ -92,7 +92,6 @@ pub fn trace_package_created_at_unix_ms_bytes(bytes: &[u8]) -> Result<u64> {
 
 /// Completes a decoded capture checkpoint, optionally under an admission
 /// value, reports milestones, and returns the canonical `.llmtrace` bytes.
-#[allow(clippy::too_many_arguments)]
 pub async fn notarize_capture_checkpoint_bytes(
     checkpoint: &CaptureCheckpoint,
     trusted_notary_key: &[u8],

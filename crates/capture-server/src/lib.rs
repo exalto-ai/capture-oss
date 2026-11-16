@@ -57,6 +57,7 @@ pub async fn run_daemon() -> Result<()> {
 
 /// Applies the daemon-owned PostgreSQL metadata migrations and pins the
 /// cluster vault key.
+#[expect(clippy::print_stdout, reason = "the migrate command reports progress")]
 async fn run_daemon_migrator(path: PathBuf) -> Result<()> {
     use std::time::Duration;
 

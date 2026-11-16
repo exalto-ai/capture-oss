@@ -734,7 +734,10 @@ const MAX_WITNESSED_REQUEST_BODY_BYTES: usize = capture_core::witness::DEFAULT_M
 /// Runs one provider request in Witnessed mode: the notary relays the
 /// plaintext exchange and signs a receipt, and the daemon stores the sealed
 /// Witnessed trace package as soon as the response ends.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each argument is a separate part of the relayed request"
+)]
 async fn witnessed_provider_request(
     ctx: &CaptureContext,
     notary: NotaryEndpoint,

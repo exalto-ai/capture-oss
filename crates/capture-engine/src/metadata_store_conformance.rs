@@ -4,6 +4,11 @@
 //! [`run`] unchanged. Keeping the scenarios backend-neutral prevents a new
 //! backend from weakening lifecycle, pagination, or concurrency guarantees.
 
+#![allow(
+    clippy::unwrap_used,
+    reason = "backends run these scenarios as tests, where a failed unwrap is a failed test"
+)]
+
 use std::{
     collections::HashSet,
     future::Future,
