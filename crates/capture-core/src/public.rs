@@ -192,10 +192,8 @@ fn validate_trace_shape(value: &Value) -> Result<()> {
         let span_provider = string_attribute(&span_attributes, "gen_ai.provider.name")?;
         string_attribute(&span_attributes, "gen_ai.operation.name")?;
         string_attribute(&span_attributes, "gen_ai.request.model")?;
-        for key in ["gen_ai.response.model"] {
-            if let Some(value) = span_attributes.get(key) {
-                string_value(value, key)?;
-            }
+        if let Some(value) = span_attributes.get("gen_ai.response.model") {
+            string_value(value, "gen_ai.response.model")?;
         }
         for key in ["gen_ai.usage.input_tokens", "gen_ai.usage.output_tokens"] {
             if let Some(value) = span_attributes.get(key) {

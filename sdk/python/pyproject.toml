@@ -7,7 +7,7 @@ name = "undertext-capture"
 version = "0.0.1"
 description = "Seal model-provider calls with an Undertext Capture notary and get the evidence back as bytes"
 license = "MIT"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 dependencies = []
 
 [project.optional-dependencies]

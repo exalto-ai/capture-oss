@@ -806,7 +806,6 @@ mod tests {
         core::{IntoContainerPort as _, WaitFor},
         runners::AsyncRunner as _,
     };
-    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
     use url::Url;
 
     use super::*;

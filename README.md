@@ -40,7 +40,7 @@ disclosed evidence. Never treat the two as interchangeable. See the
 
 ## Build from source
 
-The capture server requires Rust 1.95.0 and a C toolchain:
+The capture server requires Rust 1.100.0 and a C toolchain:
 
 ```bash
 git clone https://github.com/exalto-ai/capture-oss.git

@@ -2,7 +2,7 @@
 # dependencies across source changes. cargo-chef stubs out every local crate,
 # so the cooked layer changes only when a dependency or its features change.
 # Building only the E2E binaries also avoids compiling the daemon twice.
-FROM rust:1.95-slim-bookworm AS daemon-e2e-chef
+FROM rust:1.100-slim-trixie AS daemon-e2e-chef
 
 RUN cargo install --locked cargo-chef --version 0.1.78 \
     && rm -rf /usr/local/cargo/registry
@@ -36,7 +36,7 @@ RUN find vendor -exec touch -h -d @0 {} + \
     && cp target/release/capture-server target/release/notary-e2e-notary /out/ \
     && rm -rf target
 
-FROM debian:bookworm-slim AS daemon-e2e
+FROM debian:trixie-slim AS daemon-e2e
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl jq openssl python3 \

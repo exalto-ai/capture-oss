@@ -17,14 +17,14 @@ jobs:
   runtime:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Install Rust toolchain from rust-toolchain.toml
         run: |
           rustup toolchain install --no-self-update
           rustup component add rustfmt clippy
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
-          node-version: 24
+          node-version: 26
           cache: npm
           cache-dependency-path: apps/admin-dashboard/package-lock.json
       - run: >-
@@ -42,14 +42,14 @@ jobs:
     env:
       CARGO_TARGET_DIR: ${{ github.workspace }}/target
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Install Rust toolchain from rust-toolchain.toml
         run: |
           rustup toolchain install --no-self-update
           rustup component add rustfmt clippy
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
-          node-version: 24
+          node-version: 26
           cache: npm
           cache-dependency-path: sdk/js/package-lock.json
       - run: cargo fmt --manifest-path sdk/python/Cargo.toml --check
@@ -74,7 +74,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
           persist-credentials: false
