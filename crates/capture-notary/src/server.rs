@@ -632,13 +632,7 @@ pub async fn exercise_admission_policy_contract(
             .context("contract admission value exceeds the wire limit")?;
         let mut client = tokio::net::TcpStream::connect(address).await?;
         client.write_all(b"NTRY\0\0\0\x01").await?;
-        client
-            .write_all(&[match mode {
-                NotarySessionMode::Capture => 5,
-                NotarySessionMode::Notarization => 6,
-                NotarySessionMode::Witness => 4,
-            }])
-            .await?;
+        client.write_all(&[mode.prelude_byte()]).await?;
         client.write_all(&admission_length.to_be_bytes()).await?;
         client.write_all(admission_value).await?;
         client.flush().await?;
@@ -1147,7 +1141,10 @@ mod tests {
     ) {
         let admission_value = admission_value.unwrap_or_default().as_bytes();
         client.write_all(b"NTRY\0\0\0\x01").await.unwrap();
-        client.write_all(&[5]).await.unwrap();
+        client
+            .write_all(&[NotarySessionMode::Capture.prelude_byte()])
+            .await
+            .unwrap();
         client
             .write_all(&(admission_value.len() as u16).to_be_bytes())
             .await

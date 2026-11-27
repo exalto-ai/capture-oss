@@ -172,11 +172,11 @@ const NOTARY_CONTROL_MAGIC: &[u8; 8] = b"NTRY\0\0\0\x01";
 pub const MAX_NOTARY_ADMISSION_VALUE_BYTES: usize = 512;
 // A TLSNotary upgrade that breaks its wire protocol takes new capture and
 // notarization mode numbers, so mismatched client and notary builds fail at
-// the prelude instead of stalling mid-session. Modes 2 and 3 are retired with
-// the TLSNotary rebase onto upstream 24b10ba2; witness mode does not use
-// TLSNotary and keeps its number.
-const NOTARY_MODE_CAPTURE: u8 = 5;
-const NOTARY_MODE_NOTARIZATION: u8 = 6;
+// the prelude instead of stalling mid-session. Modes 2, 3, 5 and 6 are retired;
+// 7 and 8 came with the TLSNotary rebase onto v0.1.0-beta.1. Witness mode does
+// not use TLSNotary and keeps its number.
+const NOTARY_MODE_CAPTURE: u8 = 7;
+const NOTARY_MODE_NOTARIZATION: u8 = 8;
 const NOTARY_MODE_WITNESS: u8 = 4;
 const NOTARY_ADMISSION_ACCEPTED: u8 = 1;
 const NOTARY_ADMISSION_REJECTED: u8 = 2;
@@ -248,6 +248,17 @@ pub enum NotarySessionMode {
     /// The notary relays a plaintext exchange and signs a receipt. See
     /// [`witness`] for the different trust boundary this implies.
     Witness,
+}
+
+impl NotarySessionMode {
+    /// The mode byte that selects this operation in the session prelude.
+    pub fn prelude_byte(self) -> u8 {
+        match self {
+            Self::Capture => NOTARY_MODE_CAPTURE,
+            Self::Notarization => NOTARY_MODE_NOTARIZATION,
+            Self::Witness => NOTARY_MODE_WITNESS,
+        }
+    }
 }
 
 /// A service-level reason a notary declined a session before the TLSN protocol
@@ -1182,8 +1193,12 @@ pub async fn capture_streaming_request(
                 root_binding: state.root_binding(),
                 record_digest: state.record_digest(),
             };
-            handle.close();
+            // The notary closes the session once its verifier has finished.
+            // The prover finishes first, and closing from this side would end
+            // the session while the notary still has buffered messages to
+            // verify, which it treats as an aborted session.
             let mut socket = driver_task.await??;
+            drop(handle);
             write_frame(
                 &mut socket,
                 &bincode::serialize(&request)?,
@@ -2796,12 +2811,18 @@ mod tests {
         server.await.unwrap();
     }
 
-    /// Clients built against the previous TLSNotary protocol send capture mode
-    /// 2 and notarization mode 3. The notary must refuse them at the prelude,
-    /// before any session work, while their witness mode still works.
+    /// Clients built against earlier TLSNotary protocols send capture mode 2
+    /// or 5 and notarization mode 3 or 6. The notary must refuse them at the
+    /// prelude, before any session work, while their witness mode still works.
     #[tokio::test]
     async fn retired_tlsnotary_modes_are_rejected_at_the_prelude() {
-        for (mode, accepted) in [(2, false), (3, false), (NOTARY_MODE_WITNESS, true)] {
+        for (mode, accepted) in [
+            (2, false),
+            (3, false),
+            (5, false),
+            (6, false),
+            (NOTARY_MODE_WITNESS, true),
+        ] {
             let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
             let address = listener.local_addr().unwrap();
             let server = tokio::spawn(async move {

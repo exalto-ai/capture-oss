@@ -1,8 +1,8 @@
 # Vendored TLSNotary
 
-This directory is <https://github.com/tlsnotary/tlsn> at upstream `main`
-commit `24b10ba21bf36c3fd3de709e7eccd8308bb64207` (2026-10-30, after
-`v0.1.0-alpha.15`) plus the local patches below. `LICENSE-APACHE` and
+This directory is <https://github.com/tlsnotary/tlsn> at release
+`v0.1.0-beta.1`, commit `40a069565a2eaecbb5e691dbc634be20e8498daf`
+(2026-11-14), plus the local patches below. `LICENSE-APACHE` and
 `LICENSE-MIT` are added here to credit TLSNotary.
 
 Upstream files that repository ignore rules exclude are absent: the test
@@ -28,16 +28,9 @@ private keys (`*.key`) under `crates/server-fixture/` and
    `verify_plaintext_batched` clips ranges to each batch before calling it.
    It now rejects ranges past the transcript itself.
    `tlsn/src/verifier/verify.rs`.
-5. **Proxy-TLS read readiness.** The prover treats an application that
-   closes while the client `wants_read()` as abandoned, and fails. Upstream's
-   Proxy-TLS client reported `wants_read()` for any connected session, so
-   dropping a kept-alive connection after a complete response failed with
-   `BrokenPipe`. It now reports only plaintext rustls has buffered, as the
-   MPC client does. `tlsn/src/prover/client/proxy/mod.rs`; covered by
-   `capture-core`'s `proxy_tls_prover_accepts_a_dropped_kept_alive_connection`.
-6. **Package version suffix.** The verifier rejects a prover whose `tlsn`
+5. **Package version suffix.** The verifier rejects a prover whose `tlsn`
    package version differs from its own. `crates/tlsn/Cargo.toml` carries an
-   `.exalto.N` suffix; increment `N` whenever a rebase or patch changes the
+   `.undertext.N` suffix; increment `N` whenever a rebase or patch changes the
    wire protocol. The check runs inside the tlsn session, so it only helps
    while upstream's session and mux framing still interoperate. Deferred
    finalization does not run it.
@@ -49,7 +42,8 @@ in `capture-core`'s notary prelude (`NOTARY_MODE_CAPTURE` and
 `NOTARY_MODE_NOTARIZATION`). The notary then refuses a mismatched client at
 the prelude. Otherwise both sides wait inside an incompatible session, and
 each stalled client holds a notary session slot until the session timeout.
-This rebase changed upstream's mux, so it retired modes 2 and 3.
+The rebase onto `v0.1.0-beta.1` changed the mpz GHASH byte order, so it
+retired modes 5 and 6 (an earlier rebase retired 2 and 3).
 
 ## Rebasing
 

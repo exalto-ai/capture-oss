@@ -4,7 +4,7 @@ authors = ["TLSNotary Team"]
 keywords = ["tls", "mpc", "2pc", "prover"]
 categories = ["cryptography"]
 license = "MIT OR Apache-2.0"
-version = "0.1.0-alpha.16-pre.exalto.1"
+version = "0.1.0-beta.1.undertext.1"
 edition = "2024"
 
 [lints]
@@ -70,6 +70,7 @@ web-time = { workspace = true }
 
 [dev-dependencies]
 bincode = { workspace = true }
+futures-rustls = { workspace = true }
 mpz-ideal-vm = { workspace = true }
 rstest = { workspace = true }
 tlsn-core = { workspace = true, features = ["fixtures"] }

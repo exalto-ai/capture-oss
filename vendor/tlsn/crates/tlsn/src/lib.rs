@@ -75,6 +75,7 @@
 pub mod deferred;
 mod deps;
 mod error;
+mod future;
 pub(crate) mod ghash;
 pub(crate) mod map;
 pub(crate) mod msg;
@@ -83,6 +84,7 @@ mod proxy;
 mod session;
 pub(crate) mod tag;
 pub(crate) mod transcript_internal;
+mod transport;
 pub mod verifier;
 
 pub use error::Error;

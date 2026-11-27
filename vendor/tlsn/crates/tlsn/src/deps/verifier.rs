@@ -54,10 +54,7 @@ pub(crate) fn new_verifier_zk_vm() -> VerifierZk {
                 base_ot_recv,
             );
             let rcot_send = ferret::Sender::new(
-                ferret::FerretConfig::builder()
-                    .lpn_type(ferret::LpnType::Regular)
-                    .build()
-                    .expect("ferret config is valid"),
+                ferret::FerretConfig::default(),
                 Block::random(&mut rng),
                 rcot_send,
             );
@@ -92,10 +89,7 @@ impl VerifierMpcDeps {
             base_ot_recv,
         );
         let rcot_send = ferret::Sender::new(
-            ferret::FerretConfig::builder()
-                .lpn_type(ferret::LpnType::Regular)
-                .build()
-                .expect("ferret config is valid"),
+            ferret::FerretConfig::default(),
             Block::random(&mut rng),
             rcot_send,
         );
