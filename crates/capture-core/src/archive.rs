@@ -18,8 +18,8 @@ use zip::{CompressionMethod, DateTime, ZipArchive, ZipWriter, write::SimpleFileO
 use crate::sha256_hex;
 pub use crate::{TRACE_EVIDENCE_FORMAT, WITNESS_EVIDENCE_FORMAT};
 
-pub const TRACE_PACKAGE_FORMAT: &str = "ecp/trace-package/v1";
-pub const ARCHIVE_CONTENT_TYPE: &str = "application/vnd.exalto.notary.trace-package+zip";
+pub const TRACE_PACKAGE_FORMAT: &str = "ucp/trace-package/v1";
+pub const ARCHIVE_CONTENT_TYPE: &str = "application/vnd.undertext.capture.trace-package+zip";
 pub const ARCHIVE_MANIFEST_PATH: &str = "archive-manifest.json";
 /// Entries of a Notarized package, whose evidence is a TLSNotary presentation.
 pub const PACKAGE_FILES: [&str; 5] = [

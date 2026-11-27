@@ -1244,7 +1244,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/vnd.exalto.notary.trace-package+zip": number[];
+                    "application/vnd.undertext.capture.trace-package+zip": number[];
                 };
             };
             401: {
@@ -1370,7 +1370,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/vnd.exalto.notary.trace-package+zip": number[];
+                "application/vnd.undertext.capture.trace-package+zip": number[];
             };
         };
         responses: {

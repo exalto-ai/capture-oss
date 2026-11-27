@@ -994,7 +994,7 @@
           "200": {
             "description": "",
             "content": {
-              "application/vnd.exalto.notary.trace-package+zip": {
+              "application/vnd.undertext.capture.trace-package+zip": {
                 "schema": {
                   "type": "array",
                   "items": {
@@ -1185,7 +1185,7 @@
         ],
         "requestBody": {
           "content": {
-            "application/vnd.exalto.notary.trace-package+zip": {
+            "application/vnd.undertext.capture.trace-package+zip": {
               "schema": {
                 "type": "array",
                 "items": {

@@ -94,7 +94,7 @@ privacy guarantee for sealing that costs one signature regardless of size.
 3. The notary checks its allowlist, opens the provider TLS connection with
    WebPKI validation, and relays both directions.
 4. When the exchange ends, the notary redacts every header value except
-   `Transfer-Encoding: chunked` and signs an `ecp/witness-receipt/v1` receipt
+   `Transfer-Encoding: chunked` and signs an `ucp/witness-receipt/v1` receipt
    over the provider hostname, connection time, and SHA-256 of the redacted
    request and response.
 5. The daemon recomputes the same redacted disclosure and checks the receipt.

@@ -387,8 +387,8 @@ export const fixtureNotaries: Notaries = {
 const fixtureTrace: TraceContent = {
   trace_id: 'trc-20260727-research-brief',
   manifest: {
-    format: 'ecp/trace-package/v1',
-    normalizer_version: 'ecp/normalizer/v1',
+    format: 'ucp/trace-package/v1',
+    normalizer_version: 'ucp/normalizer/v1',
     trace_sha256: '9a32d7c66a7e4fdd525ea6c803355273ade0f46e7c8dc4973343399731585b26',
     source: {
       provider: { name: 'openrouter', host: 'openrouter.ai' },
@@ -1019,7 +1019,7 @@ export function createFixtureApi(): AdminApi {
     },
     downloadPackage: async (captureId) =>
       new Blob([`fixture .llmtrace for ${captureId}`], {
-        type: 'application/vnd.exalto.notary.trace-package+zip',
+        type: 'application/vnd.undertext.capture.trace-package+zip',
       }),
     verify: async (captureId) => {
       if (!traces.has(captureId))

@@ -12,8 +12,8 @@ Do not describe them interchangeably.
 
 ## Encrypted capture checkpoint
 
-Format: `ecp/capture-checkpoint/v1` inside the canonical vault envelope. Its
-signed receipt uses `ecp/capture-receipt/v1`.
+Format: `ucp/capture-checkpoint/v1` inside the canonical vault envelope. Its
+signed receipt uses `ucp/capture-receipt/v1`.
 
 The capture contains the client checkpoint and signed receipt required to
 complete private proof generation later. That checkpoint can reconstruct the
@@ -28,9 +28,9 @@ checkpoint formats are rejected rather than migrated.
 ## Notarized trace package
 
 The `.llmtrace` extension names one deterministic ZIP archive. Its archive
-format is `ecp/trace-package/v1`, its evidence manifest format is
-`ecp/trace-evidence/v1`, and its media type is
-`application/vnd.exalto.notary.trace-package+zip`.
+format is `ucp/trace-package/v1`, its evidence manifest format is
+`ucp/trace-evidence/v1`, and its media type is
+`application/vnd.undertext.capture.trace-package+zip`.
 
 The archive contains exactly six entries in this order:
 
@@ -58,7 +58,7 @@ container overhead.
 A Witnessed `.llmtrace` uses the same archive format, media type, canonical
 ZIP rules, size limits, and entry order, with one difference: the evidence
 entry is `evidence.witness` instead of `evidence.tlsn`, and both manifests
-name the evidence format `ecp/witness-evidence/v1`.
+name the evidence format `ucp/witness-evidence/v1`.
 
 ```text
 archive-manifest.json
@@ -99,10 +99,10 @@ evidence, not a human-readable receipt.
 ### `evidence.witness`
 
 Present only in a Witnessed package. Contains the JSON
-`ecp/witness-receipt/v1` receipt: `format`, `server_name`,
+`ucp/witness-receipt/v1` receipt: `format`, `server_name`,
 `connected_at_unix_ms`, and the hexadecimal `request_disclosed_sha256`,
 `response_disclosed_sha256`, and secp256k1 `signature`. The signature is a
-64-byte ECDSA signature over SHA-256 of `Exalto witness receipt\0` followed by
+64-byte ECDSA signature over SHA-256 of `Undertext witness receipt\0` followed by
 the bincode encoding of the other five fields in that order (strings as a
 little-endian `u64` length and UTF-8 bytes, the time as a little-endian `u64`,
 each digest as 32 raw bytes). The prefix keeps a witness signature from ever
@@ -110,7 +110,7 @@ verifying as a capture receipt or TLSNotary attestation from the same key.
 
 ### `manifest.json`
 
-Uses `ecp/trace-evidence/v1`, or `ecp/witness-evidence/v1` in a Witnessed
+Uses `ucp/trace-evidence/v1`, or `ucp/witness-evidence/v1` in a Witnessed
 package, where the provider-connection time is the receipt's
 `connected_at_unix_ms`. It records the Trace
 identifier, authenticated provider and host, authenticated provider-connection
@@ -133,10 +133,10 @@ output, usage, finish reasons, and tool calls.
 
 ### `trace.otlp.json`
 
-Contains canonical UTF-8 JSON in `ecp/otlp-trace/v1`. Object keys are
+Contains canonical UTF-8 JSON in `ucp/otlp-trace/v1`. Object keys are
 sorted by UTF-8 byte order, arrays retain input order, scalar values use compact
 JSON encoding, and the file ends in exactly one LF. This rule is identified as
-`ecp/json-lexicographic/v1`; it is intentionally not described as RFC
+`ucp/json-lexicographic/v1`; it is intentionally not described as RFC
 8785.
 
 ## Canonical trace shape
@@ -145,13 +145,13 @@ The trace is a minimal OTLP JSON `resourceSpans` payload. It has one resource
 and instrumentation scope and one or more ordered `gen_ai.inference` client
 spans. The resource identifies:
 
-- `notary.format = ecp/otlp-trace/v1`
-- `notary.normalizer.version = ecp/normalizer/v1`
+- `notary.format = ucp/otlp-trace/v1`
+- `notary.normalizer.version = ucp/normalizer/v1`
 - `otel.semconv.version = 1.37.0`
 - `service.name = notary`
 
 The instrumentation scope is `notary.normalizer` at version
-`ecp/normalizer/v1`.
+`ucp/normalizer/v1`.
 
 Supported span attributes are:
 

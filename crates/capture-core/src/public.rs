@@ -8,10 +8,10 @@ use std::collections::BTreeMap;
 use anyhow::{Context, Result, anyhow, ensure};
 use serde_json::Value;
 
-pub const PUBLIC_TRACE_FORMAT: &str = "ecp/otlp-trace/v1";
-pub const NORMALIZER_VERSION: &str = "ecp/normalizer/v1";
+pub const PUBLIC_TRACE_FORMAT: &str = "ucp/otlp-trace/v1";
+pub const NORMALIZER_VERSION: &str = "ucp/normalizer/v1";
 pub const OTEL_SEMCONV_VERSION: &str = "1.37.0";
-pub const CANONICALIZATION_ID: &str = "ecp/json-lexicographic/v1";
+pub const CANONICALIZATION_ID: &str = "ucp/json-lexicographic/v1";
 
 /// The public trace must already use the contract's deterministic byte form.
 /// Objects are sorted by UTF-8 key bytes, arrays preserve order, and scalar

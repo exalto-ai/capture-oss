@@ -402,7 +402,7 @@ async fn handle_inner(ctx: CaptureContext, request: Request) -> Result<Response>
     // Built-in clients require capture. Never silently bill a direct request
     // if capture was switched off between their readiness check and dispatch.
     let require_capture = outbound_headers
-        .remove("x-exalto-require-capture")
+        .remove("x-undertext-require-capture")
         .is_some();
     let mode = ctx.mode.snapshot().await?;
     if mode == CaptureMode::Off {
@@ -1771,7 +1771,7 @@ mod tests {
         );
         let required = || {
             Request::post("/openai/v1/responses")
-                .header("x-exalto-require-capture", "1")
+                .header("x-undertext-require-capture", "1")
                 .body(Body::from("{}"))
                 .unwrap()
         };
@@ -1837,7 +1837,7 @@ mod tests {
         state.set_mode(CaptureMode::Off);
         let request = Request::post("/openai/v1/responses")
             .header("authorization", "Bearer offline-secret")
-            .header("x-exalto-require-capture", "1")
+            .header("x-undertext-require-capture", "1")
             .body(Body::from("{}"))
             .unwrap();
         let response = handle_inner(state.ctx.clone(), request).await.unwrap();

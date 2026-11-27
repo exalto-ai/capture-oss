@@ -60,10 +60,10 @@ use tokio_rustls::TlsConnector;
 use tokio_util::compat::{FuturesAsyncReadCompatExt, TokioAsyncReadCompatExt};
 
 /// Versioned evidence contract referenced by portable trace packages.
-pub const TRACE_EVIDENCE_FORMAT: &str = "ecp/trace-evidence/v1";
+pub const TRACE_EVIDENCE_FORMAT: &str = "ucp/trace-evidence/v1";
 /// Versioned evidence contract for a Witnessed trace package, whose evidence
 /// is a notary-signed witness receipt rather than a TLSNotary presentation.
-pub const WITNESS_EVIDENCE_FORMAT: &str = "ecp/witness-evidence/v1";
+pub const WITNESS_EVIDENCE_FORMAT: &str = "ucp/witness-evidence/v1";
 
 /// Hash bytes using the spelling used by the versioned artifact contracts.
 pub fn sha256_hex(bytes: &[u8]) -> String {
@@ -166,8 +166,8 @@ pub const fn max_private_chunk_commitments(max_total_bytes: usize) -> usize {
 }
 const DISCLOSED_HEADER_VALUE_NAME: &str = "transfer-encoding";
 const DISCLOSED_TRANSFER_ENCODING_VALUE: &[u8] = b"chunked";
-pub const CAPTURE_CHECKPOINT_FORMAT: &str = "ecp/capture-checkpoint/v1";
-pub const CAPTURE_RECEIPT_FORMAT: &str = "ecp/capture-receipt/v1";
+pub const CAPTURE_CHECKPOINT_FORMAT: &str = "ucp/capture-checkpoint/v1";
+pub const CAPTURE_RECEIPT_FORMAT: &str = "ucp/capture-receipt/v1";
 const NOTARY_CONTROL_MAGIC: &[u8; 8] = b"NTRY\0\0\0\x01";
 pub const MAX_NOTARY_ADMISSION_VALUE_BYTES: usize = 512;
 // A TLSNotary upgrade that breaks its wire protocol takes new capture and

@@ -430,7 +430,7 @@ pub async fn trace_content(
     Ok(Json(value))
 }
 
-#[utoipa::path(get, path = "/v1/traces/{trace_id}/package.llmtrace", summary = "Export a Trace package", description = "Returns the exact retained canonical .llmtrace bytes without conversion, regeneration, or transformation, with length and SHA-256 metadata and no-store caching.", params(("trace_id" = String, Path)), responses((status = 200, body = Vec<u8>, content_type = "application/vnd.exalto.notary.trace-package+zip"), (status = 404, body = ErrorEnvelope), (status = 409, body = ErrorEnvelope), (status = 500, body = ErrorEnvelope), (status = 503, body = ErrorEnvelope)), tag = "admin")]
+#[utoipa::path(get, path = "/v1/traces/{trace_id}/package.llmtrace", summary = "Export a Trace package", description = "Returns the exact retained canonical .llmtrace bytes without conversion, regeneration, or transformation, with length and SHA-256 metadata and no-store caching.", params(("trace_id" = String, Path)), responses((status = 200, body = Vec<u8>, content_type = "application/vnd.undertext.capture.trace-package+zip"), (status = 404, body = ErrorEnvelope), (status = 409, body = ErrorEnvelope), (status = 500, body = ErrorEnvelope), (status = 503, body = ErrorEnvelope)), tag = "admin")]
 pub async fn download_package(
     Api(state): Api,
     Path(trace_id): Path<String>,
@@ -506,7 +506,7 @@ pub async fn verify_trace(
     Ok(Json(value))
 }
 
-#[utoipa::path(post, path = "/v1/verify", summary = "Verify a portable Trace package", description = "Verifies exactly one bounded .llmtrace body against a request-scoped key override or configured Notary trust. The package is never imported, retained, indexed, or shared.", request_body(content = Vec<u8>, content_type = "application/vnd.exalto.notary.trace-package+zip"), params(("x-notary-trusted-notary-key" = Option<String>, Header, description = "Optional request-scoped compressed SEC1 Notary verification key in hexadecimal")), responses((status = 200, body = VerificationResult), (status = 400, body = ErrorEnvelope), (status = 500, body = ErrorEnvelope), (status = 503, body = ErrorEnvelope)), tag = "admin")]
+#[utoipa::path(post, path = "/v1/verify", summary = "Verify a portable Trace package", description = "Verifies exactly one bounded .llmtrace body against a request-scoped key override or configured Notary trust. The package is never imported, retained, indexed, or shared.", request_body(content = Vec<u8>, content_type = "application/vnd.undertext.capture.trace-package+zip"), params(("x-notary-trusted-notary-key" = Option<String>, Header, description = "Optional request-scoped compressed SEC1 Notary verification key in hexadecimal")), responses((status = 200, body = VerificationResult), (status = 400, body = ErrorEnvelope), (status = 500, body = ErrorEnvelope), (status = 503, body = ErrorEnvelope)), tag = "admin")]
 pub async fn verify_uploaded_trace(
     Api(state): Api,
     headers: HeaderMap,

@@ -283,7 +283,7 @@ if [[ $profile == full ]]; then
   load_balancer_admin_json "/v1/traces/$trace_id/package.llmtrace" --output /tmp/server.llmtrace
   package_verification=$(admin_json daemon-a /v1/verify \
     --request POST \
-    --header 'content-type: application/vnd.exalto.notary.trace-package+zip' \
+    --header 'content-type: application/vnd.undertext.capture.trace-package+zip' \
     --header 'x-notary-trusted-notary-key: 0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798' \
     --data-binary @/tmp/server.llmtrace)
   printf '%s' "$package_verification" | "${compose[@]}" exec -T daemon-a jq -e --arg id "$trace_id" \

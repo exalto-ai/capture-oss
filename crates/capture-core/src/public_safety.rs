@@ -13,7 +13,7 @@ use crate::{archive::read_trace_package_archive, validate_disclosed_http_redacti
 
 /// The admission record stores this value so an older share is never silently
 /// claimed to satisfy a newer public-package contract.
-pub const PUBLIC_PACKAGE_SAFETY_VERSION: &str = "ecp/public-package-safety/v1";
+pub const PUBLIC_PACKAGE_SAFETY_VERSION: &str = "ucp/public-package-safety/v1";
 
 /// Authenticated provider context for narrow, provider-defined public values.
 ///
@@ -835,7 +835,7 @@ mod tests {
         trace: serde_json::Value,
     ) -> Vec<u8> {
         package_of(
-            br#"{"format":"ecp/trace-evidence/v1","notary_public_key":"04cafe"}"#,
+            br#"{"format":"ucp/trace-evidence/v1","notary_public_key":"04cafe"}"#,
             format!(
                 "POST {request_path} HTTP/1.1\r\nAuthorization: \0\0\0\0\r\nContent-Type: \0\0\0\r\n\r\n{request_body}"
             )
@@ -936,7 +936,7 @@ mod tests {
         assert_eq!(validate(&archive).unwrap_err().code, "credential_field");
 
         let signed = package_of(
-            br#"{"format":"ecp/trace-evidence/v1"}"#,
+            br#"{"format":"ucp/trace-evidence/v1"}"#,
             b"POST /v1?X-Amz-Signature=fixture HTTP/1.1\r\nAuthorization: \0\0\0\r\n\r\n{}",
             b"HTTP/1.1 200 OK\r\n\r\n{}",
             &serde_json::to_vec(&safe_trace()).unwrap(),

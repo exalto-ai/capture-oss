@@ -49,13 +49,13 @@ use crate::{
 };
 
 /// Versioned contract for a notary-signed Witnessed receipt.
-pub const WITNESS_RECEIPT_FORMAT: &str = "ecp/witness-receipt/v1";
+pub const WITNESS_RECEIPT_FORMAT: &str = "ucp/witness-receipt/v1";
 /// Default per-session cap on relayed plaintext bytes in both directions.
 ///
 /// The notary buffers one exchange in memory to compute its redacted
 /// disclosure, so this bounds memory per concurrent Witnessed session.
 pub const DEFAULT_MAX_WITNESS_BYTES: usize = 64 << 20;
-const WITNESS_RECEIPT_DOMAIN: &[u8] = b"Exalto witness receipt\0";
+const WITNESS_RECEIPT_DOMAIN: &[u8] = b"Undertext witness receipt\0";
 const RELAY_CHUNK_BYTES: usize = 16 << 10;
 /// Protocol-wide cap on one Witnessed frame. Relay data is chunked at
 /// `RELAY_CHUNK_BYTES`, so this bounds what a peer can make the other side
@@ -1070,7 +1070,7 @@ mod tests {
         let key = SigningKey::from_slice(&[7u8; 32]).unwrap();
         let receipt =
             issue_witness_receipt(&key, "api.openai.com".to_owned(), 42, b"a", b"b").unwrap();
-        let mut expected = b"Exalto witness receipt\0".to_vec();
+        let mut expected = b"Undertext witness receipt\0".to_vec();
         for text in [WITNESS_RECEIPT_FORMAT, "api.openai.com"] {
             expected.extend_from_slice(&(text.len() as u64).to_le_bytes());
             expected.extend_from_slice(text.as_bytes());
