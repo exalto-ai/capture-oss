@@ -12,7 +12,7 @@ use chacha20poly1305::{
     XChaCha20Poly1305, XNonce,
     aead::{Aead, KeyInit},
 };
-use rand::RngCore;
+use rand::Rng as _;
 use sha2::{Digest as _, Sha256};
 use zeroize::Zeroize;
 
@@ -133,7 +133,7 @@ impl Vault {
         let mut nonce = [0; 24];
         rand::rng().fill_bytes(&mut nonce);
         let ciphertext = cipher
-            .encrypt(XNonce::from_slice(&nonce), plaintext)
+            .encrypt(&XNonce::from(nonce), plaintext)
             .map_err(|_| anyhow::anyhow!("encrypting checkpoint failed"))?;
         let mut output = CHECKPOINT_ENVELOPE_MAGIC.to_vec();
         output.extend_from_slice(&nonce);
@@ -150,7 +150,10 @@ impl Vault {
         }
         let (nonce, ciphertext) = encrypted[CHECKPOINT_ENVELOPE_MAGIC.len()..].split_at(24);
         XChaCha20Poly1305::new((&self.key).into())
-            .decrypt(XNonce::from_slice(nonce), ciphertext)
+            .decrypt(
+                &XNonce::try_from(nonce).expect("the nonce is 24 bytes"),
+                ciphertext,
+            )
             .map_err(|_| anyhow::anyhow!("could not decrypt checkpoint with this vault key"))
     }
 }

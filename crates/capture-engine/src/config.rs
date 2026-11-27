@@ -11,7 +11,7 @@ use std::{
 };
 
 use anyhow::{Context, Result, anyhow, bail, ensure};
-use argon2::{Argon2, PasswordHash, PasswordHasher as _, password_hash::SaltString};
+use argon2::{Argon2, PasswordHash, PasswordHasher as _};
 use k256::ecdsa::VerifyingKey;
 use serde::{Deserialize, Serialize};
 
@@ -869,10 +869,8 @@ impl CapturedConfig {
 }
 
 fn hash_admin_password(password: &[u8]) -> Result<String> {
-    let salt = SaltString::encode_b64(uuid::Uuid::new_v4().as_bytes())
-        .map_err(|error| anyhow::anyhow!("creating admin password salt failed: {error}"))?;
     Argon2::default()
-        .hash_password(password, &salt)
+        .hash_password(password)
         .map(|hash| hash.to_string())
         .map_err(|error| anyhow::anyhow!("hashing admin password failed: {error}"))
 }

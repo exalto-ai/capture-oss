@@ -20,7 +20,6 @@
         "operationId": "health",
         "responses": {
           "200": {
-            "description": "",
             "content": {
               "application/json": {
                 "schema": {
@@ -57,7 +56,6 @@
         "operationId": "readiness",
         "responses": {
           "200": {
-            "description": "",
             "content": {
               "application/json": {
                 "schema": {
@@ -67,7 +65,6 @@
             }
           },
           "503": {
-            "description": "",
             "content": {
               "application/json": {
                 "schema": {
@@ -161,7 +158,6 @@
         ],
         "responses": {
           "200": {
-            "description": "",
             "content": {
               "application/json": {
                 "schema": {
@@ -171,7 +167,6 @@
             }
           },
           "400": {
-            "description": "",
             "content": {
               "application/json": {
                 "schema": {
@@ -181,7 +176,6 @@
             }
           },
           "401": {
-            "description": "",
             "content": {
               "application/json": {
                 "schema": {
@@ -191,7 +185,6 @@
             }
           },
           "503": {
-            "description": "",
             "content": {
               "application/json": {
                 "schema": {
@@ -218,7 +211,6 @@
         "operationId": "notaries",
         "responses": {
           "200": {
-            "description": "",
             "content": {
               "application/json": {
                 "schema": {
@@ -228,7 +220,6 @@
             }
           },
           "401": {
-            "description": "",
             "content": {
               "application/json": {
                 "schema": {
@@ -238,7 +229,6 @@
             }
           },
           "503": {
-            "description": "",
             "content": {
               "application/json": {
                 "schema": {
@@ -275,7 +265,6 @@
         ],
         "responses": {
           "200": {
-            "description": "",
             "content": {
               "application/json": {
                 "schema": {
@@ -285,7 +274,6 @@
             }
           },
           "401": {
-            "description": "",
             "content": {
               "application/json": {
                 "schema": {
@@ -295,7 +283,6 @@
             }
           },
           "404": {
-            "description": "",
             "content": {
               "application/json": {
                 "schema": {
@@ -305,7 +292,6 @@
             }
           },
           "503": {
-            "description": "",
             "content": {
               "application/json": {
                 "schema": {
@@ -332,7 +318,6 @@
         "operationId": "providers",
         "responses": {
           "200": {
-            "description": "",
             "content": {
               "application/json": {
                 "schema": {
@@ -342,7 +327,6 @@
             }
           },
           "401": {
-            "description": "",
             "content": {
               "application/json": {
                 "schema": {
@@ -372,7 +356,6 @@
             "description": "Dashboard access established"
           },
           "401": {
-            "description": "",
             "content": {
               "application/json": {
                 "schema": {
@@ -382,7 +365,6 @@
             }
           },
           "503": {
-            "description": "",
             "content": {
               "application/json": {
                 "schema": {
@@ -410,7 +392,6 @@
             "description": "Dashboard session ended"
           },
           "401": {
-            "description": "",
             "content": {
               "application/json": {
                 "schema": {
@@ -420,7 +401,6 @@
             }
           },
           "503": {
-            "description": "",
             "content": {
               "application/json": {
                 "schema": {
@@ -447,7 +427,6 @@
         "operationId": "capture_setting",
         "responses": {
           "200": {
-            "description": "",
             "content": {
               "application/json": {
                 "schema": {
@@ -457,7 +436,6 @@
             }
           },
           "401": {
-            "description": "",
             "content": {
               "application/json": {
                 "schema": {
@@ -467,7 +445,6 @@
             }
           },
           "503": {
-            "description": "",
             "content": {
               "application/json": {
                 "schema": {
@@ -502,7 +479,6 @@
         },
         "responses": {
           "200": {
-            "description": "",
             "content": {
               "application/json": {
                 "schema": {
@@ -512,7 +488,6 @@
             }
           },
           "401": {
-            "description": "",
             "content": {
               "application/json": {
                 "schema": {
@@ -522,7 +497,6 @@
             }
           },
           "503": {
-            "description": "",
             "content": {
               "application/json": {
                 "schema": {
@@ -549,7 +523,6 @@
         "operationId": "status",
         "responses": {
           "200": {
-            "description": "",
             "content": {
               "application/json": {
                 "schema": {
@@ -559,7 +532,6 @@
             }
           },
           "401": {
-            "description": "",
             "content": {
               "application/json": {
                 "schema": {
@@ -569,7 +541,6 @@
             }
           },
           "503": {
-            "description": "",
             "content": {
               "application/json": {
                 "schema": {
@@ -694,7 +665,6 @@
         ],
         "responses": {
           "200": {
-            "description": "",
             "content": {
               "application/json": {
                 "schema": {
@@ -704,7 +674,6 @@
             }
           },
           "400": {
-            "description": "",
             "content": {
               "application/json": {
                 "schema": {
@@ -714,7 +683,6 @@
             }
           },
           "401": {
-            "description": "",
             "content": {
               "application/json": {
                 "schema": {
@@ -724,7 +692,6 @@
             }
           },
           "503": {
-            "description": "",
             "content": {
               "application/json": {
                 "schema": {
@@ -761,7 +728,6 @@
         ],
         "responses": {
           "200": {
-            "description": "",
             "content": {
               "application/json": {
                 "schema": {
@@ -771,7 +737,6 @@
             }
           },
           "401": {
-            "description": "",
             "content": {
               "application/json": {
                 "schema": {
@@ -781,7 +746,6 @@
             }
           },
           "404": {
-            "description": "",
             "content": {
               "application/json": {
                 "schema": {
@@ -791,7 +755,6 @@
             }
           },
           "503": {
-            "description": "",
             "content": {
               "application/json": {
                 "schema": {
@@ -828,7 +791,6 @@
         ],
         "responses": {
           "200": {
-            "description": "",
             "content": {
               "application/json": {
                 "schema": {
@@ -838,7 +800,6 @@
             }
           },
           "401": {
-            "description": "",
             "content": {
               "application/json": {
                 "schema": {
@@ -848,7 +809,6 @@
             }
           },
           "404": {
-            "description": "",
             "content": {
               "application/json": {
                 "schema": {
@@ -858,7 +818,6 @@
             }
           },
           "409": {
-            "description": "",
             "content": {
               "application/json": {
                 "schema": {
@@ -868,7 +827,6 @@
             }
           },
           "500": {
-            "description": "",
             "content": {
               "application/json": {
                 "schema": {
@@ -878,7 +836,6 @@
             }
           },
           "503": {
-            "description": "",
             "content": {
               "application/json": {
                 "schema": {
@@ -915,7 +872,6 @@
         ],
         "responses": {
           "202": {
-            "description": "",
             "content": {
               "application/json": {
                 "schema": {
@@ -925,7 +881,6 @@
             }
           },
           "401": {
-            "description": "",
             "content": {
               "application/json": {
                 "schema": {
@@ -935,7 +890,6 @@
             }
           },
           "404": {
-            "description": "",
             "content": {
               "application/json": {
                 "schema": {
@@ -945,7 +899,6 @@
             }
           },
           "409": {
-            "description": "",
             "content": {
               "application/json": {
                 "schema": {
@@ -955,7 +908,6 @@
             }
           },
           "503": {
-            "description": "",
             "content": {
               "application/json": {
                 "schema": {
@@ -992,7 +944,6 @@
         ],
         "responses": {
           "200": {
-            "description": "",
             "content": {
               "application/vnd.undertext.capture.trace-package+zip": {
                 "schema": {
@@ -1007,7 +958,6 @@
             }
           },
           "401": {
-            "description": "",
             "content": {
               "application/json": {
                 "schema": {
@@ -1017,7 +967,6 @@
             }
           },
           "404": {
-            "description": "",
             "content": {
               "application/json": {
                 "schema": {
@@ -1027,7 +976,6 @@
             }
           },
           "409": {
-            "description": "",
             "content": {
               "application/json": {
                 "schema": {
@@ -1037,7 +985,6 @@
             }
           },
           "500": {
-            "description": "",
             "content": {
               "application/json": {
                 "schema": {
@@ -1047,7 +994,6 @@
             }
           },
           "503": {
-            "description": "",
             "content": {
               "application/json": {
                 "schema": {
@@ -1084,7 +1030,6 @@
         ],
         "responses": {
           "200": {
-            "description": "",
             "content": {
               "application/json": {
                 "schema": {
@@ -1094,7 +1039,6 @@
             }
           },
           "401": {
-            "description": "",
             "content": {
               "application/json": {
                 "schema": {
@@ -1104,7 +1048,6 @@
             }
           },
           "404": {
-            "description": "",
             "content": {
               "application/json": {
                 "schema": {
@@ -1114,7 +1057,6 @@
             }
           },
           "409": {
-            "description": "",
             "content": {
               "application/json": {
                 "schema": {
@@ -1124,7 +1066,6 @@
             }
           },
           "422": {
-            "description": "",
             "content": {
               "application/json": {
                 "schema": {
@@ -1134,7 +1075,6 @@
             }
           },
           "500": {
-            "description": "",
             "content": {
               "application/json": {
                 "schema": {
@@ -1144,7 +1084,6 @@
             }
           },
           "503": {
-            "description": "",
             "content": {
               "application/json": {
                 "schema": {
@@ -1200,7 +1139,6 @@
         },
         "responses": {
           "200": {
-            "description": "",
             "content": {
               "application/json": {
                 "schema": {
@@ -1210,7 +1148,6 @@
             }
           },
           "400": {
-            "description": "",
             "content": {
               "application/json": {
                 "schema": {
@@ -1220,7 +1157,6 @@
             }
           },
           "401": {
-            "description": "",
             "content": {
               "application/json": {
                 "schema": {
@@ -1230,7 +1166,6 @@
             }
           },
           "500": {
-            "description": "",
             "content": {
               "application/json": {
                 "schema": {
@@ -1240,7 +1175,6 @@
             }
           },
           "503": {
-            "description": "",
             "content": {
               "application/json": {
                 "schema": {
@@ -1551,11 +1485,11 @@
           "proof": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/OperationProofProgressResponse",
                 "description": "Concrete work counters while the private proof is being generated."
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -1900,10 +1834,10 @@
               "notarization": {
                 "oneOf": [
                   {
-                    "type": "null"
+                    "$ref": "#/components/schemas/TechnicalOperation"
                   },
                   {
-                    "$ref": "#/components/schemas/TechnicalOperation"
+                    "type": "null"
                   }
                 ]
               }
@@ -2062,20 +1996,20 @@
           "state": {
             "oneOf": [
               {
-                "type": "null"
+                "$ref": "#/components/schemas/TraceState"
               },
               {
-                "$ref": "#/components/schemas/TraceState"
+                "type": "null"
               }
             ]
           },
           "status": {
             "oneOf": [
               {
-                "type": "null"
+                "$ref": "#/components/schemas/TraceOperationalStatus"
               },
               {
-                "$ref": "#/components/schemas/TraceOperationalStatus"
+                "type": "null"
               }
             ]
           },
@@ -2117,11 +2051,11 @@
           "evidence_kind": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/EvidenceKind",
                 "description": "How the verified package's evidence was produced, read from its\nmanifest format. A `witnessed` package carries the notary operator's\nsigned receipt, not a cryptographic proof; only a `notarized` package\ncarries a TLSNotary proof. Absent when verification did not pass."
+              },
+              {
+                "type": "null"
               }
             ]
           },

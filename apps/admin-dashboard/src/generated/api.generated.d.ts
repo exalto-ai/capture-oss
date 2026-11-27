@@ -453,7 +453,7 @@ export interface components {
              *     complete, or unknown for an operation migrated from an older metadata.
              */
             phase: string;
-            proof?: null | components["schemas"]["OperationProofProgressResponse"];
+            proof?: components["schemas"]["OperationProofProgressResponse"] | null;
             /** Format: int64 */
             updated_at_unix_ms: number;
         };
@@ -543,7 +543,7 @@ export interface components {
         };
         TraceDetail: components["schemas"]["TraceSummary"] & {
             artifacts: components["schemas"]["EvidenceArtifact"][];
-            notarization: null | components["schemas"]["TechnicalOperation"];
+            notarization: components["schemas"]["TechnicalOperation"] | null;
         };
         /** @enum {string} */
         TraceOperationalStatus: "capturing" | "capture_failed" | "needs_attention" | "notarizing" | "notarization_failed" | "notarization_interrupted";
@@ -583,8 +583,8 @@ export interface components {
             /** Format: int64 */
             response_bytes?: number | null;
             response_model?: string | null;
-            state: null | components["schemas"]["TraceState"];
-            status: null | components["schemas"]["TraceOperationalStatus"];
+            state: components["schemas"]["TraceState"] | null;
+            status: components["schemas"]["TraceOperationalStatus"] | null;
             streaming: boolean;
             trace_id: string;
         };
@@ -594,7 +594,7 @@ export interface components {
         /** @enum {string} */
         VerificationOutcome: "passed" | "failed" | "unsupported";
         VerificationResult: {
-            evidence_kind?: null | components["schemas"]["EvidenceKind"];
+            evidence_kind?: components["schemas"]["EvidenceKind"] | null;
             failure_code?: string | null;
             notary_key_id?: string | null;
             outcome: components["schemas"]["VerificationOutcome"];

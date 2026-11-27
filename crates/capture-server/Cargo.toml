@@ -36,12 +36,12 @@ k256 = { workspace = true, features = ["ecdsa"] }
 capture-core = { workspace = true, features = ["openapi", "vault"] }
 capture-engine = { workspace = true }
 mime_guess = "2.0"
-reqwest = { workspace = true, features = ["json", "rustls-tls", "stream"] }
+reqwest = { workspace = true, features = ["json", "rustls", "stream"] }
 rust-embed = "8.14"
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
-sqlx = { version = "0.8", default-features = false, features = ["postgres", "runtime-tokio-rustls"] }
+sqlx = { version = "0.9", default-features = false, features = ["postgres", "runtime-tokio", "tls-rustls"] }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 toml = { workspace = true }

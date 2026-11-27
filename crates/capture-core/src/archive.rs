@@ -348,7 +348,10 @@ fn read_validated_archive(bytes: &[u8]) -> Result<ValidatedTracePackageArchive> 
         let entry = archive
             .by_index(1)
             .context("reading the trace package evidence entry")?;
-        EvidenceKind::from_evidence_entry(entry.name())
+        let name = entry
+            .name()
+            .context("reading the trace package evidence entry name")?;
+        EvidenceKind::from_evidence_entry(&name)
             .ok_or_else(|| anyhow!("archive entry ordering is not canonical"))?
     };
     let package_files = kind.package_files();
@@ -361,7 +364,10 @@ fn read_validated_archive(bytes: &[u8]) -> Result<ValidatedTracePackageArchive> 
         let mut entry = archive
             .by_index(index)
             .with_context(|| format!("reading ZIP entry {index}"))?;
-        let name = entry.name().to_owned();
+        let name = entry
+            .name()
+            .with_context(|| format!("reading ZIP entry {index} name"))?
+            .into_owned();
         let expected_name = if index == 0 {
             ARCHIVE_MANIFEST_PATH
         } else {
@@ -735,7 +741,7 @@ mod tests {
                 let mut entry = archive.by_index(index).unwrap();
                 let mut data = Vec::new();
                 entry.read_to_end(&mut data).unwrap();
-                (entry.name().to_owned(), data, false)
+                (entry.name().unwrap().into_owned(), data, false)
             })
             .collect()
     }

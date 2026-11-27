@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use argon2::{Argon2, PasswordHash, PasswordVerifier};
+use argon2::{Argon2, PasswordVerifier};
 use axum::{
     Json, Router,
     extract::{DefaultBodyLimit, Path, Request, State},
@@ -565,11 +565,9 @@ async fn basic_matches(state: &AdminState, headers: &axum::http::HeaderMap) -> b
         return false;
     };
     tokio::task::spawn_blocking(move || {
-        PasswordHash::new(&password_hash).ok().is_some_and(|hash| {
-            Argon2::default()
-                .verify_password(password.as_bytes(), &hash)
-                .is_ok()
-        })
+        Argon2::default()
+            .verify_password(password.as_bytes(), password_hash.as_str())
+            .is_ok()
     })
     .await
     .unwrap_or(false)
@@ -631,7 +629,7 @@ mod tests {
         postgres_metadata_store::test_postgres::{TestPostgres, server_store},
         s3_artifact_store::{S3ArtifactStore, S3ArtifactStoreCredentials},
     };
-    use argon2::{PasswordHasher, password_hash::SaltString};
+    use argon2::PasswordHasher;
     use axum::{body::Body, http::Request};
     use http_body_util::BodyExt as _;
     use std::{io::Write as IoWrite, sync::Mutex as StdMutex, time::Duration};
@@ -650,13 +648,12 @@ mod tests {
             ReplicaIdentity::new("admin-route-test").unwrap(),
             store.clone(),
         ));
-        let salt = SaltString::encode_b64(b"notary-test-salt").unwrap();
         let mut config = CapturedConfig::default();
         config.admin.auth = Some(crate::config::AdminAuthConfig {
             username: "local-admin".to_owned(),
             password_hash: Some(
                 Argon2::default()
-                    .hash_password(ADMIN_PASSWORD.as_bytes(), &salt)
+                    .hash_password(ADMIN_PASSWORD.as_bytes())
                     .unwrap()
                     .to_string(),
             ),

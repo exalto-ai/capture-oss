@@ -37,7 +37,6 @@ use crate::{
     organization::OrganizationId,
 };
 
-const JOURNAL: &str = "captured.schema_migrations";
 const MIGRATION_LOCK_NAMESPACE: &str = "ucp/captured-postgres-migrations/v1";
 const LATEST_SCHEMA_VERSION: i64 = 6;
 const INITIAL_MIGRATION: &str = include_str!("../migrations-postgres-daemon/0001_initial.sql");
@@ -183,7 +182,7 @@ async fn migrate_database_through(
     ssl_mode: PostgresSslMode,
     connect_timeout: Duration,
     lock_timeout: Duration,
-    migrations: &[(i64, &str, &str)],
+    migrations: &[(i64, &str, &'static str)],
 ) -> anyhow::Result<()> {
     ensure!(
         !connect_timeout.is_zero(),
@@ -230,21 +229,21 @@ async fn migrate_database_through(
         .execute(&mut *transaction)
         .await
         .context("restricting daemon metadata schema")?;
-    sqlx::raw_sql(&format!(
-        "CREATE TABLE IF NOT EXISTS {JOURNAL} (
+    sqlx::raw_sql(
+        "CREATE TABLE IF NOT EXISTS captured.schema_migrations (
             version BIGINT PRIMARY KEY,
             description TEXT NOT NULL,
             checksum TEXT NOT NULL,
             applied_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
-        );"
-    ))
+        );",
+    )
     .execute(&mut *transaction)
     .await
     .context("creating daemon migration journal")?;
 
-    let rows = sqlx::query(&format!(
-        "SELECT version, description, checksum FROM {JOURNAL} ORDER BY version"
-    ))
+    let rows = sqlx::query(
+        "SELECT version, description, checksum FROM captured.schema_migrations ORDER BY version",
+    )
     .fetch_all(&mut *transaction)
     .await
     .context("reading daemon migration journal")?;
@@ -264,13 +263,13 @@ async fn migrate_database_through(
             );
             continue;
         }
-        sqlx::raw_sql(migration)
+        sqlx::raw_sql(*migration)
             .execute(&mut *transaction)
             .await
             .with_context(|| format!("applying daemon PostgreSQL migration {version}"))?;
-        sqlx::query(&format!(
-            "INSERT INTO {JOURNAL} (version, description, checksum) VALUES ($1, $2, $3)"
-        ))
+        sqlx::query(
+            "INSERT INTO captured.schema_migrations (version, description, checksum) VALUES ($1, $2, $3)",
+        )
         .bind(version)
         .bind(description)
         .bind(&checksum)
@@ -354,12 +353,12 @@ fn pg_ssl_mode(mode: PostgresSslMode) -> sqlx::postgres::PgSslMode {
 /// release's, and is accepted so that a rolling deploy can finish.
 async fn require_migrated_schema(pool: &PgPool) -> MetadataResult<()> {
     let journal_exists: bool =
-        sqlx::query_scalar(&format!("SELECT to_regclass('{JOURNAL}') IS NOT NULL"))
+        sqlx::query_scalar("SELECT to_regclass('captured.schema_migrations') IS NOT NULL")
             .fetch_one(pool)
             .await
             .map_err(|error| db(anyhow!(error).context("checking daemon migration journal")))?;
     let applied: Option<i64> = if journal_exists {
-        sqlx::query_scalar(&format!("SELECT MAX(version) FROM {JOURNAL}"))
+        sqlx::query_scalar("SELECT MAX(version) FROM captured.schema_migrations")
             .fetch_one(pool)
             .await
             .map_err(|error| db(anyhow!(error).context("reading daemon schema version")))?
@@ -2443,7 +2442,7 @@ impl PostgresMetadataStore {
     }
 }
 
-fn push_event_filters<'a>(query: &mut QueryBuilder<'a, Postgres>, filters: &'a EventFilters) {
+fn push_event_filters(query: &mut QueryBuilder<Postgres>, filters: &EventFilters) {
     for (column, value) in [
         ("severity", filters.severity.as_deref()),
         ("event_type", filters.event_type.as_deref()),
@@ -2455,7 +2454,7 @@ fn push_event_filters<'a>(query: &mut QueryBuilder<'a, Postgres>, filters: &'a E
                 .push(" AND ")
                 .push(column)
                 .push(" = ")
-                .push_bind(value);
+                .push_bind(value.to_owned());
         }
     }
     if let Some(created_after) = filters.created_after_unix_ms {
@@ -2543,7 +2542,7 @@ fn completion_from_row(row: &PgRow) -> anyhow::Result<Option<CaptureCompletion>>
 pub(crate) mod test_postgres {
     use std::{sync::Arc, time::Duration};
 
-    use sqlx::{PgPool, postgres::PgPoolOptions};
+    use sqlx::{AssertSqlSafe, PgPool, postgres::PgPoolOptions};
     use testcontainers_modules::{
         postgres::Postgres,
         testcontainers::{ContainerAsync, ImageExt, runners::AsyncRunner},
@@ -2590,7 +2589,7 @@ pub(crate) mod test_postgres {
                 name.chars()
                     .all(|character| character.is_ascii_alphanumeric() || character == '_')
             );
-            sqlx::query(&format!("CREATE DATABASE {name}"))
+            sqlx::query(AssertSqlSafe(format!("CREATE DATABASE {name}")))
                 .execute(&self.admin)
                 .await
                 .expect("create isolated daemon test database");
@@ -2642,7 +2641,7 @@ mod tests {
 
     use std::{sync::Arc, time::Duration};
 
-    use sqlx::{Connection as _, PgConnection, postgres::PgPoolOptions};
+    use sqlx::{AssertSqlSafe, Connection as _, PgConnection, postgres::PgPoolOptions};
     use tokio::sync::Barrier;
 
     use crate::{
@@ -3650,9 +3649,9 @@ mod tests {
                 .unwrap();
         assert!(!registry, "migration 6 drops the shared Registry");
         for table in ["traces", "operations", "events"] {
-            let organizations: Vec<String> = sqlx::query_scalar(&format!(
+            let organizations: Vec<String> = sqlx::query_scalar(AssertSqlSafe(format!(
                 "SELECT DISTINCT organization_id FROM captured.{table}"
-            ))
+            )))
             .fetch_all(&pool)
             .await
             .unwrap();

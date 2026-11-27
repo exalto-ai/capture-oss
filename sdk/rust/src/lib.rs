@@ -41,7 +41,7 @@ use capture_core::{
 };
 use http::{HeaderMap, Method, StatusCode};
 use k256::ecdsa::VerifyingKey;
-use rand::RngCore as _;
+use rand::Rng as _;
 use tokio::{sync::mpsc, task::JoinHandle};
 use url::Url;
 use zeroize::Zeroizing;

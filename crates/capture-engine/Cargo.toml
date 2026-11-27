@@ -26,8 +26,8 @@ http = { workspace = true }
 http-body-util = { workspace = true }
 k256 = { workspace = true, features = ["ecdsa"] }
 libc = { workspace = true }
-reqwest = { workspace = true, features = ["json", "rustls-tls", "stream"] }
-rusqlite = { version = "0.32", features = ["bundled"], optional = true }
+reqwest = { workspace = true, features = ["json", "rustls", "stream"] }
+rusqlite = { version = "0.43", features = ["bundled"], optional = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
@@ -45,7 +45,7 @@ zeroize = { workspace = true }
 [dev-dependencies]
 base64 = { workspace = true }
 capture-core = { workspace = true, features = ["test-utils"] }
-rusqlite = { version = "0.32", features = ["bundled"] }
+rusqlite = { version = "0.43", features = ["bundled"] }
 
 [lints]
 workspace = true
