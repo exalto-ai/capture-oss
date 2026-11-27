@@ -3,7 +3,7 @@
 **/node_modules/
 **/dist/
 /apps/admin-dashboard/node_modules/
-/apps/admin-dashboard/.vitest-attachments/
+**/.vitest/
 /bundles/
 /captures/
 /traces/

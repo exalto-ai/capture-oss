@@ -74,7 +74,7 @@ describe('Notary admin dashboard', () => {
       .toBeVisible();
     await expect.element(page.getByText('gpt-5.2', { exact: true })).not.toBeInTheDocument();
     await page.getByRole('list', { name: 'Traces' }).getByRole('button').click();
-    await expect.element(page.getByText('trc-20260727-benchmark').first()).toBeVisible();
+    await expect.element(page.getByText('Trace ID · trc-20260727-benchmark')).toBeVisible();
   });
 
   test('keeps search and lifecycle primary while placing other filters under More filters', async () => {
