@@ -23,9 +23,9 @@ chacha20poly1305 = { version = "0.10", optional = true }
 futures = "0.3"
 hex = { workspace = true }
 http = { workspace = true }
-http-body = "1.0"
+http-body = "1.1"
 http-body-util = { workspace = true }
-hyper = { version = "1.6", features = ["client", "http1", "server"] }
+hyper = { version = "1.13", features = ["client", "http1", "server"] }
 hyper-util = { version = "0.1", features = ["tokio"] }
 k256 = { workspace = true, features = ["ecdsa"] }
 hkdf = { version = "0.12", optional = true }
@@ -50,7 +50,7 @@ tracing-subscriber = { workspace = true, features = ["env-filter", "json"] }
 url = { workspace = true }
 utoipa = { workspace = true, optional = true }
 webpki-roots = "1"
-zip = { version = "8.4", default-features = false }
+zip = { version = "8.6", default-features = false }
 zeroize = { workspace = true, optional = true }
 
 [dev-dependencies]

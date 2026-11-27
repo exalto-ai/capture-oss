@@ -23,7 +23,7 @@ daemon-e2e = ["capture-core/daemon-e2e", "capture-engine/daemon-e2e"]
 anyhow = { workspace = true }
 argon2 = { workspace = true }
 async-trait = { workspace = true }
-aws-sdk-s3 = { version = "1.140", default-features = false, features = [
+aws-sdk-s3 = { version = "1.162", default-features = false, features = [
     "default-https-client",
     "rt-tokio",
 ] }
@@ -37,7 +37,7 @@ capture-core = { workspace = true, features = ["openapi", "vault"] }
 capture-engine = { workspace = true }
 mime_guess = "2.0"
 reqwest = { workspace = true, features = ["json", "rustls-tls", "stream"] }
-rust-embed = "8.12"
+rust-embed = "8.14"
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 sha2 = { workspace = true }

@@ -12,9 +12,9 @@ crate-type = ["cdylib"]
 [dependencies]
 anyhow = "1.0"
 undertext-capture = { path = "../rust" }
-http = "1.3"
+http = "1.5"
 pyo3 = { version = "0.30.1", features = ["abi3-py311"] }
-tokio = { version = "1.45", features = ["rt-multi-thread"] }
+tokio = { version = "1.54", features = ["rt-multi-thread"] }
 
 # The runtime workspace's lints (oss/Cargo.toml); oss/clippy.toml applies here.
 [lints.rust]
