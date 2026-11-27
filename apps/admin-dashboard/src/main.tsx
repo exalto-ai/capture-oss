@@ -5,7 +5,7 @@ import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { adminApi } from './api';
 import { Dashboard } from './Dashboard';
-import { exaltoTheme } from './theme';
+import { undertextTheme } from './theme';
 
 const colorSchemeManager = localStorageColorSchemeManager({
   key: 'captured-dashboard-color-scheme',
@@ -20,7 +20,7 @@ if (!applicationRoot) throw new Error('Admin dashboard root element is missing')
 createRoot(applicationRoot).render(
   <StrictMode>
     <MantineProvider
-      theme={exaltoTheme}
+      theme={undertextTheme}
       defaultColorScheme="auto"
       colorSchemeManager={colorSchemeManager}
     >

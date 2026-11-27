@@ -1,7 +1,7 @@
 {
   "openapi": "3.1.0",
   "info": {
-    "title": "Exalto Capture server administration API",
+    "title": "Undertext Capture server administration API",
     "description": "Capture server administration API. Every /v1 route requires the configured HTTP Basic credentials, or a dashboard session started with them.",
     "license": {
       "name": "MIT",
@@ -214,7 +214,7 @@
           "admin"
         ],
         "summary": "List Notaries",
-        "description": "Returns the notaries this server trusts: the explicitly configured self-hosted endpoint and key, or Exalto's Registry. Registry membership describes which keys are trusted and does not report endpoint health.",
+        "description": "Returns the notaries this server trusts: the explicitly configured self-hosted endpoint and key, or Undertext's Registry. Registry membership describes which keys are trusted and does not report endpoint health.",
         "operationId": "notaries",
         "responses": {
           "200": {
@@ -1451,7 +1451,7 @@
           },
           "source": {
             "type": "string",
-            "description": "`explicit_configuration` for a self-hosted endpoint and key, or\n`registry` for Exalto's Registry."
+            "description": "`explicit_configuration` for a self-hosted endpoint and key, or\n`registry` for Undertext's Registry."
           }
         }
       },

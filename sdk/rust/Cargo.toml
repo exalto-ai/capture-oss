@@ -1,9 +1,9 @@
 [package]
-name = "exalto-capture"
+name = "undertext-capture"
 version.workspace = true
 edition = "2024"
 license = "MIT"
-description = "Seal model-provider calls with an Exalto Capture notary and get the evidence back as bytes"
+description = "Seal model-provider calls with an Undertext Capture notary and get the evidence back as bytes"
 
 [dependencies]
 anyhow = { workspace = true }

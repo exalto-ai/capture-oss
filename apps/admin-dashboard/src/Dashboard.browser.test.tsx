@@ -135,7 +135,7 @@ describe('Notary admin dashboard', () => {
     const longPrompt: TraceSummary = {
       ...structuredClone(fixtureCaptures[0]),
       prompt_preview:
-        'developer: You are a conversational assistant in Exalto Capture. Answer the user messages. Do not use tools, inspect files, or take actions outside this conversation.',
+        'developer: You are a conversational assistant in Undertext Capture. Answer the user messages. Do not use tools, inspect files, or take actions outside this conversation.',
     };
     const api: AdminApi = {
       ...fixture,
@@ -144,7 +144,7 @@ describe('Notary admin dashboard', () => {
     };
     renderDashboard(`/traces/${longPrompt.trace_id}`, api);
     const title = page.getByRole('heading', {
-      name: 'You are a conversational assistant in Exalto Capture. Answer the user messages…',
+      name: 'You are a conversational assistant in Undertext Capture. Answer the user…',
       exact: true,
     });
     await expect.element(title).toBeVisible();
@@ -768,7 +768,7 @@ describe('Notary admin dashboard', () => {
         ),
       )
       .toEqual(['seal2', 'seal1']);
-    await expect.element(page.getByText("Exalto's Registry", { exact: true })).toBeVisible();
+    await expect.element(page.getByText("Undertext's Registry", { exact: true })).toBeVisible();
     await expect
       .element(page.getByText('tls://notary.capture.undertext.sh:443', { exact: true }).first())
       .toBeVisible();
@@ -781,7 +781,7 @@ describe('Notary admin dashboard', () => {
     await expect.element(page.getByText('Online', { exact: true })).not.toBeInTheDocument();
   });
 
-  test('names a self-hosted notary as server configuration, not Exalto', async () => {
+  test('names a self-hosted notary as server configuration, not Undertext', async () => {
     const fixture = createFixtureApi();
     renderDashboard('/settings', {
       ...fixture,
@@ -802,7 +802,7 @@ describe('Notary admin dashboard', () => {
     await expect
       .element(page.getByText(/trusts only the notary named in its server configuration/))
       .toBeVisible();
-    await expect.element(page.getByText(/operated by Exalto/)).not.toBeInTheDocument();
+    await expect.element(page.getByText(/operated by Undertext/)).not.toBeInTheDocument();
   });
 
   test('renders cluster administration context', async () => {
@@ -823,9 +823,9 @@ describe('Notary admin dashboard', () => {
       },
     };
     renderDashboard('/overview', api);
-    await expect.element(page.getByText('Exalto Capture', { exact: true })).toBeVisible();
+    await expect.element(page.getByText('Undertext Capture', { exact: true })).toBeVisible();
     await expect
-      .element(page.getByText('Exalto Capture administration', { exact: true }))
+      .element(page.getByText('Undertext Capture administration', { exact: true }))
       .toBeVisible();
     await expect.element(page.getByText('Notary', { exact: true })).not.toBeInTheDocument();
     await expect.element(page.getByRole('heading', { name: 'Sign in' })).toBeVisible();

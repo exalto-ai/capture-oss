@@ -1,6 +1,6 @@
 # Notary key lifecycle
 
-`GET /api/registry` publishes Exalto's Registry: where new captures go, and
+`GET /api/registry` publishes Undertext's Registry: where new captures go, and
 which notary keys to trust. HTTPS on the API origin authenticates it; the JSON
 document is not separately signed.
 
@@ -35,7 +35,7 @@ A key is trusted exactly while it is listed: evidence verifies when a listed
 key signed it. There are no validity windows. A stolen key can sign receipts
 with any timestamp, so a window would not limit what it can forge.
 
-The SDK's `Notary.exalto` and each capture-server replica read the Registry
+The SDK's `Notary.undertext` and each capture-server replica read the Registry
 when they first need it, again when evidence is signed by a key their copy
 doesn't list, and before every seal. A key removed from the Registry stays
 trusted in a running process until that process reads the Registry again or

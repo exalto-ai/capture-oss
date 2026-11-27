@@ -70,7 +70,7 @@ pub(crate) struct ClusterRuntime {
     identity: ReplicaIdentity,
     lifecycle: AtomicU8,
     metadata: Arc<PostgresMetadataStore>,
-    /// This replica's latest copy of Exalto's Registry, only ever replaced
+    /// This replica's latest copy of Undertext's Registry, only ever replaced
     /// whole.
     registry: std::sync::Mutex<Option<Registry>>,
 }

@@ -98,7 +98,7 @@ function SettingsNotaries({ api }: { api: AdminApi }) {
       <Text className="settings-notaries-note">
         {configured
           ? "This server trusts only the notary named in its server configuration. Evidence verifies when that notary's key signed it."
-          : "This server trusts the notaries in Exalto's Registry, all operated by Exalto. Evidence verifies when one of their keys signed it."}{' '}
+          : "This server trusts the notaries in Undertext's Registry, all operated by Undertext. Evidence verifies when one of their keys signed it."}{' '}
         This is not a report of endpoint health or availability.
       </Text>
       {notaries.isLoading ? (
@@ -123,7 +123,7 @@ function SettingsNotaries({ api }: { api: AdminApi }) {
           <dl className="settings-notary-source">
             <Fact
               label="Trust source"
-              value={configured ? 'Server configuration' : "Exalto's Registry"}
+              value={configured ? 'Server configuration' : "Undertext's Registry"}
             />
             <Fact label="Capture endpoint" value={notaries.data.capture_endpoint} />
           </dl>

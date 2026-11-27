@@ -25,7 +25,7 @@ mod service;
 #[derive(Parser, Debug)]
 #[command(
     name = "capture-server",
-    about = "Run an Exalto Capture server replica",
+    about = "Run an Undertext Capture server replica",
     version
 )]
 struct DaemonCli {

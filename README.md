@@ -1,19 +1,19 @@
-# Exalto Capture, open source
+# Undertext Capture, open source
 
 [![Public Runtime CI](https://github.com/exalto-ai/capture-oss/actions/workflows/ci.yml/badge.svg)](https://github.com/exalto-ai/capture-oss/actions/workflows/ci.yml)
 [![MIT license](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE-MIT)
 
-The open-source foundation of **Exalto Capture** and the **Exalto Capture Protocol (ECP)**.
-Capture model-provider HTTP exchanges, seal them with Exalto's notary or a
+The open-source foundation of **Undertext Capture** and the **Undertext Capture Protocol (UCP)**.
+Capture model-provider HTTP exchanges, seal them with Undertext's notary or a
 compatible self-hosted notary, and verify portable Traces.
 
 The public source includes the capture SDKs for Rust, Python and Node.js, the
 capture server and its dashboard, the generic remote notary, and protocol and
-verification code. Exalto’s hosted accounts, billing, uploads, and sharing
+verification code. Undertext’s hosted accounts, billing, uploads, and sharing
 implementation are proprietary and maintained separately. The capture engine
 keeps optional clients for hosted admission and the notary Registry, and hosted
 notary admission integrates through the notary
-server's admission-policy seam. Self-hosting does not require an Exalto account.
+server's admission-policy seam. Self-hosting does not require an Undertext account.
 
 ## Get started
 
@@ -72,7 +72,7 @@ Use [public issues](https://github.com/exalto-ai/capture-oss/issues) for bugs
 and suggestions. Report vulnerabilities privately as described in
 [SECURITY.md](SECURITY.md).
 
-Development happens in Exalto’s private monorepo, and every change to this
+Development happens in Undertext’s private monorepo, and every change to this
 tree is published here, with its history, once it passes validation there.
 Public pull requests are welcome; an accepted change is applied in the monorepo
 and arrives here through that sync.

@@ -93,7 +93,7 @@ export interface paths {
         };
         /**
          * List Notaries
-         * @description Returns the notaries this server trusts: the explicitly configured self-hosted endpoint and key, or Exalto's Registry. Registry membership describes which keys are trusted and does not report endpoint health.
+         * @description Returns the notaries this server trusts: the explicitly configured self-hosted endpoint and key, or Undertext's Registry. Registry membership describes which keys are trusted and does not report endpoint health.
          */
         get: operations["notaries"];
         put?: never;
@@ -418,7 +418,7 @@ export interface components {
             notaries: components["schemas"]["Notary"][];
             /**
              * @description `explicit_configuration` for a self-hosted endpoint and key, or
-             *     `registry` for Exalto's Registry.
+             *     `registry` for Undertext's Registry.
              */
             source: string;
         };

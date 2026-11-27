@@ -91,7 +91,7 @@ function AuthGate({ api, onAuthenticated }: { api: AdminApi; onAuthenticated: ()
     <main className="auth-shell">
       <section className="auth-document">
         <Brand />
-        <Text className="eyebrow">Exalto Capture administration</Text>
+        <Text className="eyebrow">Undertext Capture administration</Text>
         <Title order={1}>Sign in</Title>
         <Text className="auth-copy">
           This service requires the credentials configured under admin.auth.
@@ -140,7 +140,7 @@ function Brand() {
       <span className="local-mark" aria-hidden="true">
         <img src={logoUrl} alt="" width={30} height={30} />
       </span>
-      <span>Exalto Capture</span>
+      <span>Undertext Capture</span>
     </div>
   );
 }

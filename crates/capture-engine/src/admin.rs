@@ -120,7 +120,7 @@ impl From<MetadataCounts> for TraceCounts {
 #[derive(Debug, Serialize, ToSchema)]
 pub struct NotariesResponse {
     /// `explicit_configuration` for a self-hosted endpoint and key, or
-    /// `registry` for Exalto's Registry.
+    /// `registry` for Undertext's Registry.
     source: String,
     /// Where new sessions connect.
     capture_endpoint: String,
@@ -141,7 +141,7 @@ pub struct Notary {
 
 impl NotariesResponse {
     /// The notaries the host trusts: its explicitly configured notary when
-    /// the configuration names one, or else Exalto's `registry`.
+    /// the configuration names one, or else Undertext's `registry`.
     pub fn new(config: &CapturedConfig, registry: Registry) -> Self {
         Self {
             source: if config.notary.endpoint.is_some() {

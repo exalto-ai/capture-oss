@@ -535,7 +535,7 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible { outline-color:
 .local-notary-record { border-bottom: 0; }
 .local-notary-record + .local-notary-record { border-top: 1px solid var(--rule); }
 
-/* Exalto Capture visual alignment. */
+/* Undertext Capture visual alignment. */
 ::selection { background: var(--action-soft); color: var(--ink); }
 
 /* Keep the product palette and evidence hierarchy, while using quiet,

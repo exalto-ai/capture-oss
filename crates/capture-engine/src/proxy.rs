@@ -81,12 +81,12 @@ pub trait NotaryTrust: Send + Sync {
         checkpoint: &CaptureCheckpoint,
     ) -> Result<(Vec<u8>, NotaryEndpoint)>;
 
-    /// The notaries the host trusts now: its configured notary, or Exalto's
+    /// The notaries the host trusts now: its configured notary, or Undertext's
     /// Registry. An error means it is not available yet.
     async fn registry(&self) -> Result<Registry>;
 
     /// `configuration` when the host configures its notary, or `registry`
-    /// for Exalto's Registry.
+    /// for Undertext's Registry.
     fn trust_source(&self) -> &'static str;
 }
 

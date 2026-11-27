@@ -16,7 +16,7 @@
 .env
 !.gitkeep
 /sdk/python/.venv/
-/sdk/python/python/exalto_capture/*.so
+/sdk/python/python/undertext_capture/*.so
 **/__pycache__/
 /sdk/js/*.node
 /sdk/js/binding.js

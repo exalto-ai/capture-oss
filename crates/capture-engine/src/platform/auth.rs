@@ -1,4 +1,4 @@
-//! The Exalto API origin a host is configured with, and the one-operation
+//! The Undertext API origin a host is configured with, and the one-operation
 //! admission requests and responses of capture-api's admission routes.
 
 use std::env;
@@ -105,7 +105,7 @@ impl AdmissionResponse {
     }
 }
 
-/// The Exalto API origin named by `CAPTURE_PLATFORM_API_ORIGIN`, or the
+/// The Undertext API origin named by `CAPTURE_PLATFORM_API_ORIGIN`, or the
 /// public origin.
 pub fn environment_api_origin() -> Result<ApiOrigin> {
     match env::var(API_ORIGIN_ENV) {

@@ -1,13 +1,13 @@
-//! Node.js bindings for the Exalto Capture SDK. Every operation runs in the
+//! Node.js bindings for the Undertext Capture SDK. Every operation runs in the
 //! Rust SDK; anything slow returns a Promise.
 
 use std::sync::Arc;
 
-use exalto_capture as capture;
 use http::{HeaderMap, HeaderName, HeaderValue, Method};
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
 use tokio::sync::Mutex;
+use undertext_capture as capture;
 
 fn error(error: anyhow::Error) -> Error {
     match capture::ErrorCode::of(&error) {
@@ -113,13 +113,16 @@ impl Notary {
     }
 }
 
-/// Exalto's notary, found through Exalto's Registry. Sessions are charged to
+/// Undertext's notary, found through Undertext's Registry. Sessions are charged to
 /// the organization that owns `apiKey`, or to a small allowance for your
 /// network address without one.
 #[napi]
-pub async fn exalto_notary(api_key: Option<String>, api_origin: Option<String>) -> Result<Notary> {
-    let origin = api_origin.unwrap_or_else(|| capture::EXALTO_API_ORIGIN.to_owned());
-    capture::Notary::exalto_at(&origin, api_key.as_deref())
+pub async fn undertext_notary(
+    api_key: Option<String>,
+    api_origin: Option<String>,
+) -> Result<Notary> {
+    let origin = api_origin.unwrap_or_else(|| capture::UNDERTEXT_CAPTURE_API_ORIGIN.to_owned());
+    capture::Notary::undertext_at(&origin, api_key.as_deref())
         .await
         .map(|inner| Notary { inner })
         .map_err(error)

@@ -1,4 +1,4 @@
-//! One-operation tickets for Exalto's notary, issued by Exalto's API.
+//! One-operation tickets for Undertext's notary, issued by Undertext's API.
 
 use anyhow::{Context as _, Result, anyhow, bail};
 use http::StatusCode;
@@ -12,7 +12,7 @@ const MAX_RESPONSE_BYTES: usize = 16 << 10;
 
 /// Issues admission tickets, charged to the organization that owns the API
 /// key, or to the caller's network address when there is no key.
-pub(crate) struct ExaltoAdmission {
+pub(crate) struct UndertextAdmission {
     api_origin: Url,
     api_key: Option<Zeroizing<String>>,
     http: reqwest::Client,
@@ -54,7 +54,7 @@ struct ErrorResponse {
     error: String,
 }
 
-impl ExaltoAdmission {
+impl UndertextAdmission {
     pub(crate) fn new(api_origin: Url, api_key: Option<&str>, http: reqwest::Client) -> Self {
         Self {
             api_origin,
@@ -83,17 +83,17 @@ impl ExaltoAdmission {
         let mut response = call
             .send()
             .await
-            .context("reaching Exalto's admission service")
+            .context("reaching Undertext's admission service")
             .context(ErrorCode::Unavailable)?;
         let status = response.status();
         let mut body = Vec::new();
         while let Some(chunk) = response
             .chunk()
             .await
-            .context("reading Exalto's admission response")?
+            .context("reading Undertext's admission response")?
         {
             if body.len() + chunk.len() > MAX_RESPONSE_BYTES {
-                bail!("Exalto's admission response is too large");
+                bail!("Undertext's admission response is too large");
             }
             body.extend_from_slice(&chunk);
         }
@@ -109,7 +109,7 @@ impl ExaltoAdmission {
                 })
                 .take(64)
                 .collect();
-            let refusal = anyhow!("Exalto refused notary admission ({status}): {code}");
+            let refusal = anyhow!("Undertext refused notary admission ({status}): {code}");
             return Err(match status {
                 StatusCode::PAYMENT_REQUIRED => refusal.context(ErrorCode::AllowanceExhausted),
                 StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => {
@@ -121,13 +121,13 @@ impl ExaltoAdmission {
             });
         }
         let ticket: TicketResponse =
-            serde_json::from_slice(&body).context("decoding Exalto's admission ticket")?;
+            serde_json::from_slice(&body).context("decoding Undertext's admission ticket")?;
         if ticket.ticket.is_empty()
             || ticket.ticket.len() > capture_core::MAX_NOTARY_ADMISSION_VALUE_BYTES
             || ticket.limits.max_attestable_http_bytes == 0
             || ticket.limits.max_frame_bytes == 0
         {
-            bail!("Exalto returned an invalid admission ticket");
+            bail!("Undertext returned an invalid admission ticket");
         }
         Ok(Ticket {
             value: Zeroizing::new(ticket.ticket),

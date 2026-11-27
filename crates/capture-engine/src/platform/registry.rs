@@ -1,4 +1,4 @@
-//! Reads Exalto's Registry from the configured API origin.
+//! Reads Undertext's Registry from the configured API origin.
 
 use anyhow::{Context, Result};
 use capture_core::registry::{Registry, parse_registry};

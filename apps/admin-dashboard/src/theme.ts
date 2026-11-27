@@ -13,7 +13,7 @@ const axis = [
   '#143d94',
 ] as const;
 
-export const exaltoTheme = createTheme({
+export const undertextTheme = createTheme({
   fontFamily: '-apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif',
   fontFamilyMonospace: 'ui-monospace, "SFMono-Regular", "SF Mono", Menlo, monospace',
   headings: {

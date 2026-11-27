@@ -241,7 +241,7 @@ fn embedded_dashboard_response(path: &str) -> Response {
 #[derive(OpenApi)]
 #[openapi(
     info(
-        title = "Exalto Capture server administration API",
+        title = "Undertext Capture server administration API",
         license(name = "MIT", identifier = "MIT"),
         version = "1.0.0",
         description = "Capture server administration API. Every /v1 route requires the configured HTTP Basic credentials, or a dashboard session started with them."
@@ -513,7 +513,7 @@ async fn status(State(state): State<AdminState>) -> Result<Json<StatusResponse>,
     }))
 }
 
-#[utoipa::path(get, path = "/v1/notaries", summary = "List Notaries", description = "Returns the notaries this server trusts: the explicitly configured self-hosted endpoint and key, or Exalto's Registry. Registry membership describes which keys are trusted and does not report endpoint health.", responses((status = 200, body = NotariesResponse), (status = 401, body = ErrorEnvelope), (status = 503, body = ErrorEnvelope)), security(("basicAuth" = [])), tag = "admin")]
+#[utoipa::path(get, path = "/v1/notaries", summary = "List Notaries", description = "Returns the notaries this server trusts: the explicitly configured self-hosted endpoint and key, or Undertext's Registry. Registry membership describes which keys are trusted and does not report endpoint health.", responses((status = 200, body = NotariesResponse), (status = 401, body = ErrorEnvelope), (status = 503, body = ErrorEnvelope)), security(("basicAuth" = [])), tag = "admin")]
 async fn notaries(State(state): State<AdminState>) -> Result<Json<NotariesResponse>, ApiError> {
     let registry = crate::service::proxy::trusted_registry(&state.config, &state.cluster_runtime)
         .await

@@ -45,7 +45,7 @@ test('a notary that cannot be reached is unavailable', async () => {
 
 test('an ES module can import every export by name', async () => {
   const esm = await import('../index.js');
-  for (const name of ['CaptureKey', 'Client', 'Notary', 'createFetch', 'exaltoNotary', 'verify']) {
+  for (const name of ['CaptureKey', 'Client', 'Notary', 'createFetch', 'undertextNotary', 'verify']) {
     assert.equal(typeof esm[name], 'function', name);
     assert.equal(esm[name], esm.default[name], name);
   }

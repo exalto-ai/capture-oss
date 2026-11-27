@@ -15,13 +15,13 @@ pub enum ErrorCode {
     /// The request can never be captured: it isn't a `POST` to a supported
     /// provider path, or it's too large to attest.
     NotCapturable,
-    /// Exalto refused the session: the organization's allowance or plan
+    /// Undertext refused the session: the organization's allowance or plan
     /// doesn't cover it.
     AllowanceExhausted,
-    /// Exalto refused the API key: unknown, revoked, or without the scope
+    /// Undertext refused the API key: unknown, revoked, or without the scope
     /// the call needs.
     Unauthorized,
-    /// Exalto's API or the notary couldn't be reached. Trying again later may
+    /// Undertext's API or the notary couldn't be reached. Trying again later may
     /// work.
     Unavailable,
 }
@@ -53,9 +53,9 @@ impl fmt::Display for ErrorCode {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
             Self::NotCapturable => "this request can't be captured",
-            Self::AllowanceExhausted => "Exalto's allowance doesn't cover this session",
-            Self::Unauthorized => "Exalto refused the API key",
-            Self::Unavailable => "Exalto is unavailable",
+            Self::AllowanceExhausted => "Undertext's allowance doesn't cover this session",
+            Self::Unauthorized => "Undertext refused the API key",
+            Self::Unavailable => "Undertext is unavailable",
         })
     }
 }
@@ -75,7 +75,7 @@ mod tests {
         assert_eq!(ErrorCode::of(&error), Some(ErrorCode::AllowanceExhausted));
         assert_eq!(
             format!("{error:#}"),
-            "sealing: Exalto's allowance doesn't cover this session: refused"
+            "sealing: Undertext's allowance doesn't cover this session: refused"
         );
         assert_eq!(ErrorCode::of(&anyhow!("something else")), None);
     }

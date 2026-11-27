@@ -107,7 +107,7 @@ fn token_digest(token: &str) -> [u8; 32] {
     Sha256::digest(token.as_bytes()).into()
 }
 
-/// Accepts Exalto API keys with the `capture:request` scope by asking
+/// Accepts Undertext API keys with the `capture:request` scope by asking
 /// capture-api which organization each one records for.
 ///
 /// Successful answers are cached by the token's SHA-256 digest for

@@ -1,4 +1,4 @@
-//! Python bindings for the Exalto Capture SDK. Every operation runs in the
+//! Python bindings for the Undertext Capture SDK. Every operation runs in the
 //! Rust SDK on a shared Tokio runtime with the GIL released.
 
 use std::{
@@ -7,7 +7,6 @@ use std::{
     time::Duration,
 };
 
-use exalto_capture as capture;
 use http::{HeaderMap, HeaderName, HeaderValue, Method};
 use pyo3::{
     create_exception,
@@ -15,6 +14,7 @@ use pyo3::{
     prelude::*,
     types::{PyBytes, PyDict},
 };
+use undertext_capture as capture;
 
 create_exception!(
     _native,
@@ -38,19 +38,19 @@ create_exception!(
     _native,
     AllowanceExhausted,
     CaptureError,
-    "Exalto refused the session: the organization's allowance or plan doesn't cover it. Nothing was sent to the provider."
+    "Undertext refused the session: the organization's allowance or plan doesn't cover it. Nothing was sent to the provider."
 );
 create_exception!(
     _native,
     Unauthorized,
     CaptureError,
-    "Exalto refused the API key: unknown, revoked, or without the scope the call needs. Nothing was sent to the provider."
+    "Undertext refused the API key: unknown, revoked, or without the scope the call needs. Nothing was sent to the provider."
 );
 create_exception!(
     _native,
     Unavailable,
     CaptureError,
-    "Exalto's API or the notary couldn't be reached. Nothing was sent to the provider, and trying again later may work."
+    "Undertext's API or the notary couldn't be reached. Nothing was sent to the provider, and trying again later may work."
 );
 
 fn runtime() -> &'static tokio::runtime::Runtime {
@@ -58,9 +58,9 @@ fn runtime() -> &'static tokio::runtime::Runtime {
     RUNTIME.get_or_init(|| {
         tokio::runtime::Builder::new_multi_thread()
             .enable_all()
-            .thread_name("exalto-capture")
+            .thread_name("undertext-capture")
             .build()
-            .expect("the Exalto Capture runtime starts")
+            .expect("the Undertext Capture runtime starts")
     })
 }
 
@@ -146,7 +146,7 @@ fn request(
 }
 
 /// The 32-byte key that encrypts a `.llmcapture`. Store it as a secret.
-#[pyclass(frozen, module = "exalto_capture._native")]
+#[pyclass(frozen, module = "undertext_capture._native")]
 struct CaptureKey(capture::CaptureKey);
 
 #[pymethods]
@@ -173,7 +173,7 @@ impl CaptureKey {
 }
 
 /// A notary and the keys its evidence is checked against.
-#[pyclass(frozen, module = "exalto_capture._native")]
+#[pyclass(frozen, module = "undertext_capture._native")]
 struct Notary(capture::Notary);
 
 #[pymethods]
@@ -187,18 +187,18 @@ impl Notary {
             .map_err(error)
     }
 
-    /// Exalto's notary, found through Exalto's Registry. Sessions are charged
+    /// Undertext's notary, found through Undertext's Registry. Sessions are charged
     /// to the organization that owns `api_key`, or to a small allowance for
     /// your network address without one.
     #[staticmethod]
     #[pyo3(signature = (api_key=None, api_origin=None))]
-    fn exalto(
+    fn undertext(
         py: Python<'_>,
         api_key: Option<String>,
         api_origin: Option<String>,
     ) -> PyResult<Self> {
-        let origin = api_origin.unwrap_or_else(|| capture::EXALTO_API_ORIGIN.to_owned());
-        py.detach(|| runtime().block_on(capture::Notary::exalto_at(&origin, api_key.as_deref())))
+        let origin = api_origin.unwrap_or_else(|| capture::UNDERTEXT_CAPTURE_API_ORIGIN.to_owned());
+        py.detach(|| runtime().block_on(capture::Notary::undertext_at(&origin, api_key.as_deref())))
             .map(Self)
             .map_err(error)
     }
@@ -216,7 +216,7 @@ impl Notary {
 }
 
 /// Sends provider requests through one notary.
-#[pyclass(frozen, module = "exalto_capture._native")]
+#[pyclass(frozen, module = "undertext_capture._native")]
 struct Client(capture::Client);
 
 #[pymethods]
@@ -288,7 +288,7 @@ impl Client {
 }
 
 /// The provider's response. Read its body, then take its artifact.
-#[pyclass(frozen, module = "exalto_capture._native")]
+#[pyclass(frozen, module = "undertext_capture._native")]
 struct Response {
     #[pyo3(get)]
     status: u16,
@@ -390,7 +390,7 @@ impl Response {
 /// or `"capture"` (a private `.llmcapture`). `context` holds the
 /// `capture_context` fields its request was sent with; they are never part of
 /// the evidence.
-#[pyclass(frozen, module = "exalto_capture._native")]
+#[pyclass(frozen, module = "undertext_capture._native")]
 struct Artifact {
     #[pyo3(get)]
     trace_id: String,
@@ -415,7 +415,7 @@ impl Artifact {
 }
 
 /// The authenticated contents of a verified `.llmtrace`.
-#[pyclass(frozen, module = "exalto_capture._native")]
+#[pyclass(frozen, module = "undertext_capture._native")]
 struct Verification(capture::Verification);
 
 #[pymethods]
@@ -500,7 +500,10 @@ fn _native(module: &Bound<'_, PyModule>) -> PyResult<()> {
     )?;
     module.add("Unauthorized", module.py().get_type::<Unauthorized>())?;
     module.add("Unavailable", module.py().get_type::<Unavailable>())?;
-    module.add("EXALTO_API_ORIGIN", capture::EXALTO_API_ORIGIN)?;
+    module.add(
+        "UNDERTEXT_CAPTURE_API_ORIGIN",
+        capture::UNDERTEXT_CAPTURE_API_ORIGIN,
+    )?;
     module.add_class::<CaptureKey>()?;
     module.add_class::<Notary>()?;
     module.add_class::<Client>()?;

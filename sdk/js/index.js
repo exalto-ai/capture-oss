@@ -31,9 +31,9 @@ for (const name of ['witness', 'capture', 'notarize']) {
   };
 }
 
-/** Exalto's notary, found through Exalto's Registry. */
-function exaltoNotary(apiKey, apiOrigin) {
-  return native.exaltoNotary(apiKey, apiOrigin).catch(rethrowCoded);
+/** Undertext's notary, found through Undertext's Registry. */
+function undertextNotary(apiKey, apiOrigin) {
+  return native.undertextNotary(apiKey, apiOrigin).catch(rethrowCoded);
 }
 
 const contextStorage = new AsyncLocalStorage();
@@ -49,7 +49,7 @@ function captureContext(fields, fn) {
 }
 
 function logError(error) {
-  console.error('Exalto Capture produced no artifact for a provider response:', error?.message ?? error);
+  console.error('Undertext Capture produced no artifact for a provider response:', error?.message ?? error);
 }
 
 /** Settles with `promise`, or rejects when `signal` aborts first; a late result is passed to `onLate`. */
@@ -183,5 +183,5 @@ function createFetch(client, options) {
 
 // Spreading `require(...)` directly, rather than a variable holding it, is what
 // lets Node's ESM loader see the binding's names, so that
-// `import { Client } from '@exalto/capture'` works as well as the default import.
-module.exports = { ...require('./binding.js'), exaltoNotary, createFetch, captureContext };
+// `import { Client } from '@undertext/capture'` works as well as the default import.
+module.exports = { ...require('./binding.js'), undertextNotary, createFetch, captureContext };

@@ -16,7 +16,7 @@ seams, but those implementations are not part of this workspace.
 | Component | Sees application plaintext? | Durable state | Responsibility |
 | --- | --- | --- | --- |
 | Provider client | yes | provider credential | Sends an ordinary provider request to a fixed route, or through an SDK in its own process |
-| SDK (`exalto-capture`) | yes | none; returns each artifact to the caller as bytes, a `.llmcapture` encrypted under the caller's 32-byte capture key | Runs the capture service in the caller's process: shapes the request for a fixed provider host, captures, seals on request, and verifies |
+| SDK (`undertext-capture`) | yes | none; returns each artifact to the caller as bytes, a `.llmcapture` encrypted under the caller's 32-byte capture key | Runs the capture service in the caller's process: shapes the request for a fixed provider host, captures, seals on request, and verifies |
 | `capture-server` | yes | shared vault key, PostgreSQL metadata, S3 artifacts | Proxies requests, captures private state, notarizes, and verifies on replicated deployments, with provider requests authenticated as organizations, authenticated administration, and an optional private customer API through which capture-api acts for any organization |
 | Dashboard | only safe metadata store fields and deliberately opened notarized disclosures | browser session preference | Uses the capture server's administration API |
 | `capture-notary` | no in Notarized sessions; yes, in memory only, in Witnessed sessions | signing key | Resolves the provider, relays encrypted TLS records or Witnessed plaintext, witnesses sessions, and completes proof work |

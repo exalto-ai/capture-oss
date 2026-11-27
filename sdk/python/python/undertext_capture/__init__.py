@@ -1,4 +1,4 @@
-"""Seal model-provider calls with an Exalto Capture notary.
+"""Seal model-provider calls with an Undertext Capture notary.
 
 Every call returns the provider's response plus its evidence as bytes. Store
 those bytes wherever you like.
@@ -20,7 +20,7 @@ subclass: ``NotCapturable``, ``AllowanceExhausted``, ``Unauthorized``,
 """
 
 from ._native import (
-    EXALTO_API_ORIGIN,
+    UNDERTEXT_CAPTURE_API_ORIGIN,
     AllowanceExhausted,
     Artifact,
     CaptureError,
@@ -37,7 +37,7 @@ from ._native import (
 )
 
 __all__ = [
-    "EXALTO_API_ORIGIN",
+    "UNDERTEXT_CAPTURE_API_ORIGIN",
     "AllowanceExhausted",
     "Artifact",
     "CaptureError",

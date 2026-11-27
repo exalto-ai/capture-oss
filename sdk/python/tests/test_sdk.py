@@ -7,8 +7,8 @@ import unittest
 
 import httpx2
 
-import exalto_capture
-from exalto_capture import (
+import undertext_capture
+from undertext_capture import (
     CaptureError,
     CaptureKey,
     CaptureTimeout,
@@ -17,7 +17,7 @@ from exalto_capture import (
     Notary,
     Unavailable,
 )
-from exalto_capture.transport import AsyncCaptureTransport, CaptureTransport, capture_context
+from undertext_capture.transport import AsyncCaptureTransport, CaptureTransport, capture_context
 
 # The public key of secp256k1 secret key 1, a valid SEC1 point.
 NOTARY_KEY = "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"
@@ -57,7 +57,7 @@ class NativeTest(unittest.TestCase):
 
     def test_verify_rejects_bytes_that_are_not_a_trace(self):
         with self.assertRaises(CaptureError):
-            exalto_capture.verify(b"not a trace", NOTARY_KEY)
+            undertext_capture.verify(b"not a trace", NOTARY_KEY)
 
 
 class FakeResponse:

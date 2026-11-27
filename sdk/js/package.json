@@ -1,14 +1,14 @@
 {
-  "name": "@exalto/capture",
+  "name": "@undertext/capture",
   "version": "0.0.1",
-  "description": "Seal model-provider calls with an Exalto Capture notary and get the evidence back as bytes",
+  "description": "Seal model-provider calls with an Undertext Capture notary and get the evidence back as bytes",
   "license": "MIT",
   "main": "index.js",
   "types": "index.d.ts",
   "files": ["index.js", "index.d.ts", "binding.js", "binding.d.ts", "*.node"],
   "engines": { "node": ">=20" },
   "napi": {
-    "binaryName": "exalto-capture"
+    "binaryName": "undertext-capture"
   },
   "scripts": {
     "build": "napi build --platform --release --js binding.js --dts binding.d.ts",

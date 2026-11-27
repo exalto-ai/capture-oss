@@ -7,13 +7,13 @@ package::
 
     import httpx2
     from anthropic import Anthropic
-    from exalto_capture import Client, Notary
-    from exalto_capture.transport import CaptureTransport
+    from undertext_capture import Client, Notary
+    from undertext_capture.transport import CaptureTransport
 
     def keep(artifact):
         bucket.put_object(Key=f"{artifact.trace_id}.{artifact.extension}", Body=artifact.data)
 
-    client = Client(Notary.exalto(api_key=EXALTO_API_KEY))
+    client = Client(Notary.undertext(api_key=UNDERTEXT_CAPTURE_API_KEY))
     http = httpx2.Client(transport=CaptureTransport(client, mode="witnessed", on_artifact=keep))
     anthropic = Anthropic(http_client=http)
 
@@ -60,7 +60,7 @@ ShouldCapture = Callable[[httpx2.Request], bool]
 
 __all__ = ["AsyncCaptureTransport", "CaptureTransport", "Mode", "ShouldCapture", "capture_context"]
 
-_log = logging.getLogger("exalto_capture")
+_log = logging.getLogger("undertext_capture")
 
 # Each in-flight call holds a worker thread while the native side waits. A
 # limiter of its own keeps those calls from exhausting the thread pool that
@@ -68,7 +68,7 @@ _log = logging.getLogger("exalto_capture")
 _ASYNC_CALLS = 256
 
 
-_context: ContextVar[Optional[dict[str, Any]]] = ContextVar("exalto_capture_context", default=None)
+_context: ContextVar[Optional[dict[str, Any]]] = ContextVar("undertext_capture_context", default=None)
 
 
 @contextmanager
@@ -90,7 +90,7 @@ def _current_context() -> dict[str, Any]:
 
 
 def _log_error(error: Exception) -> None:
-    _log.error("Exalto Capture produced no artifact for a provider response: %s", error)
+    _log.error("Undertext Capture produced no artifact for a provider response: %s", error)
 
 
 def _checked(mode: str, key: Optional[CaptureKey]) -> None:

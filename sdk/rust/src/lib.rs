@@ -1,4 +1,4 @@
-//! Exalto Capture SDK: send a model-provider request through a notary and get
+//! Undertext Capture SDK: send a model-provider request through a notary and get
 //! the provider's response back with its evidence as bytes. Where those bytes
 //! go is the caller's choice.
 //!
@@ -47,18 +47,18 @@ use url::Url;
 use zeroize::Zeroizing;
 
 use crate::{
-    admission::{AdmissionRequest, ExaltoAdmission, Ticket},
+    admission::{AdmissionRequest, Ticket, UndertextAdmission},
     provider::ProviderRequest,
 };
 
 pub use capture_core::archive::EvidenceKind;
 pub use error::ErrorCode;
 
-/// Exalto's public API, which publishes its notary Registry and issues
+/// Undertext's public API, which publishes its notary Registry and issues
 /// notary admission tickets.
-pub const EXALTO_API_ORIGIN: &str = "https://api.capture.undertext.sh";
+pub const UNDERTEXT_CAPTURE_API_ORIGIN: &str = "https://api.capture.undertext.sh";
 
-const USER_AGENT: &str = concat!("exalto-capture-sdk/", env!("CARGO_PKG_VERSION"));
+const USER_AGENT: &str = concat!("undertext-capture-sdk/", env!("CARGO_PKG_VERSION"));
 const API_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const API_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_REGISTRY_BYTES: usize = 1 << 20;
@@ -99,7 +99,7 @@ impl fmt::Debug for CaptureKey {
     }
 }
 
-/// A notary, with the keys its evidence is checked against and, for Exalto's
+/// A notary, with the keys its evidence is checked against and, for Undertext's
 /// notary, the admission that pays for each session.
 #[derive(Clone)]
 pub struct Notary {
@@ -111,13 +111,13 @@ enum Source {
     /// A notary you run: the Registry of its one key, which is never read
     /// again.
     Own(Registry),
-    /// Exalto's notary, found through Exalto's Registry.
-    Exalto(Arc<Exalto>),
+    /// Undertext's notary, found through Undertext's Registry.
+    Undertext(Arc<Undertext>),
 }
 
-struct Exalto {
-    admission: ExaltoAdmission,
-    /// The latest copy of Exalto's Registry, only ever replaced whole.
+struct Undertext {
+    admission: UndertextAdmission,
+    /// The latest copy of Undertext's Registry, only ever replaced whole.
     registry: Mutex<Registry>,
 }
 
@@ -134,19 +134,19 @@ impl Notary {
         })
     }
 
-    /// Exalto's notary, found through Exalto's Registry. Sessions are charged
+    /// Undertext's notary, found through Undertext's Registry. Sessions are charged
     /// to the organization that owns `api_key`, or to a small allowance for
     /// your network address without one.
     ///
     /// The Registry is read here, again when evidence is signed by a key the
     /// copy doesn't list, and before every seal. A long-running process so
     /// follows a key rotation without restarting.
-    pub async fn exalto(api_key: Option<&str>) -> Result<Self> {
-        Self::exalto_at(EXALTO_API_ORIGIN, api_key).await
+    pub async fn undertext(api_key: Option<&str>) -> Result<Self> {
+        Self::undertext_at(UNDERTEXT_CAPTURE_API_ORIGIN, api_key).await
     }
 
-    /// Exalto's notary through another Exalto API origin, such as staging.
-    pub async fn exalto_at(api_origin: &str, api_key: Option<&str>) -> Result<Self> {
+    /// Undertext's notary through another Undertext API origin, such as staging.
+    pub async fn undertext_at(api_origin: &str, api_key: Option<&str>) -> Result<Self> {
         let api_origin = parse_api_origin(api_origin)?;
         let http = reqwest::Client::builder()
             .user_agent(USER_AGENT)
@@ -156,14 +156,14 @@ impl Notary {
             .context("building the HTTP client")?;
         let registry = fetch_registry(&http, &api_origin).await?;
         Ok(Self {
-            source: Source::Exalto(Arc::new(Exalto {
-                admission: ExaltoAdmission::new(api_origin, api_key, http),
+            source: Source::Undertext(Arc::new(Undertext {
+                admission: UndertextAdmission::new(api_origin, api_key, http),
                 registry: Mutex::new(registry),
             })),
         })
     }
 
-    /// Fully verifies a `.llmtrace` against this notary's keys: for Exalto's
+    /// Fully verifies a `.llmtrace` against this notary's keys: for Undertext's
     /// notary, the latest copy of its Registry. It contacts nothing.
     pub fn verify(&self, trace: &[u8]) -> Result<Verification> {
         let embedded = trace_package_notary_key_bytes(trace)?;
@@ -180,7 +180,7 @@ impl Notary {
             Source::Own(registry) => registry.clone(),
             // The copy is only ever replaced whole, so a poisoned lock still
             // holds a consistent one.
-            Source::Exalto(exalto) => exalto
+            Source::Undertext(undertext) => undertext
                 .registry
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -188,34 +188,34 @@ impl Notary {
         }
     }
 
-    /// The Registry read again, for Exalto's notary.
+    /// The Registry read again, for Undertext's notary.
     async fn reread(&self) -> Result<Registry> {
-        let Source::Exalto(exalto) = &self.source else {
+        let Source::Undertext(undertext) = &self.source else {
             return Ok(self.registry());
         };
         let registry =
-            fetch_registry(exalto.admission.http(), exalto.admission.api_origin()).await?;
-        *exalto
+            fetch_registry(undertext.admission.http(), undertext.admission.api_origin()).await?;
+        *undertext
             .registry
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = registry.clone();
         Ok(registry)
     }
 
-    /// `check` against the latest copy of the Registry, or for Exalto's
-    /// notary, if that fails, against the Registry read again: a key Exalto
+    /// `check` against the latest copy of the Registry, or for Undertext's
+    /// notary, if that fails, against the Registry read again: a key Undertext
     /// published after the copy was read signs evidence that would otherwise
     /// be lost, for a provider call already paid for.
     async fn checked<T>(&self, check: impl Fn(&Registry) -> Result<T>) -> Result<T> {
         match (check(&self.registry()), &self.source) {
-            (Err(_), Source::Exalto(_)) => check(&self.reread().await?),
+            (Err(_), Source::Undertext(_)) => check(&self.reread().await?),
             (result, _) => result,
         }
     }
 
     async fn admit(&self, request: AdmissionRequest<'_>) -> Result<Option<Ticket>> {
         match &self.source {
-            Source::Exalto(exalto) => exalto.admission.issue(request).await.map(Some),
+            Source::Undertext(undertext) => undertext.admission.issue(request).await.map(Some),
             Source::Own(_) => Ok(None),
         }
     }
@@ -226,7 +226,7 @@ impl fmt::Debug for Notary {
         formatter
             .debug_struct("Notary")
             .field("endpoint", &self.registry().capture_endpoint.to_string())
-            .field("exalto", &matches!(self.source, Source::Exalto(_)))
+            .field("undertext", &matches!(self.source, Source::Undertext(_)))
             .finish()
     }
 }
@@ -508,7 +508,7 @@ impl Client {
         })
         .await
         .context("the decryption task ended")??;
-        // Sealing may run long after the capture, so Exalto's Registry is read
+        // Sealing may run long after the capture, so Undertext's Registry is read
         // again: the notary that captured it may have moved or stopped sealing.
         let (trusted_key, endpoint) = self.notary.reread().await?.sealing_notary(&checkpoint)?;
         let allowance = checkpoint.notarization_allowance_bytes()?;
@@ -607,11 +607,11 @@ fn parse_public_key(value: &str) -> Result<Vec<u8>> {
 }
 
 fn parse_api_origin(value: &str) -> Result<Url> {
-    let url = Url::parse(value).context("invalid Exalto API origin")?;
+    let url = Url::parse(value).context("invalid Undertext API origin")?;
     let loopback = matches!(url.host_str(), Some("127.0.0.1" | "localhost" | "[::1]"));
     ensure!(
         url.scheme() == "https" || (url.scheme() == "http" && loopback),
-        "the Exalto API origin must use https"
+        "the Undertext API origin must use https"
     );
     ensure!(
         url.username().is_empty()
@@ -619,12 +619,12 @@ fn parse_api_origin(value: &str) -> Result<Url> {
             && matches!(url.path(), "" | "/")
             && url.query().is_none()
             && url.fragment().is_none(),
-        "the Exalto API origin must be only a scheme, host and port"
+        "the Undertext API origin must be only a scheme, host and port"
     );
     Ok(url)
 }
 
-/// Reads Exalto's published Registry.
+/// Reads Undertext's published Registry.
 async fn fetch_registry(http: &reqwest::Client, api_origin: &Url) -> Result<Registry> {
     let url = api_origin.join("/api/registry")?;
     let mut response = http
@@ -632,7 +632,7 @@ async fn fetch_registry(http: &reqwest::Client, api_origin: &Url) -> Result<Regi
         .send()
         .await
         .and_then(reqwest::Response::error_for_status)
-        .with_context(|| format!("fetching Exalto's notary Registry from {url}"))
+        .with_context(|| format!("fetching Undertext's notary Registry from {url}"))
         .context(ErrorCode::Unavailable)?;
     let mut bytes = Vec::new();
     while let Some(chunk) = response
@@ -797,7 +797,7 @@ mod tests {
     async fn a_registry_copy_serves_until_evidence_needs_a_new_one() {
         let (key, first) = notary_record(1);
         let (origin, counter) = registry_server(vec![registry_document(&[&first])]).await;
-        let notary = Notary::exalto_at(&origin, None).await.unwrap();
+        let notary = Notary::undertext_at(&origin, None).await.unwrap();
         assert_eq!(reads(&counter), 1);
 
         notary
@@ -816,7 +816,7 @@ mod tests {
             registry_document(&[&first, &second]),
         ])
         .await;
-        let notary = Notary::exalto_at(&origin, None).await.unwrap();
+        let notary = Notary::undertext_at(&origin, None).await.unwrap();
         notary.reread().await.unwrap();
         assert_eq!(
             notary.registry().capture_endpoint.to_string(),
@@ -833,7 +833,7 @@ mod tests {
             registry_document(&[&first, &second]),
         ])
         .await;
-        let notary = Notary::exalto_at(&origin, None).await.unwrap();
+        let notary = Notary::undertext_at(&origin, None).await.unwrap();
         assert!(trusts(&notary.registry(), &rotated).is_err());
 
         notary
@@ -946,7 +946,7 @@ mod tests {
                 }
             })
             .await;
-            let client = Client::new(Notary::exalto_at(&origin, Some("key")).await.unwrap());
+            let client = Client::new(Notary::undertext_at(&origin, Some("key")).await.unwrap());
             let error = witness_error(&client, provider_request()).await;
             assert_eq!(ErrorCode::of(&error), code, "{status}: {error:#}");
         }
@@ -954,7 +954,7 @@ mod tests {
 
     #[tokio::test]
     async fn an_unreachable_exalto_api_is_unavailable() {
-        let error = Notary::exalto_at("http://127.0.0.1:1", None)
+        let error = Notary::undertext_at("http://127.0.0.1:1", None)
             .await
             .unwrap_err();
         assert_eq!(ErrorCode::of(&error), Some(ErrorCode::Unavailable));

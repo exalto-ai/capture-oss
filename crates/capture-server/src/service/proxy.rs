@@ -203,7 +203,7 @@ fn organization_storage(
 }
 
 /// The notaries this server trusts: its configured notary, or else this
-/// replica's copy of Exalto's Registry, read the first time it is needed.
+/// replica's copy of Undertext's Registry, read the first time it is needed.
 pub(crate) async fn trusted_registry(
     config: &CapturedConfig,
     cluster_runtime: &ClusterRuntime,
@@ -214,7 +214,7 @@ pub(crate) async fn trusted_registry(
     }
 }
 
-/// The notaries this server trusts, with Exalto's Registry read again.
+/// The notaries this server trusts, with Undertext's Registry read again.
 async fn reread_registry(
     config: &CapturedConfig,
     cluster_runtime: &ClusterRuntime,
@@ -252,7 +252,7 @@ impl NotaryDiscovery for DaemonNotaryDiscovery {
     }
 }
 
-/// The configured notary, or else Exalto's Registry, which is read again when
+/// The configured notary, or else Undertext's Registry, which is read again when
 /// evidence is signed by a key the copy doesn't list and before every seal.
 pub(crate) struct DaemonNotaryTrust {
     config: Arc<CapturedConfig>,
@@ -270,7 +270,7 @@ impl DaemonNotaryTrust {
 
 #[async_trait::async_trait]
 impl NotaryTrust for DaemonNotaryTrust {
-    /// The trusted key that signed a witness receipt. A key Exalto published
+    /// The trusted key that signed a witness receipt. A key Undertext published
     /// after this replica read the Registry signs evidence that would
     /// otherwise be lost, for a provider call already made, so a key the copy
     /// doesn't list sends it to read the Registry again.
@@ -290,7 +290,7 @@ impl NotaryTrust for DaemonNotaryTrust {
         anyhow::bail!("a capture server does not reuse existing trace packages")
     }
 
-    /// Sealing may run long after the capture, so Exalto's Registry is read
+    /// Sealing may run long after the capture, so Undertext's Registry is read
     /// again: the notary that captured it may have moved or stopped sealing.
     async fn sealing_notary(
         &self,
@@ -375,7 +375,7 @@ pub async fn run(args: ProxyArgs) -> Result<()> {
     // `persistence.metadata` is its view.
     let operator = default_organization();
     let operator_stored_mode = persistence.metadata.capture_mode().await?;
-    // A configured notary is known without any network request. Exalto's
+    // A configured notary is known without any network request. Undertext's
     // Registry is read at startup only when the operator organization
     // captures; any other organization discovers the notary through the same
     // discovery on its first request in a capture mode.

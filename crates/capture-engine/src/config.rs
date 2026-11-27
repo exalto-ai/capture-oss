@@ -104,8 +104,8 @@ pub struct CustomerApiConfig {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum AuthenticationConfig {
-    /// Exalto credentials with the `capture:request` scope, checked against
-    /// the configured Exalto API origin.
+    /// Undertext credentials with the `capture:request` scope, checked against
+    /// the configured Undertext API origin.
     Hosted {
         /// A private file holding this server's capture service credential,
         /// with which capture-api charges each notary admission to the

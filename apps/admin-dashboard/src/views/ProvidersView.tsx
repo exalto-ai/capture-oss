@@ -132,7 +132,7 @@ export function ProvidersView({ api, status }: { api: AdminApi; status: Status }
     notifications.show({
       title: `${label} base URL copied`,
       message:
-        'Model selection and the API key stay in the tool. Exalto Capture does not store a second provider credential.',
+        'Model selection and the API key stay in the tool. Undertext Capture does not store a second provider credential.',
     });
   };
   const routes = providers.data?.providers ?? [];
@@ -185,7 +185,7 @@ export function ProvidersView({ api, status }: { api: AdminApi; status: Status }
             </Title>
             <Text className="provider-boundary-note">
               Choose a provider route only when configuring an API or SDK client. Replace its base
-              URL and keep the API key and model selection in that client; Exalto Capture never
+              URL and keep the API key and model selection in that client; Undertext Capture never
               stores or substitutes the key.
             </Text>
             <div className="provider-route-list provider-api-list">

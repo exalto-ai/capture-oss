@@ -1,4 +1,4 @@
-# Exalto Capture SDKs
+# Undertext Capture SDKs
 
 Send a model-provider request through a notary from your own code, and get the
 provider's response back together with its evidence as bytes. Where those
@@ -6,9 +6,9 @@ bytes go (S3, a database, a file) is up to you.
 
 | Package | Tree | |
 | --- | --- | --- |
-| Rust | [`rust`](rust) | `exalto-capture`, the only implementation |
-| Python | [`python`](python) | `exalto_capture`: PyO3 bindings plus `httpx2` transports |
-| Node.js | [`js`](js) | `@exalto/capture`: napi-rs bindings plus a `fetch` for SDK clients |
+| Rust | [`rust`](rust) | `undertext-capture`, the only implementation |
+| Python | [`python`](python) | `undertext_capture`: PyO3 bindings plus `httpx2` transports |
+| Node.js | [`js`](js) | `@undertext/capture`: napi-rs bindings plus a `fetch` for SDK clients |
 
 No packages are published yet; build them from this tree (below).
 
@@ -40,7 +40,7 @@ sealed.
 
 ## Notaries
 
-- `Notary.exalto(api_key)` uses Exalto's notary, found through Exalto's
+- `Notary.undertext(api_key)` uses Undertext's notary, found through Undertext's
   Registry, which it reads again when a notary signs with a key the copy
   doesn't list yet and before every seal. Each session is charged
   to the organization that owns the API key (scopes `capture:request` and
@@ -60,13 +60,13 @@ import os
 
 import httpx2
 from anthropic import Anthropic
-from exalto_capture import Client, Notary
-from exalto_capture.transport import CaptureTransport
+from undertext_capture import Client, Notary
+from undertext_capture.transport import CaptureTransport
 
 def keep(artifact):  # artifact.trace_id, .kind, .extension, .data
     bucket.put_object(Key=f"traces/{artifact.trace_id}.{artifact.extension}", Body=artifact.data)
 
-client = Client(Notary.exalto(api_key=os.environ["EXALTO_API_KEY"]))
+client = Client(Notary.undertext(api_key=os.environ["UNDERTEXT_CAPTURE_API_KEY"]))
 anthropic = Anthropic(http_client=httpx2.Client(
     transport=CaptureTransport(client, mode="witnessed", on_artifact=keep),
 ))
@@ -76,9 +76,9 @@ Node.js (an ES module), with any client that accepts a `fetch`:
 
 ```js
 import OpenAI from 'openai';
-import { CaptureKey, Client, createFetch, exaltoNotary } from '@exalto/capture';
+import { CaptureKey, Client, createFetch, undertextNotary } from '@undertext/capture';
 
-const client = new Client(await exaltoNotary(process.env.EXALTO_API_KEY));
+const client = new Client(await undertextNotary(process.env.UNDERTEXT_CAPTURE_API_KEY));
 const key = CaptureKey.fromBytes(Buffer.from(process.env.CAPTURE_KEY, 'base64'));
 const openai = new OpenAI({
   fetch: createFetch(client, { mode: 'notarized', key, onArtifact: (a) => save(a) }),
@@ -91,8 +91,8 @@ const trace = await client.notarize(captureBytes, key);
 Rust:
 
 ```rust
-let client = exalto_capture::Client::new(exalto_capture::Notary::exalto(Some(&api_key)).await?);
-let response = client.witness(exalto_capture::Request::post(url, headers, body)).await?;
+let client = undertext_capture::Client::new(undertext_capture::Notary::undertext(Some(&api_key)).await?);
+let response = client.witness(undertext_capture::Request::post(url, headers, body)).await?;
 let (body, artifact) = response.finish().await?;
 ```
 
@@ -110,7 +110,7 @@ from `ErrorCode::of`.
 ## Build and test
 
 ```bash
-cargo test --manifest-path ../Cargo.toml -p exalto-capture
+cargo test --manifest-path ../Cargo.toml -p undertext-capture
 ```
 
 ```bash
