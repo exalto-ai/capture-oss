@@ -367,13 +367,13 @@ export const fixtureStatus: Status = {
 
 export const fixtureNotaries: Notaries = {
   source: 'registry',
-  capture_endpoint: 'tls://notary.capture.exalto.ai:443',
+  capture_endpoint: 'tls://notary.capture.undertext.sh:443',
   notaries: [
     {
       name: 'seal2',
       key_id: 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
       public_key: '02aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-      seal_endpoint: 'tls://notary.capture.exalto.ai:443',
+      seal_endpoint: 'tls://notary.capture.undertext.sh:443',
     },
     {
       name: 'seal1',

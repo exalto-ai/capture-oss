@@ -770,7 +770,7 @@ describe('Notary admin dashboard', () => {
       .toEqual(['seal2', 'seal1']);
     await expect.element(page.getByText("Exalto's Registry", { exact: true })).toBeVisible();
     await expect
-      .element(page.getByText('tls://notary.capture.exalto.ai:443', { exact: true }).first())
+      .element(page.getByText('tls://notary.capture.undertext.sh:443', { exact: true }).first())
       .toBeVisible();
     await expect
       .element(page.getByText('sha256:aaaaaaaaaaa…aaaaaaaa', { exact: true }))

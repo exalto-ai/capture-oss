@@ -56,7 +56,7 @@ pub use error::ErrorCode;
 
 /// Exalto's public API, which publishes its notary Registry and issues
 /// notary admission tickets.
-pub const EXALTO_API_ORIGIN: &str = "https://api.capture.exalto.ai";
+pub const EXALTO_API_ORIGIN: &str = "https://api.capture.undertext.sh";
 
 const USER_AGENT: &str = concat!("exalto-capture-sdk/", env!("CARGO_PKG_VERSION"));
 const API_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -699,10 +699,10 @@ mod tests {
 
     #[test]
     fn api_origins_must_be_https_except_on_loopback() {
-        assert!(parse_api_origin("https://api.capture.exalto.ai").is_ok());
+        assert!(parse_api_origin("https://api.capture.undertext.sh").is_ok());
         assert!(parse_api_origin("http://127.0.0.1:8080").is_ok());
-        assert!(parse_api_origin("http://api.capture.exalto.ai").is_err());
-        assert!(parse_api_origin("https://api.capture.exalto.ai/v1").is_err());
+        assert!(parse_api_origin("http://api.capture.undertext.sh").is_err());
+        assert!(parse_api_origin("https://api.capture.undertext.sh/v1").is_err());
     }
 
     /// A hex public key and its Registry record, sealing at its own host.

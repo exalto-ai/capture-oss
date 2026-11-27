@@ -7,7 +7,7 @@ pub mod registry;
 
 /// Exalto's API origin. A server uses another when `CAPTURE_PLATFORM_API_ORIGIN`
 /// is set.
-pub const DEFAULT_API_ORIGIN: &str = "https://api.capture.exalto.ai";
+pub const DEFAULT_API_ORIGIN: &str = "https://api.capture.undertext.sh";
 
 pub const DAEMON_USER_AGENT: &str = concat!("exalto-capture/", env!("CARGO_PKG_VERSION"));
 

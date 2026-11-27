@@ -8,10 +8,10 @@ document is not separately signed.
 
 ```json
 {
-  "capture_endpoint": "tls://notary.capture.exalto.ai:443",
+  "capture_endpoint": "tls://notary.capture.undertext.sh:443",
   "notaries": [
-    { "name": "seal2", "public_key": "02...", "seal_endpoint": "tls://notary.capture.exalto.ai:443" },
-    { "name": "seal1", "public_key": "03...", "seal_endpoint": "tls://seal1.capture.exalto.ai:443" },
+    { "name": "seal2", "public_key": "02...", "seal_endpoint": "tls://notary.capture.undertext.sh:443" },
+    { "name": "seal1", "public_key": "03...", "seal_endpoint": "tls://seal1.capture.undertext.sh:443" },
     { "name": "seal0", "public_key": "02..." }
   ]
 }

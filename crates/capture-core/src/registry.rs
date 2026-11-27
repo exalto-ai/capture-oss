@@ -117,7 +117,7 @@ impl<'de> Deserialize<'de> for NotaryEndpoint {
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct Registry {
     /// Where new sessions connect.
-    #[cfg_attr(feature = "openapi", schema(value_type = String, example = "tls://notary.capture.exalto.ai:443"))]
+    #[cfg_attr(feature = "openapi", schema(value_type = String, example = "tls://notary.capture.undertext.sh:443"))]
     pub capture_endpoint: NotaryEndpoint,
     pub notaries: Vec<RegistryNotary>,
 }
@@ -244,16 +244,16 @@ mod tests {
     #[test]
     fn parses_a_registry_document() {
         let document = serde_json::json!({
-            "capture_endpoint": "tls://notary.capture.exalto.ai:443",
+            "capture_endpoint": "tls://notary.capture.undertext.sh:443",
             "notaries": [
-                { "name": "seal2", "public_key": key(2), "seal_endpoint": "tls://notary.capture.exalto.ai:443" },
+                { "name": "seal2", "public_key": key(2), "seal_endpoint": "tls://notary.capture.undertext.sh:443" },
                 { "name": "seal1", "public_key": key(1) },
             ],
         });
         let registry = parse_registry(&serde_json::to_vec(&document).unwrap()).unwrap();
         assert_eq!(
             registry.capture_endpoint.to_string(),
-            "tls://notary.capture.exalto.ai:443"
+            "tls://notary.capture.undertext.sh:443"
         );
         assert_eq!(registry.notaries[1].seal_endpoint, None);
         assert_eq!(serde_json::to_value(&registry).unwrap(), document);
@@ -267,7 +267,7 @@ mod tests {
             serde_json::json!([{ "name": "seal1", "public_key": "02ab" }]),
         ] {
             let document = serde_json::json!({
-                "capture_endpoint": "tls://notary.capture.exalto.ai:443",
+                "capture_endpoint": "tls://notary.capture.undertext.sh:443",
                 "notaries": notaries,
             });
             assert!(parse_registry(&serde_json::to_vec(&document).unwrap()).is_err());
@@ -276,11 +276,11 @@ mod tests {
 
     #[test]
     fn endpoints_require_an_explicit_supported_transport() {
-        let tls = "tls://notary.capture.exalto.ai:443"
+        let tls = "tls://notary.capture.undertext.sh:443"
             .parse::<NotaryEndpoint>()
             .unwrap();
         assert_eq!(tls.transport, NotaryTransport::Tls);
-        assert_eq!(tls.host, "notary.capture.exalto.ai");
+        assert_eq!(tls.host, "notary.capture.undertext.sh");
         let tcp = "tcp://127.0.0.1:7047".parse::<NotaryEndpoint>().unwrap();
         assert_eq!(tcp.transport, NotaryTransport::Tcp);
         assert!("127.0.0.1:7047".parse::<NotaryEndpoint>().is_err());
