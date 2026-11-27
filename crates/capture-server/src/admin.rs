@@ -469,7 +469,7 @@ async fn require_auth(State(state): State<AdminState>, request: Request, next: N
 
 fn session_hash(token: &str) -> [u8; 32] {
     let mut digest = Sha256::new();
-    digest.update(b"ecp/captured-dashboard-session/v1\0");
+    digest.update(b"ucp/captured-dashboard-session/v1\0");
     digest.update(token.as_bytes());
     digest.finalize().into()
 }

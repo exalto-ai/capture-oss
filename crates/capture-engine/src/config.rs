@@ -25,7 +25,7 @@ use crate::artifact_store::{ArtifactResult, invalid};
 pub use crate::providers::{ProviderConfig, ProvidersConfig};
 
 /// The versioned identifier for a captured configuration file.
-pub const CONFIG_FORMAT: &str = "ecp/captured-config/v1";
+pub const CONFIG_FORMAT: &str = "ucp/captured-config/v1";
 
 pub const METADATA_DATABASE_URL_ENV: &str = "CAPTURE_SERVER_METADATA_DATABASE_URL";
 pub const METADATA_DATABASE_URL_FILE_ENV: &str = "CAPTURE_SERVER_METADATA_DATABASE_URL_FILE";

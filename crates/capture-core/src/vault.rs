@@ -18,7 +18,7 @@ use zeroize::Zeroize;
 
 const CHECKPOINT_ENVELOPE_MAGIC: &[u8] = b"NTRYV1";
 /// Separates organization vault keys from every other use of the cluster key.
-const ORGANIZATION_VAULT_LABEL: &[u8] = b"ecp/organization-vault/v1\0";
+const ORGANIZATION_VAULT_LABEL: &[u8] = b"ucp/organization-vault/v1\0";
 /// Private 32-byte key file shared by every replica in cluster mode.
 pub const CLUSTER_KEY_FILE_ENV: &str = "CAPTURE_SERVER_CLUSTER_VAULT_KEY_FILE";
 
@@ -122,7 +122,7 @@ impl Vault {
             bail!("cluster vault identity is available only for the shared cluster key");
         }
         let mut digest = Sha256::new();
-        digest.update(b"ecp/cluster-vault-compatibility/v1\0");
+        digest.update(b"ucp/cluster-vault-compatibility/v1\0");
         digest.update(self.key);
         Ok(hex::encode(digest.finalize()))
     }

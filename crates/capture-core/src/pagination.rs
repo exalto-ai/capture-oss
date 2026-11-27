@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};
 
 const CURSOR_VERSION: u8 = 1;
-const CURSOR_DIGEST_DOMAIN: &[u8] = b"ecp/cursor/v1\0";
+const CURSOR_DIGEST_DOMAIN: &[u8] = b"ucp/cursor/v1\0";
 /// Reject cursors before decoding or allocating an unbounded payload.
 pub const MAX_CURSOR_LENGTH: usize = 2_048;
 const MAX_CURSOR_PAYLOAD_LENGTH: usize = 1_536;

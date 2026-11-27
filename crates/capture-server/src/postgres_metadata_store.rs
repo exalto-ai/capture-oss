@@ -38,7 +38,7 @@ use crate::{
 };
 
 const JOURNAL: &str = "captured.schema_migrations";
-const MIGRATION_LOCK_NAMESPACE: &str = "ecp/captured-postgres-migrations/v1";
+const MIGRATION_LOCK_NAMESPACE: &str = "ucp/captured-postgres-migrations/v1";
 const LATEST_SCHEMA_VERSION: i64 = 6;
 const INITIAL_MIGRATION: &str = include_str!("../migrations-postgres-daemon/0001_initial.sql");
 const CAPTURE_MODES_MIGRATION: &str =

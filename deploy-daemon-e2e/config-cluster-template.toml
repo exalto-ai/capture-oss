@@ -1,6 +1,6 @@
 # Template for the end-to-end cluster replicas. Setup copies it to each
 # replica's state directory; the scripts then edit the copies in place.
-format = "ecp/captured-config/v1"
+format = "ucp/captured-config/v1"
 
 [proxy]
 listen = "0.0.0.0:8787"
